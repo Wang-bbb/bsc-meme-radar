@@ -366,3 +366,37 @@ test("multiscan uses DexPaprika as an independent fallback when GeckoTerminal an
   assert.ok(data.chainSources.every(source => source.provider === "DexPaprika" && source.coverage === "partial"));
   assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
 });
+
+
+test("multiscan marks DexPaprika fallback incomplete when pool detail requests are rate limited", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.hostname === "api.dexscreener.com") {
+      return new Response("rate limited", { status: 429 });
+    }
+    if (url.hostname === "api.dexpaprika.com" && url.pathname.endsWith("/pools/search")) {
+      const network = url.pathname.split("/")[2];
+      return response({ results: [{
+        id: "Pool" + network,
+        created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        liquidity_usd: 15000,
+        dex_name: "Test DEX"
+      }] });
+    }
+    if (url.hostname === "api.dexpaprika.com" && /\\/pools\\//.test(url.pathname)) {
+      return new Response("rate limited", { status: 429 });
+    }
+    throw new Error("Unexpected URL " + url.href);
+  };
+
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.equal(data.complete, false);
+  assert.equal(data.pools.length, 0);
+  assert.equal(data.chainErrors.length, 3);
+  assert.ok(data.chainSources.every(source => source.status === "error"));
+  assert.ok(data.chainErrors.every(error => error.error.includes("DexPaprika pool detail HTTP 429")));
+});
