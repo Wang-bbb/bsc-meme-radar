@@ -661,3 +661,93 @@ test("price risk reviews and blocks drawdowns from observed candle highs", () =>
   assert.equal(blocked.level, "blocked");
   assert.match(blocked.reason, /高点回撤拦截/);
 });
+
+
+test("pool-risk records per-pool liquidity snapshots and detects a 30 percent five-minute drain", async () => {
+  const originalNow = Date.now;
+  const store = new Map();
+  const kv = {
+    async get(key, type) {
+      assert.equal(type, "json");
+      return store.has(key) ? JSON.parse(store.get(key)) : null;
+    },
+    async put(key, value, options) {
+      assert.equal(options.expirationTtl, 86400);
+      store.set(key, value);
+    }
+  };
+  const baseTime = 1_800_000_000_000;
+  Date.now = () => baseTime;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    assert.equal(url.hostname, "api.geckoterminal.com");
+    const now = Math.floor(Date.now() / 1000);
+    const rows = Array.from({ length: 60 }, (_, index) => {
+      const close = 1;
+      return [now - index * 60, close, 1.1, 0.9, close, 100];
+    });
+    return response({ data: { attributes: { ohlcv_list: rows } } });
+  };
+  try {
+    const first = await worker.fetch(request(
+      "/pool-risk?chain=solana&pool=TestPool&token=TestMint&liquidity=10000"
+    ), { RADAR_KV: kv });
+    const firstData = await first.json();
+    assert.equal(firstData.liquiditySnapshot.status, "collecting");
+    assert.equal(firstData.liquiditySnapshot.snapshotCount, 1);
+
+    Date.now = () => baseTime + 5 * 60 * 1000;
+    const second = await worker.fetch(request(
+      "/pool-risk?chain=solana&pool=TestPool&token=TestMint&liquidity=7000"
+    ), { RADAR_KV: kv });
+    const secondData = await second.json();
+    assert.equal(secondData.liquiditySnapshot.status, "checked");
+    assert.equal(secondData.liquiditySnapshot.snapshotCount, 2);
+    assert.equal(secondData.liquiditySnapshot.liquidityChange5mPct, -30);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("pool-risk explicitly reports KV binding as unconfigured instead of treating liquidity as checked", async () => {
+  globalThis.fetch = async () => response({
+    data: { attributes: { ohlcv_list: [] } }
+  });
+  const res = await worker.fetch(request(
+    "/pool-risk?chain=bsc&pool=TestPool&token=TestMint&liquidity=5000"
+  ), {});
+  const data = await res.json();
+  assert.equal(data.liquiditySnapshot.status, "not_configured");
+  assert.match(data.liquiditySnapshot.error, /RADAR_KV/);
+});
+
+test("price risk reviews and blocks rapid liquidity drains without capping positive price gains", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const review = priceRisk({
+    priceChange1h: 150,
+    priceChange5m: 2,
+    priceChange15m: 5,
+    buys1h: 30,
+    sells1h: 10,
+    marketHistoryStatus: "checked",
+    drawdownFromHighPct: -3,
+    liquiditySnapshotStatus: "checked",
+    liquidityChange5mPct: -25
+  });
+  assert.equal(review.level, "review");
+  assert.match(review.reason, /流动性减少/);
+
+  const blocked = priceRisk({
+    priceChange1h: 150,
+    priceChange5m: 2,
+    priceChange15m: 5,
+    buys1h: 30,
+    sells1h: 10,
+    marketHistoryStatus: "checked",
+    drawdownFromHighPct: -3,
+    liquiditySnapshotStatus: "checked",
+    liquidityChange5mPct: -45
+  });
+  assert.equal(blocked.level, "blocked");
+  assert.match(blocked.reason, /LP快速流失拦截/);
+});
