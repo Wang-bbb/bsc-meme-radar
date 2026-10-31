@@ -34,7 +34,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
 <b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 优先使用 GeckoTerminal 新池索引。若 GeckoTerminal 限流，则备用使用 DexScreener 最新 Token Profile 名单反查交易池，并核验池龄与流动性；该备用名单覆盖不完整，不代表完整新池扫描。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口扫描 BSC USDT 直连池；Solana、Ethereum、Base 仅展示报价资产符号，不判断 USDT 直连，也不验证钱包兑换路径。
-<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
+<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、其他链各 1 个候选的 1 分钟 K 线；未抽查或 K 线不足的币进入待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
 <script>
@@ -48,6 +48,7 @@ function priceRisk(p){
   const change=p.priceChange1h==null?null:Number(p.priceChange1h);
   const short5=p.priceChange5m==null?null:Number(p.priceChange5m);
   const short15=p.priceChange15m==null?null:Number(p.priceChange15m);
+  const drawdown=p.drawdownFromHighPct==null?null:Number(p.drawdownFromHighPct);
   const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
   const trades=buys+sells;
   if(short5!==null&&Number.isFinite(short5)&&short5<=-12){
@@ -55,6 +56,12 @@ function priceRisk(p){
   }
   if(short15!==null&&Number.isFinite(short15)&&short15<=-20){
     return {level:"blocked",reason:"近15分钟价格急跌"+Math.abs(short15).toFixed(1)+"%，触发短周期暴跌拦截（阈值20%）"};
+  }
+  if(drawdown!==null&&Number.isFinite(drawdown)&&drawdown<=-35){
+    return {level:"blocked",reason:"现价较已观察K线区间高点回撤"+Math.abs(drawdown).toFixed(1)+"%，触发高点回撤拦截（阈值35%）"};
+  }
+  if(drawdown!==null&&Number.isFinite(drawdown)&&drawdown<=-20){
+    return {level:"review",reason:"现价较近60分钟K线高点回撤"+Math.abs(drawdown).toFixed(1)+"%，触发高点回撤复核（阈值20%）"};
   }
   if(short5!==null&&Number.isFinite(short5)&&short5<=-6){
     return {level:"review",reason:"近5分钟价格下跌"+Math.abs(short5).toFixed(1)+"%，触发高波动复核（阈值6%）"};
@@ -74,18 +81,19 @@ function priceRisk(p){
   if(trades<5){
     return {level:"review",reason:"近1小时有效买卖笔数不足5笔，交易活跃度太低，暂不列为优先观察候选"};
   }
-  // Sell pressure matters even before the hourly price turns negative.
   if(sells>=buys*1.5 && sells>=3){
     return {level:"review",reason:"近1小时卖出次数达到买入次数的1.5倍或以上，存在明显卖压风险"};
   }
-  if(short5===null||!Number.isFinite(short5)||short15===null||!Number.isFinite(short15)){
-    return {level:"review",reason:"缺少5分钟或15分钟行情，短周期急跌风险无法完整评估"};
+  if(p.marketHistoryStatus!=="checked"){
+    return {level:"review",reason:p.marketHistoryReason||"尚未取得足够的1分钟K线，无法评估高点回撤"};
   }
-  // Large gains are not a rejection signal: retain strong movers but label them volatile.
+  if(short5===null||!Number.isFinite(short5)||short15===null||!Number.isFinite(short15)){
+    return {level:"review",reason:"缺少5分钟或15分钟K线变化，短周期风险无法完整评估"};
+  }
   if(change>=100){
     return {level:"watch",reason:"近1小时涨幅达到"+change.toFixed(1)+"%；不因涨幅拦截，列为高波动观察，继续关注回撤、卖压和流动性"};
   }
-  return {level:"clear",reason:"现有短周期及1小时行情未触发风险阈值；不代表安全或不会归零"};
+  return {level:"clear",reason:"现有K线、回撤及交易数据未触发风险阈值；不代表安全或不会归零"};
 }
 async function scan(){
   $("status").textContent="正在扫描四条链并进行安全检测…";
@@ -113,6 +121,39 @@ async function scan(){
     if(multi)(multi.pools||[]).forEach(p=>all.push(p));
     const ageValue=p=>p.ageMinutes==null||!Number.isFinite(Number(p.ageMinutes))?Number.POSITIVE_INFINITY:Number(p.ageMinutes);
     all.sort((a,b)=>ageValue(a)-ageValue(b));
+    // Keep public GeckoTerminal candle calls within a small per-refresh budget:
+    // at most two BSC pools and one pool per other chain.
+    const historyTargets=[];
+    for(const chain of ["BSC","Solana","Ethereum","Base"]){
+      const candidates=all.filter(p=>p.chain===chain&&p.pairAddress&&p.tokenAddress&&Number.isFinite(ageValue(p))&&ageValue(p)>=3);
+      candidates.sort((a,b)=>Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0));
+      historyTargets.push(...candidates.slice(0,chain==="BSC"?2:1));
+    }
+    for(const p of all){
+      p.marketHistoryStatus="unchecked";
+      p.marketHistoryReason="本轮K线查询名额有限，尚未检查";
+    }
+    await Promise.all(historyTargets.map(async p=>{
+      const chain=p.chain==="BSC"?"bsc":p.chain==="Solana"?"solana":p.chain==="Base"?"base":"eth";
+      const params=new URLSearchParams({chain,pool:p.pairAddress,token:p.tokenAddress});
+      try{
+        const response=await fetch(base+"/pool-risk?"+params.toString());
+        const data=await response.json();
+        p.marketHistoryStatus=data.status||"unavailable";
+        p.marketHistoryReason=data.error||"K线数据不足";
+        if(data.status==="checked"){
+          p.marketHistoryReason="";
+          p.drawdownFromHighPct=data.drawdownFromHighPct;
+          if(data.priceChange5m!=null)p.priceChange5m=data.priceChange5m;
+          if(data.priceChange15m!=null)p.priceChange15m=data.priceChange15m;
+          if(data.priceChange1h!=null&&(p.priceChange1h==null||!Number.isFinite(Number(p.priceChange1h))))p.priceChange1h=data.priceChange1h;
+          p.marketHistoryCandleCount=data.candleCount;
+        }
+      }catch(error){
+        p.marketHistoryStatus="unavailable";
+        p.marketHistoryReason="K线查询失败："+String(error);
+      }
+    }));
     const checked=[], pending=[];
     const chainCounts={};
     const selected=all.filter(p=>{
@@ -185,6 +226,7 @@ async function scan(){
         '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
         '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
         '<div class="muted">短周期价格变化：5分钟 '+(p.priceChange5m==null?"—":pct(p.priceChange5m))+' · 15分钟 '+(p.priceChange15m==null?"—":pct(p.priceChange15m))+'</div>'+
+        '<div class="muted">观察区间高点回撤（'+esc(p.marketHistoryCandleCount==null?'—':p.marketHistoryCandleCount)+'根）：'+(p.drawdownFromHighPct==null?"—":pct(p.drawdownFromHighPct))+' · K线：'+esc(p.marketHistoryStatus||"未检查")+'</div>'+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         (p.source?'<div class="muted">数据源：'+esc(p.source)+'</div>':'')+
