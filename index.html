@@ -125,7 +125,7 @@ async function scan(){
     // at most two BSC pools and one pool per other chain.
     const historyTargets=[];
     for(const chain of ["BSC","Solana","Ethereum","Base"]){
-      const candidates=all.filter(p=>p.chain===chain&&p.pairAddress&&p.tokenAddress&&ageValue(p)>=3);
+      const candidates=all.filter(p=>p.chain===chain&&p.pairAddress&&p.tokenAddress&&Number.isFinite(ageValue(p))&&ageValue(p)>=3);
       candidates.sort((a,b)=>Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0));
       historyTargets.push(...candidates.slice(0,chain==="BSC"?2:1));
     }
