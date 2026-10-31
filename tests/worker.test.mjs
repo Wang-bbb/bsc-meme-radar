@@ -163,7 +163,7 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
           reserve_in_usd: "12000",
           transactions: { h1: { buys: 7, sells: 3 } },
           volume_usd: { h1: "2500" },
-          price_change_percentage: { h1: "4.2" }
+          price_change_percentage: { m5: "-2.1", m15: "-3.4", h1: "4.2" }
         },
         relationships: {
           base_token: { data: { id: tokenId } },
@@ -188,6 +188,8 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
   assert.ok(data.pools.every(pool => pool.usdtRouteStatus === "not_verified"));
   assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
   assert.ok(data.pools.every(pool => pool.tokenAddress !== pool.quoteAddress));
+  assert.ok(data.pools.every(pool => pool.priceChange5m === -2.1));
+  assert.ok(data.pools.every(pool => pool.priceChange15m === -3.4));
 });
 
 test("Solana security gate keeps active mint or freeze authorities in review", async () => {
@@ -256,7 +258,7 @@ test("multiscan falls back to DexScreener profiles when GeckoTerminal is rate li
         liquidity: { usd: 15000 },
         volume: { h1: 3200 },
         txns: { h1: { buys: 8, sells: 3 } },
-        priceChange: { h1: 2.5 }
+        priceChange: { m5: -1.2, m15: -2.4, h1: 2.5 }
       }]);
     }
     throw new Error("Unexpected URL " + url.href);
