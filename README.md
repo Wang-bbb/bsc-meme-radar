@@ -14,7 +14,7 @@
 - Solana / Ethereum / Base：新增 `/multiscan`，使用 GeckoTerminal public API 的 new_pools 数据。
 - 前端：同时请求 BSC `/scan` 和其他三链 `/multiscan`，按池龄从新到旧排序。
 - 其他三链的 USDT 路由：目前**尚未实时报价验证**；报价代币 symbol 显示 USDT 也不代表已通过合约地址核验或可成功成交。后续必须接入各链官方/可信 USDT 合约白名单和实际路由报价。
-- 新池索引存在分页、速率限制和覆盖范围限制；不保证捕获所有新池。
+- GeckoTerminal 每条链本版本只取第一页（最多20个池）；公共 API 约每分钟10次调用、数据约每分钟缓存更新。频繁刷新可能触发限流，不保证捕获所有新池。
 
 ## 部署
 1. Cloudflare Worker 使用仓库中的 `worker.js`，保留已配置的 `NODEREAL_RPC_URL` Secret。
