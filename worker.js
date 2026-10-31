@@ -411,8 +411,8 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
     const reference = candles.filter((row) => row.timestamp <= target).slice(-1)[0];
     if (!reference) return null;
     const elapsed = latest.timestamp - reference.timestamp;
-    const minElapsed = minutes === 5 ? 4 * 60 : 12 * 60;
-    const maxElapsed = minutes === 5 ? 7 * 60 : 18 * 60;
+    const minElapsed = minutes === 5 ? 4 * 60 : minutes === 15 ? 12 * 60 : 45 * 60;
+    const maxElapsed = minutes === 5 ? 7 * 60 : minutes === 15 ? 18 * 60 : 70 * 60;
     if (elapsed < minElapsed || elapsed > maxElapsed) return null;
     return (latest.close / reference.close - 1) * 100;
   };
