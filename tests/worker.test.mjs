@@ -184,3 +184,52 @@ test("Solana security gate keeps missing authority fields in review", async () =
   assert.equal(data.status, "review");
   assert.ok(data.reasons.some(reason => reason.includes("状态缺失")));
 });
+
+
+test("multiscan falls back to DexScreener profiles when GeckoTerminal is rate limited", async () => {
+  const networks = {
+    solana: { token: "MemeSol", quote: "So11111111111111111111111111111111111111112", symbol: "SOL" },
+    ethereum: { token: "0x1111111111111111111111111111111111111111", quote: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC" },
+    base: { token: "0x2222222222222222222222222222222222222222", quote: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", symbol: "USDC" }
+  };
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.pathname === "/token-profiles/latest/v1") {
+      return response(Object.entries(networks).map(([chainId, item]) => ({
+        chainId, tokenAddress: item.token
+      })));
+    }
+    if (url.pathname.startsWith("/tokens/v1/")) {
+      const chainId = url.pathname.split("/")[3];
+      const item = networks[chainId];
+      assert.ok(item, "fallback should request a supported chain");
+      return response([{
+        chainId,
+        dexId: "test-dex",
+        pairAddress: "Pair" + chainId,
+        url: "https://dexscreener.com/" + chainId + "/Pair" + chainId,
+        baseToken: { address: item.token, name: "Test Meme", symbol: "MEME" },
+        quoteToken: { address: item.quote, name: item.symbol, symbol: item.symbol },
+        pairCreatedAt: Date.now() - 5 * 60_000,
+        liquidity: { usd: 15000 },
+        volume: { h1: 3200 },
+        txns: { h1: { buys: 8, sells: 3 } },
+        priceChange: { h1: 2.5 }
+      }]);
+    }
+    throw new Error("Unexpected URL " + url.href);
+  };
+
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.equal(data.complete, true);
+  assert.deepEqual(data.fallbackChains.sort(), ["Base", "Ethereum", "Solana"]);
+  assert.equal(data.chainErrors.length, 0);
+  assert.equal(data.pools.length, 3);
+  assert.ok(data.pools.every(pool => pool.source === "DexScreener latest token profiles fallback"));
+  assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
+  assert.ok(data.chainSources.every(source => source.status === "fallback" && source.coverage === "partial"));
+});
