@@ -99,10 +99,17 @@ async function scan(){
     const workers=Array.from({length:3},async()=>{
       while(cursor<selected.length){
         const p=selected[cursor++];
+        // Evaluate market-price risk before token-side identification or contract checks.
+        // An unknown quote asset must never bypass a clear dump-risk block.
+        const trendRisk=priceRisk(p);
+        p.priceRisk=trendRisk;
         if(p.tokenSelectionVerified===false){
           p.security={status:"unverified",provider:"GeckoTerminal"};
-          p.pendingReason=p.tokenSelectionNote||"交易池代币方向未确认";
-          pending.push(p);
+          const reasons=[p.tokenSelectionNote||"交易池代币方向未确认"];
+          if(trendRisk.level==="blocked") reasons.push(trendRisk.reason);
+          else if(trendRisk.level==="review") reasons.push(trendRisk.reason);
+          p.pendingReason=reasons.join("；");
+          pending.push({...p,blocked:trendRisk.level==="blocked"});
           continue;
         }
         try{
@@ -112,8 +119,6 @@ async function scan(){
           const response=await fetch(base+"/security-check?"+params.toString());
           const report=await response.json();
           p.security=report;
-          const trendRisk=priceRisk(p);
-          p.priceRisk=trendRisk;
           if(report.status==="blocked"){
             p.pendingReason=(report.reasons||[]).join("；")||"检测到合约高危信号";
             pending.push({...p,blocked:true});
