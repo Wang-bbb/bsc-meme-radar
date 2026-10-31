@@ -395,11 +395,13 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
     Number.isFinite(row.close) && row.close > 0 &&
     row.timestamp <= now + 60 && row.timestamp >= now - 60 * 65
   ).sort((a, b) => a.timestamp - b.timestamp);
-  if (candles.length < 3) {
+  const historyMinutes = candles.length > 1 ? Math.round((candles[candles.length - 1].timestamp - candles[0].timestamp) / 60) : 0;
+  if (candles.length < 5 || historyMinutes < 4) {
     return {
       status: "insufficient",
       candleCount: candles.length,
-      error: "近60分钟有效1分钟K线不足3根，无法可靠计算高点回撤"
+      historyMinutes,
+      error: "有效1分钟K线不足5根或覆盖不足4分钟，无法可靠计算高点回撤"
     };
   }
   const latest = candles[candles.length - 1];
@@ -419,7 +421,7 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
   return {
     status: "checked",
     candleCount: candles.length,
-    historyMinutes: Math.round((latest.timestamp - oldest.timestamp) / 60),
+    historyMinutes,
     drawdownFromHighPct: Math.round(drawdownPct * 100) / 100,
     priceChange5m: changeFromMinutes(5),
     priceChange15m: changeFromMinutes(15),
