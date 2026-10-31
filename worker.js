@@ -523,17 +523,36 @@ export default {
       const fallbackChains = [];
       if (failedNetworks.length) {
         try {
-          const profileResponse = await fetchDexScreenerJson("https://api.dexscreener.com/token-profiles/latest/v1");
-          if (!profileResponse.ok) throw new Error("DexScreener profiles HTTP " + profileResponse.status);
-          const profiles = await profileResponse.json();
-          if (!Array.isArray(profiles)) throw new Error("DexScreener profiles returned an unexpected response");
+          // The latest token-profile feed is sparse on some chains. Merge it
+          // with the latest boosted-token feed, while keeping fallback coverage
+          // explicitly partial and validating every pair's age/liquidity below.
+          const feedSpecs = [
+            { name: "latest token profiles", url: "https://api.dexscreener.com/token-profiles/latest/v1" },
+            { name: "latest token boosts", url: "https://api.dexscreener.com/token-boosts/latest/v1" }
+          ];
+          const feedResults = await Promise.all(feedSpecs.map(async (feed) => {
+            try {
+              const response = await fetchDexScreenerJson(feed.url);
+              if (!response.ok) throw new Error("HTTP " + response.status);
+              const items = await response.json();
+              if (!Array.isArray(items)) throw new Error("unexpected response");
+              return { name: feed.name, items, error: null };
+            } catch (error) {
+              return { name: feed.name, items: [], error: String(error) };
+            }
+          }));
+          const feedErrors = feedResults.filter((feed) => feed.error)
+            .map((feed) => feed.name + ": " + feed.error);
           for (const failed of failedNetworks) {
             const network = failed.network;
             try {
-              const addresses = [...new Set(profiles
-                .filter((profile) => profile && profile.chainId === network.dexChain && profile.tokenAddress)
-                .map((profile) => String(profile.tokenAddress)))].slice(0, 30);
-              if (!addresses.length) throw new Error("DexScreener latest profiles has no tokens for this chain");
+              const addresses = [...new Set(feedResults.flatMap((feed) => feed.items)
+                .filter((item) => item && item.chainId === network.dexChain && item.tokenAddress)
+                .map((item) => String(item.tokenAddress)))].slice(0, 30);
+              if (!addresses.length) {
+                const detail = feedErrors.length ? "; feed errors: " + feedErrors.join(" | ") : "";
+                throw new Error("DexScreener profiles/boosts feeds have no tokens for this chain" + detail);
+              }
               const endpoint = "https://api.dexscreener.com/tokens/v1/" + network.dexChain + "/" + addresses.map(encodeURIComponent).join(",");
               const pairResponse = await fetchDexScreenerJson(endpoint);
               if (!pairResponse.ok) throw new Error("DexScreener token pairs HTTP " + pairResponse.status);
@@ -570,13 +589,13 @@ export default {
                   buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
                   priceChange1h: pair.priceChange && pair.priceChange.h1 != null ? Number(pair.priceChange.h1) : null,
                   usdtRouteStatus: "not_verified",
-                  source: "DexScreener latest token profiles fallback",
-                  riskNote: "备用索引只从 DexScreener 最新 Token Profile 名单反查交易池，覆盖范围小于完整新池索引；不代表捕获该链全部新池。"
+                  source: "DexScreener profiles + boosts fallback",
+                  riskNote: "备用索引合并 DexScreener 最新 Token Profile 与 Boost 名单反查交易池，覆盖范围小于完整新池索引；不代表捕获该链全部新池。"
                 });
                 chainPoolCount++;
               }
               chainSources.push({
-                chain: network.name, provider: "DexScreener latest token profiles",
+                chain: network.name, provider: "DexScreener profiles + boosts",
                 status: "fallback", coverage: "partial", pools: chainPoolCount,
                 primaryError: failed.error
               });
@@ -611,7 +630,7 @@ export default {
         limitations: [
           "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
-          "GeckoTerminal 公共 API 可能限流；Worker 对成功响应缓存 60 秒并进行有限重试。失败时改用 DexScreener 最新 Token Profile 名单反查新池；该备用名单覆盖不完整，必须显示为部分覆盖，不能当作完整新池扫描。",
+          "GeckoTerminal 公共 API 可能限流；Worker 对成功响应缓存 60 秒并进行有限重试。失败时合并 DexScreener 最新 Token Profile 与 Boost 名单反查新池；备用覆盖不完整，必须显示为部分覆盖，不能当作完整新池扫描。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
           "本接口只读，不执行兑换或交易。"
