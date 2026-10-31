@@ -2,6 +2,18 @@ const USDT = "0x55d398326f99059ff775485246999027b319795";
 const USDT_TOPIC = "0x" + USDT.slice(2).toLowerCase().padStart(64, "0");
 const FACTORY = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
 const V3_FACTORY = "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865";
+const V2_FACTORIES = [
+  { name: "PancakeSwap V2", dexId: "pancakeswap", address: FACTORY },
+  { name: "Biswap V2", dexId: "biswap", address: "0x858e3312ed3a876947ea49d572a7c42de08af7ee" },
+  { name: "ApeSwap V2", dexId: "apeswap", address: "0x0841bd0b734e4f5853f0dd8d7ea041c241fb0da6" },
+  { name: "MDEX V2", dexId: "mdex", address: "0x9a272d734c5a0d7d84e0a892e891a553e8066dce" },
+  { name: "BabySwap V2", dexId: "babyswap", address: "0x86407bea2078ea5f5eb5a52b2caa963bc1f889da" },
+  { name: "Nomiswap V2", dexId: "nomiswap", address: "0xd6715a8be3944ec72738f0bfdc739d48c3c29349" }
+];
+const V3_FACTORIES = [
+  { name: "PancakeSwap V3", dexId: "pancakeswap-v3", address: V3_FACTORY },
+  { name: "Uniswap V3", dexId: "uniswap-v3", address: "0xdb1d10011ad0ff90774d0c6bb92e5c5c8b4461f7" }
+];
 const V3_POOL_CREATED = "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118";
 const PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9";
 const SWAP_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
@@ -157,7 +169,7 @@ export default {
     if (!rpcUrl) return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
     if (url.pathname === "/" || url.pathname === "/health") {
-      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + PancakeSwap V2/V3 PoolCreated", supportedMinutes: [15, 30, 60], note: "只读监控；扫描 PancakeSwap V2/V3 USDT 池" });
+      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + PancakeSwap V2/V3 PoolCreated", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
     }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
@@ -178,27 +190,38 @@ export default {
       } catch (_) {}
       const blockWindow = Math.min(10000, Math.ceil(minutes * 60 / secondsPerBlock * 1.15) + 100);
       const fromBlock = Math.max(0, latest - blockWindow);
-      const filterBase = { address: FACTORY, fromBlock: hexNum(fromBlock), toBlock: latestHex };
-      const [logs0, logs1, allV2FactoryLogs] = await Promise.all([
-        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, USDT_TOPIC, null] }], rpcUrl),
-        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, null, USDT_TOPIC] }], rpcUrl),
-        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED] }], rpcUrl)
-      ]);
+      const factoryFilterBase = { fromBlock: hexNum(fromBlock), toBlock: latestHex };
+      const v2FactoryResults = await Promise.all(V2_FACTORIES.map(async (factory) => {
+        const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [PAIR_CREATED] }], rpcUrl);
+        const usdtLogs = logs.filter((log) =>
+          log.topics[1]?.toLowerCase() === USDT_TOPIC || log.topics[2]?.toLowerCase() === USDT_TOPIC
+        );
+        return { factory, allLogs: logs, usdtLogs };
+      }));
+      const allV2FactoryLogs = v2FactoryResults.flatMap((x) => x.allLogs);
+      const v2UsdtEvents = v2FactoryResults.flatMap(({ factory, usdtLogs }) =>
+        usdtLogs.map((log) => ({ ...log, _dex: factory.name, _dexId: factory.dexId }))
+      );
       const logMap = new Map();
-      for (const log of [...logs0, ...logs1]) {
+      for (const log of v2UsdtEvents) {
         const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
         logMap.set(pair, log);
       }
 
       const timeCache = new Map();
-      const v3FilterBase = { address: V3_FACTORY, fromBlock: hexNum(fromBlock), toBlock: latestHex };
-      const [v3Logs0, v3Logs1, allV3FactoryLogs] = await Promise.all([
-        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, USDT_TOPIC, null] }], rpcUrl),
-        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, null, USDT_TOPIC] }], rpcUrl),
-        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED] }], rpcUrl)
-      ]);
+      const v3FactoryResults = await Promise.all(V3_FACTORIES.map(async (factory) => {
+        const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [V3_POOL_CREATED] }], rpcUrl);
+        const usdtLogs = logs.filter((log) =>
+          log.topics[1]?.toLowerCase() === USDT_TOPIC || log.topics[2]?.toLowerCase() === USDT_TOPIC
+        );
+        return { factory, allLogs: logs, usdtLogs };
+      }));
+      const allV3FactoryLogs = v3FactoryResults.flatMap((x) => x.allLogs);
+      const v3UsdtEvents = v3FactoryResults.flatMap(({ factory, usdtLogs }) =>
+        usdtLogs.map((log) => ({ ...log, _dex: factory.name, _dexId: factory.dexId }))
+      );
       const v3LogMap = new Map();
-      for (const log of [...v3Logs0, ...v3Logs1]) {
+      for (const log of v3UsdtEvents) {
         const pool = "0x" + word(log.data, 1).slice(-40).toLowerCase();
         v3LogMap.set(pool, log);
       }
@@ -207,7 +230,12 @@ export default {
         log, createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
       }));
       const v3Fresh = v3WithTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
-      const v3Read = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => readV3Pool(x.log, x.createdAt, rpcUrl));
+      const v3Read = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => {
+        const pool = await readV3Pool(x.log, x.createdAt, rpcUrl);
+        pool.dex = x.log._dex;
+        pool.dexId = x.log._dexId;
+        return pool;
+      });
       const v3Valid = v3Read.filter((p) => !p._error && p.liquidityUSD >= minLiquidity);
 
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
@@ -218,6 +246,8 @@ export default {
       const fresh = withTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
       const pairData = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
         const p = await readPair(x.log, rpcUrl);
+        p.dex = x.log._dex || "PancakeSwap V2";
+        p.dexId = x.log._dexId || "pancakeswap";
         p.createdAt = x.createdAt;
         return p;
       });
@@ -311,7 +341,7 @@ export default {
 
       const pairs = pools.map((p) => ({
         chainId: "bsc",
-        dexId: p.dex === "PancakeSwap V3" ? "pancakeswap-v3" : "pancakeswap",
+        dexId: p.dexId || (p.dex === "PancakeSwap V3" ? "pancakeswap-v3" : "pancakeswap"),
         url: p.poolUrl,
         pairAddress: p.pairAddress,
         pairCreatedAt: Date.parse(p.createdAt),
@@ -329,12 +359,21 @@ export default {
         quote: "USDT",
         minutes: minutes,
         minLiquidityUSDApprox: minLiquidity,
-        dataSource: "NodeReal BSC RPC · PancakeSwap V2 + V3",
-        factory: FACTORY,
+        dataSource: "NodeReal BSC RPC · PancakeSwap / Biswap / ApeSwap / MDEX / BabySwap / Nomiswap / Uniswap"
+        factories: {
+          v2: V2_FACTORIES.map((x) => ({ dex: x.name, address: x.address })),
+          v3: V3_FACTORIES.map((x) => ({ dex: x.name, address: x.address }))
+        },
         latestBlock: latest,
         blockWindow: blockWindow,
-        factoryEventsFound: { v2: allV2FactoryLogs.length, v3: allV3FactoryLogs.length },
-        usdtPoolEventsFound: { v2: logs0.length + logs1.length, v3: v3Logs0.length + v3Logs1.length },
+        factoryEventsFound: {
+          v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.allLogs.length])),
+          v3: Object.fromEntries(v3FactoryResults.map((x) => [x.factory.name, x.allLogs.length]))
+        },
+        usdtPoolEventsFound: {
+          v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length])),
+          v3: Object.fromEntries(v3FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length]))
+        },
         createdPairsFound: creationLogs.length + v3CreationLogs.length,
         freshPairsFound: fresh.length + v3Fresh.length,
         count: pools.length,
@@ -344,9 +383,9 @@ export default {
         swapStatsError: swapError,
         generatedAt: new Date(latestTime).toISOString(),
         limitations: [
-          "当前扫描 PancakeSwap V2/V3 Factory，不包括其他 DEX。",
+          "当前覆盖 PancakeSwap、Biswap、ApeSwap、MDEX、BabySwap、Nomiswap 的 V2 工厂，以及 PancakeSwap、Uniswap 的 V3 工厂；未覆盖其他 BSC DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
-          "V2 买卖次数和成交量来自本次扫描到的新池 Swap 事件；V3 当前仅显示池创建和 USDT 余额估算，成交统计待接入。",
+          "当前成交量、买卖次数仅对 V2 新池统计；V3 新池仅显示创建和 USDT 余额估算，成交统计待接入。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
         note: "只读观察，不会自动交易。"
