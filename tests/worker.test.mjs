@@ -618,7 +618,7 @@ test("pool-risk marks insufficient candle history as unverified instead of clear
   const data = await res.json();
   assert.equal(data.status, "insufficient");
   assert.equal(data.candleCount, 2);
-  assert.match(data.error, /不足3根/);
+  assert.match(data.error, /不足5根/);
 });
 
 test("pool-risk validates supported networks and required pool/token identifiers", async () => {
@@ -630,4 +630,32 @@ test("pool-risk validates supported networks and required pool/token identifiers
     "/pool-risk?chain=bsc&token=TestMint"
   ), {});
   assert.equal(missingPool.status, 400);
+});
+
+
+test("price risk reviews and blocks drawdowns from observed candle highs", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const review = priceRisk({
+    priceChange1h: 120,
+    priceChange5m: 1,
+    priceChange15m: 4,
+    drawdownFromHighPct: -25,
+    marketHistoryStatus: "checked",
+    buys1h: 30,
+    sells1h: 10
+  });
+  assert.equal(review.level, "review");
+  assert.match(review.reason, /高点回撤复核/);
+
+  const blocked = priceRisk({
+    priceChange1h: 120,
+    priceChange5m: 1,
+    priceChange15m: 4,
+    drawdownFromHighPct: -36,
+    marketHistoryStatus: "checked",
+    buys1h: 30,
+    sells1h: 10
+  });
+  assert.equal(blocked.level, "blocked");
+  assert.match(blocked.reason, /高点回撤拦截/);
 });
