@@ -41,7 +41,21 @@ async function fetchGeckoTerminal(endpoint) {
     const response = await fetch(endpoint, {
       headers: { "accept": "application/json;version=20230203" }
     });
-    if (response.status !== 429 && response.status < 500) {
+    // Do not immediately retry rate-limited public APIs: cache the 429 briefly
+    // so repeated mobile refreshes do not amplify provider throttling.
+    if (response.status === 429) {
+      if (cache) {
+        const headers = new Headers(response.headers);
+        headers.set("cache-control", "public, max-age=15");
+        try {
+          await cache.put(cacheKey, new Response(response.clone().body, {
+            status: response.status, statusText: response.statusText, headers
+          }));
+        } catch (_) {}
+      }
+      return response;
+    }
+    if (response.status < 500) {
       if (response.ok && cache) {
         const headers = new Headers(response.headers);
         headers.set("cache-control", "public, max-age=60");
@@ -77,6 +91,18 @@ async function fetchDexScreenerJson(endpoint) {
     } catch (_) {}
   }
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
+  if (response.status === 429 && cache) {
+    // Briefly cache rate-limit responses to prevent each chain fallback from
+    // hammering the same shared profile/boost feeds on every refresh.
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "public, max-age=15");
+    try {
+      await cache.put(cacheKey, new Response(response.clone().body, {
+        status: response.status, statusText: response.statusText, headers
+      }));
+    } catch (_) {}
+    return response;
+  }
   if (response.ok && cache) {
     const headers = new Headers(response.headers);
     headers.set("cache-control", "public, max-age=60");
