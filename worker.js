@@ -307,9 +307,9 @@ export default {
         const flags = Array.isArray(report.summary?.flags) ? report.summary.flags : [];
         const criticalFlags = flags.filter((x) => String(x.severity || "").toLowerCase() === "critical");
         const isHoneypot = report.honeypotResult?.isHoneypot === true;
-        const riskLevel = Number.isFinite(Number(report.summary?.riskLevel)) ? Number(report.summary.riskLevel) : null;
-        const buyTax = Number.isFinite(Number(simulation.buyTax)) ? Number(simulation.buyTax) : null;
-        const sellTax = Number.isFinite(Number(simulation.sellTax)) ? Number(simulation.sellTax) : null;
+        const riskLevel = report.summary?.riskLevel != null && Number.isFinite(Number(report.summary.riskLevel)) ? Number(report.summary.riskLevel) : null;
+        const buyTax = simulation.buyTax != null && Number.isFinite(Number(simulation.buyTax)) ? Number(simulation.buyTax) : null;
+        const sellTax = simulation.sellTax != null && Number.isFinite(Number(simulation.sellTax)) ? Number(simulation.sellTax) : null;
         const simOK = report.simulationSuccess === true && report.honeypotResult && typeof report.honeypotResult.isHoneypot === "boolean";
         const hardRisk = isHoneypot || (riskLevel !== null && riskLevel >= 80) ||
           (sellTax !== null && sellTax >= 20) || (buyTax !== null && buyTax >= 30) || criticalFlags.length > 0;
