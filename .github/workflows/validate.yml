@@ -1,6 +1,8 @@
 name: Validate Meme Radar
 
 on:
+  push:
+    branches: [feature/multichain-meme-radar]
   pull_request:
     branches: [main]
   workflow_dispatch:
