@@ -283,15 +283,17 @@ export default {
           const report = await response.json();
           const risks = Array.isArray(report.risks) ? report.risks : [];
           const critical = risks.filter((risk) => ["danger", "critical"].includes(String(risk.level || "").toLowerCase()));
-          const warnings = risks.filter((risk) => ["warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
+          const warnings = risks.filter((risk) => ["high", "medium", "caution", "warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
           const hasUsableReport = !!report.tokenProgram || risks.length > 0 || report.score_normalised != null || report.lpLockedPct != null;
           const weakLiquidityLock = report.lpLockedPct == null || Number(report.lpLockedPct) < 80;
-          const status = critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock) ? "review" : "pass";
+          const rugged = report.rugged === true;
+          const activeAuthorities = report.mintAuthority != null || report.freezeAuthority != null;
+          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || activeAuthorities) ? "review" : "pass";
           return json({
             ok: true, chain, tokenAddress: address, provider: "RugCheck",
             status, riskScore: report.score_normalised ?? null, lpLockedPct: report.lpLockedPct ?? null,
             risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
-            reasons: [...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : [])],
+            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : [])],
             note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
           });
         }
@@ -305,7 +307,8 @@ export default {
         const report = await response.json();
         const simulation = report.simulationResult || {};
         const flags = Array.isArray(report.summary?.flags) ? report.summary.flags : [];
-        const criticalFlags = flags.filter((x) => String(x.severity || "").toLowerCase() === "critical");
+        const criticalFlags = flags.filter((x) => ["critical", "danger"].includes(String(x.severity || "").toLowerCase()));
+        const highFlags = flags.filter((x) => ["high", "medium", "warning", "warn"].includes(String(x.severity || "").toLowerCase()));
         const isHoneypot = report.honeypotResult?.isHoneypot === true;
         const riskLevel = report.summary?.riskLevel != null && Number.isFinite(Number(report.summary.riskLevel)) ? Number(report.summary.riskLevel) : null;
         const buyTax = simulation.buyTax != null && Number.isFinite(Number(simulation.buyTax)) ? Number(simulation.buyTax) : null;
@@ -315,7 +318,7 @@ export default {
           (sellTax !== null && sellTax >= 20) || (buyTax !== null && buyTax >= 30) || criticalFlags.length > 0;
         const reviewRisk = !simOK || riskLevel === null || riskLevel >= 60 ||
           buyTax === null || sellTax === null || buyTax > 10 || sellTax > 10 ||
-          report.contractCode?.rootOpenSource !== true;
+          highFlags.length > 0 || report.contractCode?.rootOpenSource !== true;
         const status = hardRisk ? "blocked" : reviewRisk ? "review" : "pass";
         return json({
           ok: true, chain, tokenAddress: address, provider: "Honeypot.is",
@@ -330,7 +333,8 @@ export default {
             ...(sellTax !== null && sellTax > 10 ? ["卖出税超过10%"] : []),
             ...(!simOK ? ["买卖模拟未成功或结果不完整"] : []),
             ...(!report.contractCode?.rootOpenSource ? ["合约源码未确认开源"] : []),
-            ...criticalFlags.map((x) => x.description || x.flag)
+            ...criticalFlags.map((x) => x.description || x.flag),
+            ...highFlags.map((x) => x.description || x.flag)
           ],
           note: "模拟结果只代表本次检测时点和检测路径；代币权限或流动性变化后风险可能改变。"
         });
