@@ -284,12 +284,14 @@ export default {
           const risks = Array.isArray(report.risks) ? report.risks : [];
           const critical = risks.filter((risk) => ["danger", "critical"].includes(String(risk.level || "").toLowerCase()));
           const warnings = risks.filter((risk) => ["warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
-          const status = critical.length ? "blocked" : warnings.length ? "review" : "pass";
+          const hasUsableReport = !!report.tokenProgram || risks.length > 0 || report.score_normalised != null || report.lpLockedPct != null;
+          const weakLiquidityLock = report.lpLockedPct == null || Number(report.lpLockedPct) < 80;
+          const status = critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock) ? "review" : "pass";
           return json({
             ok: true, chain, tokenAddress: address, provider: "RugCheck",
             status, riskScore: report.score_normalised ?? null, lpLockedPct: report.lpLockedPct ?? null,
             risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
-            reasons: critical.length ? critical.map((x) => x.name) : warnings.map((x) => x.name),
+            reasons: [...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : [])],
             note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
           });
         }
