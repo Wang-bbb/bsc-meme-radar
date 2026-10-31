@@ -1,22 +1,91 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101827"><link rel="manifest" href="./manifest.json"><title>BSC Meme 雷达</title>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101827">
+<link rel="manifest" href="./manifest.json">
+<title>BSC Meme 雷达</title>
 <style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#edf4ff;font:15px system-ui,-apple-system,sans-serif}header{padding:22px 16px;background:#14233a;border-bottom:1px solid #2b3b52}h1{margin:0 0 5px;font-size:23px}header p,.muted{color:#9aabc4;font-size:13px}main{max-width:900px;margin:auto;padding:14px}.bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px}button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-radius:10px;padding:10px;font:inherit}.cards{display:grid;gap:10px}.card{background:#141f31;border:1px solid #26344b;border-radius:14px;padding:14px}.row{display:flex;justify-content:space-between;gap:8px}.name{font-weight:700;font-size:17px;word-break:break-word}.badge{background:#263b50;color:#a9e8d0;padding:4px 8px;border-radius:20px;font-size:11px;white-space:nowrap}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.stat{background:#0d1727;padding:9px;border-radius:9px}.stat small{display:block;color:#9aabc4;font-size:11px}.stat strong{font-size:14px}.links{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}.links a{color:#91c7ff;text-decoration:none;font-size:13px}.status{border:1px solid #26344b;border-radius:12px;padding:10px 12px;color:#9aabc4;font-size:13px;margin-bottom:12px}.empty{padding:26px;text-align:center;color:#9aabc4}.note{font-size:12px;line-height:1.55;color:#9aabc4;margin:14px 2px}@media(min-width:650px){.cards{grid-template-columns:repeat(2,1fr)}}
-</style></head><body><header><h1>🛰️ BSC Meme 雷达</h1><p>只读观察 · BNB Smart Chain · 直接 USDT 交易对优先</p></header><main>
-<div class="bar"><button id="refresh">↻ 刷新扫描</button><select id="age"><option value="1">优先：1 小时内</option><option value="6">最近 6 小时</option><option value="24">最近 24 小时</option></select><button id="notify">开启通知</button></div>
-<div id="status" class="status">请先部署 README 中的数据服务，再设置 API 地址。</div><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看观察名单。</div></div>
-<div class="note"><b>风险提示：</b>数据筛选不等于安全审计，不能保证识别所有貔貅盘、隐藏权限或流动性撤出风险。不会自动交易，不需要钱包私钥或助记词。当前版本需应用打开时手动刷新，尚未实现后台持续监控和自动推送。</div>
-</main><script>
-const API_BASE=localStorage.getItem("radar_api_base")||"";
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#edf4ff;font:15px system-ui,-apple-system,sans-serif}
+header{padding:22px 16px;background:#14233a;border-bottom:1px solid #2b3b52}h1{margin:0 0 5px;font-size:23px}header p,.muted{color:#9aabc4;font-size:13px}
+main{max-width:900px;margin:auto;padding:14px}.bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px}
+button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-radius:10px;padding:10px;font:inherit}
+.cards{display:grid;gap:10px}.card{background:#141f31;border:1px solid #26344b;border-radius:14px;padding:14px}
+.row{display:flex;justify-content:space-between;gap:8px}.name{font-weight:700;font-size:17px;word-break:break-word}
+.badge{background:#263b50;color:#a9e8d0;padding:4px 8px;border-radius:20px;font-size:11px;white-space:nowrap}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}
+.stat{background:#0d1727;padding:9px;border-radius:9px}.stat small{display:block;color:#9aabc4;font-size:11px}.stat strong{font-size:14px}
+.links{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}.links a{color:#91c7ff;text-decoration:none;font-size:13px}
+.status{border:1px solid #26344b;border-radius:12px;padding:10px 12px;color:#9aabc4;font-size:13px;margin-bottom:12px}
+.empty{padding:26px;text-align:center;color:#9aabc4}.note{font-size:12px;line-height:1.65;color:#9aabc4;margin:14px 2px}
+@media(min-width:650px){.cards{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<header><h1>🛰️ BSC Meme 雷达</h1><p>只读观察 · BNB Smart Chain · PancakeSwap V2 · 直接 USDT 交易对</p></header>
+<main>
+<div class="bar">
+<button id="refresh">↻ 刷新扫描</button>
+<select id="age"><option value="15">最近 15 分钟</option><option value="30">最近 30 分钟</option><option value="60">最近 60 分钟</option></select>
+<button id="notify">开启通知权限</button>
+</div>
+<div id="status" class="status">数据源：BSC 链上 PancakeSwap V2 新池事件。点击刷新开始扫描。</div>
+<div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div>
+<div class="note">
+<b>数据说明：</b>新池来自 PancakeSwap V2 Factory 的链上 PairCreated 事件；只筛选与指定 BSC USDT 合约直接配对的池。流动性按 USDT 储备 × 2 粗略估算。成交量、买卖次数和价格变化按本次扫描到的 Swap 事件统计。当前不覆盖 PancakeSwap V3 或其他 DEX，公开 RPC 也可能限流。
+<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
+</div>
+</main>
+<script>
+const API_BASE=localStorage.getItem("radar_api_base")||"https://younbsc-meme-radar.zimicui9.workers.dev";
 const $=id=>document.getElementById(id);
-const fmt=n=>{if(n==null||!Number.isFinite(Number(n)))return "—";n=Number(n);return n>=1e6?(n/1e6).toFixed(2)+"M":n>=1e3?(n/1e3).toFixed(1)+"K":n.toFixed(n<1?6:2)};
-const ageText=ms=>{if(!ms||ms<0)return "未知";let h=ms/3600000;return h<1?Math.max(1,Math.round(ms/60000))+" 分钟":h<24?h.toFixed(1)+" 小时":(h/24).toFixed(1)+" 天"};
+const fmt=n=>{if(n==null||!Number.isFinite(Number(n)))return "—";n=Number(n);return n>=1e6?(n/1e6).toFixed(2)+"M":n>=1e3?(n/1e3).toFixed(1)+"K":n.toFixed(n<1?4:2)};
+const ageText=n=>{if(n==null||!Number.isFinite(Number(n)))return "未知";n=Number(n);return n<60?Math.max(1,Math.round(n))+" 分钟":(n/60).toFixed(1)+" 小时"};
+const pct=n=>n==null?"—":(Number(n)>0?"+":"")+Number(n).toFixed(2)+"%";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-async function scan(){if(!API_BASE){$("status").textContent='尚未设置 API 地址。部署 worker.js 后，修改 index.html 中 API_BASE 的默认值。';return}
-$("status").textContent="正在获取候选交易池…";$("cards").innerHTML='<div class="empty">扫描中…</div>';
-try{let r=await fetch(API_BASE.replace(/\/$/,"")+"/scan?hours="+$("age").value);if(!r.ok)throw Error("数据服务返回 "+r.status);let d=await r.json();let ps=d.pairs||[];if(!ps.length)$("cards").innerHTML='<div class="empty">没有找到符合条件的 BSC / USDT 交易池。可尝试放宽时间范围。</div>';
-else $("cards").innerHTML=ps.map(p=>{let t=p.baseToken||{},tx=p.txns?.h1||{},buys=tx.buys||0,sells=tx.sells||0,ratio=buys+sells?Math.round(buys/(buys+sells)*100)+"%":"—";return '<article class="card"><div class="row"><div><div class="name">'+esc(t.name)+' ('+esc(t.symbol)+')</div><div class="muted">'+esc(t.address)+'</div></div><span class="badge">'+ageText(Date.now()-p.pairCreatedAt)+'</span></div><div class="stats"><div class="stat"><small>流动性 USD</small><strong>$'+fmt(p.liquidity?.usd)+'</strong></div><div class="stat"><small>24h 成交量</small><strong>$'+fmt(p.volume?.h24)+'</strong></div><div class="stat"><small>1h 买入占比</small><strong>'+ratio+'</strong></div></div><div class="muted">1h 交易：买 '+buys+' / 卖 '+sells+' · 仅作观察线索</div><div class="links"><a target="_blank" rel="noopener" href="'+esc(p.url||("https://dexscreener.com/bsc/"+p.pairAddress))+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="https://bscscan.com/token/'+encodeURIComponent(t.address||"")+'">查看合约 ↗</a></div></article>'}).join("");
-$("status").textContent="扫描完成：筛出 "+ps.length+" 个候选交易池；更新时间 "+new Date().toLocaleTimeString()+"。"}catch(e){$("status").textContent="扫描失败："+e.message}}
-$("refresh").onclick=scan;$("age").onchange=scan;$("notify").onclick=async()=>{if(!("Notification"in window)){alert("浏览器不支持通知");return}let p=await Notification.requestPermission();alert(p==="granted"?"已开启通知权限；后台持续推送仍需额外部署。":"未获得通知权限")};
+async function scan(){
+  $("status").textContent="正在读取 BSC 链上新池事件…";
+  $("cards").innerHTML='<div class="empty">扫描中，请稍候…</div>';
+  try{
+    const minutes=Number($("age").value);
+    const response=await fetch(API_BASE.replace(/\/$/,"")+"/scan?minutes="+minutes);
+    const data=await response.json();
+    if(!response.ok||!data.ok)throw Error(data.error||("数据服务返回 "+response.status));
+    const pools=data.pools||[];
+    if(!pools.length){
+      $("cards").innerHTML='<div class="empty">最近 '+minutes+' 分钟内，没有找到达到流动性门槛的 PancakeSwap V2 / USDT 新池。<br>这不代表 BSC 上没有其他 DEX 或 V3 新池。</div>';
+    }else{
+      $("cards").innerHTML=pools.map(p=>{
+        const price=pct(p.priceChange1h);
+        const priceLabel=p.priceChange1h==null?"价格变化：数据不足":"价格变化（首末可观测 Swap）："+price;
+        return '<article class="card">'+
+          '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.tokenAddress)+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
+          '<div class="stats">'+
+          '<div class="stat"><small>估算流动性 USD</small><strong>$'+fmt(p.liquidityUSDApprox)+'</strong></div>'+
+          '<div class="stat"><small>近1小时成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
+          '<div class="stat"><small>买入 / 卖出次数</small><strong>'+p.buys1h+' / '+p.sells1h+'</strong></div>'+
+          '<div class="stat"><small>价格变化</small><strong>'+esc(priceLabel)+'</strong></div>'+
+          '</div><div class="muted">USDT 储备：$'+fmt(p.usdtReserve)+' · '+esc(p.dex)+'</div>'+
+          '<div class="links"><a target="_blank" rel="noopener" href="'+esc(p.poolUrl)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(p.bscScanUrl)+'">查看合约 ↗</a></div>'+
+          '<div class="note">'+esc(p.riskNote)+'</div></article>';
+      }).join("");
+    }
+    let extra=data.swapStatsAvailable?"":"；Swap 统计暂不可用";
+    $("status").textContent="扫描完成：发现 "+data.createdPairsFound+" 个相关新池事件，筛出 "+pools.length+" 个符合流动性条件的池。区块 "+data.latestBlock+" · "+new Date(data.generatedAt).toLocaleTimeString()+extra;
+  }catch(e){
+    $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试或检查 RPC 状态。";
+    $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
+  }
+}
+$("refresh").onclick=scan;
+$("age").onchange=scan;
+$("notify").onclick=async()=>{
+  if(!("Notification"in window)){alert("浏览器不支持通知");return}
+  const p=await Notification.requestPermission();
+  alert(p==="granted"?"已开启浏览器通知权限；后台持续监控和自动推送尚未实现。":"未获得通知权限");
+};
 if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});
-</script></body></html>
+</script>
+</body>
+</html>
