@@ -532,7 +532,9 @@ test("price risk does not reject large positive moves solely because of their ga
     priceChange5m: 12,
     priceChange15m: 42,
     buys1h: 40,
-    sells1h: 15
+    sells1h: 15,
+    marketHistoryStatus: "checked",
+    drawdownFromHighPct: -2
   });
   assert.equal(result.level, "watch");
   assert.match(result.reason, /不因涨幅拦截/);
