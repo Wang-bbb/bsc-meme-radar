@@ -44,6 +44,24 @@ const fmt=n=>{if(n==null||!Number.isFinite(Number(n)))return "—";n=Number(n);r
 const ageText=n=>{if(n==null||!Number.isFinite(Number(n)))return "未知";n=Number(n);return n<60?Math.max(1,Math.round(n))+" 分钟":(n/60).toFixed(1)+" 小时"};
 const pct=n=>n==null?"—":(Number(n)>0?"+":"")+Number(n).toFixed(2)+"%";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function priceRisk(p){
+  const change=p.priceChange1h==null?null:Number(p.priceChange1h);
+  const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
+  const trades=buys+sells;
+  if(change===null||!Number.isFinite(change)){
+    return {level:"review",reason:"缺少近1小时价格变化数据，无法排除暴跌风险"};
+  }
+  if(change<=-30){
+    return {level:"blocked",reason:"近1小时价格下跌"+Math.abs(change).toFixed(1)+"%，触发暴跌拦截（阈值30%）"};
+  }
+  if(change<=-15){
+    return {level:"review",reason:"近1小时价格下跌"+Math.abs(change).toFixed(1)+"%，触发高波动复核（阈值15%）"};
+  }
+  if(change<0&&trades>=10&&sells>=buys*2){
+    return {level:"review",reason:"价格下跌且卖出次数至少为买入次数的2倍，存在卖压风险"};
+  }
+  return {level:"clear",reason:"未触发基于现有1小时行情数据的价格风险阈值"};
+}
 async function scan(){
   $("status").textContent="正在扫描四条链并进行安全检测…";
   $("cards").innerHTML='<div class="empty">扫描中…</div>';
@@ -94,9 +112,20 @@ async function scan(){
           const response=await fetch(base+"/security-check?"+params.toString());
           const report=await response.json();
           p.security=report;
-          if(report.status==="pass")checked.push(p);
-          else if(report.status==="blocked"){p.pendingReason=(report.reasons||[]).join("；")||"检测到高危信号";pending.push({...p,blocked:true});}
-          else {p.pendingReason=(report.reasons||[]).join("；")||report.error||"安全信息不足";pending.push(p);}
+          const trendRisk=priceRisk(p);
+          p.priceRisk=trendRisk;
+          if(report.status==="blocked"){
+            p.pendingReason=(report.reasons||[]).join("；")||"检测到合约高危信号";
+            pending.push({...p,blocked:true});
+          }else if(trendRisk.level==="blocked"){
+            p.pendingReason=trendRisk.reason;
+            pending.push({...p,blocked:true});
+          }else if(report.status!=="pass"||trendRisk.level==="review"){
+            p.pendingReason=[...(report.reasons||[]),...(trendRisk.level==="review"?[trendRisk.reason]:[])].join("；")||report.error||"安全信息不足";
+            pending.push(p);
+          }else{
+            checked.push(p);
+          }
         }catch(e){p.security={status:"unverified"};p.pendingReason="安全检测请求失败";pending.push(p);}
       }
     });
