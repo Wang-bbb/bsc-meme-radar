@@ -25,6 +25,40 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+const VERIFIED_QUOTE_ASSETS = {
+  solana: new Set([
+    "so11111111111111111111111111111111111111112",
+    "epjfwdd5aufqssqe m2qn1xzybapc8g4wegkgzwytdt1v".replace(/ /g, "")
+  ]),
+  eth: new Set([
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "0x6b175474e89094c44da98b954eedeac495271d0f"
+  ]),
+  base: new Set([
+    "0x4200000000000000000000000000000000000006",
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  ])
+};
+function choosePoolToken(networkId, base, quote, baseId, quoteId) {
+  const canonicalQuotes = VERIFIED_QUOTE_ASSETS[networkId] || new Set();
+  const baseAddress = String(base.address || (baseId || "").split("_").slice(1).join("_"));
+  const quoteAddress = String(quote.address || (quoteId || "").split("_").slice(1).join("_"));
+  const isBaseQuote = canonicalQuotes.has(baseAddress.toLowerCase());
+  const isQuoteQuote = canonicalQuotes.has(quoteAddress.toLowerCase());
+  if (isBaseQuote && isQuoteQuote) return { skip: true, reason: "交易池两侧均为已知主流报价资产" };
+  if (isBaseQuote !== isQuoteQuote) {
+    return {
+      address: isBaseQuote ? quoteAddress : baseAddress,
+      symbol: isBaseQuote ? quote.symbol : base.symbol,
+      name: isBaseQuote ? quote.name : base.name,
+      verified: true,
+      side: isBaseQuote ? "quote" : "base"
+    };
+  }
+  return { address: baseAddress, symbol: base.symbol, name: base.name, verified: false, side: "base-ambiguous" };
+}
 
 async function rpc(method, params, rpcUrl) {
   let lastError;
@@ -389,13 +423,17 @@ export default {
             const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
             const baseAddress = (base.address || (baseId || "").split("_").slice(1).join("_"));
             const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
+            const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
+            if (candidate.skip) continue;
             results.push({
               chain: network.name,
               chainId: network.dexChain,
               dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
-              symbol: base.symbol || "Unknown",
-              name: base.name || "Unknown token",
-              tokenAddress: baseAddress,
+              symbol: candidate.symbol || "Unknown",
+              name: candidate.name || "Unknown token",
+              tokenAddress: candidate.address,
+              tokenSelectionVerified: candidate.verified,
+              tokenSelectionNote: candidate.verified ? "" : "交易池两侧均未匹配已知主流报价资产，暂按 base token 显示，代币方向未确认。",
               quoteSymbol: quote.symbol || "Unknown",
               quoteAddress,
               pairAddress: poolAddress,
