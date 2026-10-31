@@ -271,6 +271,92 @@ export default {
         }, 502);
       }
     }
+    if (url.pathname === "/multiscan") {
+      const minutes = Number(url.searchParams.get("minutes") || 15);
+      const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
+      if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
+      const networks = [
+        { id: "solana", name: "Solana", dexChain: "solana" },
+        { id: "eth", name: "Ethereum", dexChain: "ethereum" },
+        { id: "base", name: "Base", dexChain: "base" }
+      ];
+      const results = [];
+      const errors = [];
+      for (const network of networks) {
+        try {
+          const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token";
+          const response = await fetch(endpoint, { headers: { "accept": "application/json;version=20230302" } });
+          if (!response.ok) throw new Error("GeckoTerminal HTTP " + response.status);
+          const body = await response.json();
+          const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
+          for (const item of body.data || []) {
+            const a = item.attributes || {};
+            const rel = item.relationships || {};
+            const baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+            const quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+            const base = included.get(baseId) || {};
+            const quote = included.get(quoteId) || {};
+            const created = Date.parse(a.pool_created_at || "");
+            const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
+            const liquidity = Number(a.reserve_in_usd || 0);
+            if (ageMinutes == null || ageMinutes < 0 || ageMinutes > minutes || liquidity < minLiquidity) continue;
+            const tx1h = a.transactions && a.transactions.h1 || {};
+            const volume1h = Number(a.volume_usd && a.volume_usd.h1 || 0);
+            const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
+              ? Number(a.price_change_percentage.h1) : null;
+            const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
+            const baseAddress = (base.address || (baseId || "").split("_").slice(1).join("_"));
+            const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
+            results.push({
+              chain: network.name,
+              chainId: network.dexChain,
+              dex: a.dex_id || "GeckoTerminal indexed DEX",
+              symbol: base.symbol || "Unknown",
+              name: base.name || "Unknown token",
+              tokenAddress: baseAddress,
+              quoteSymbol: quote.symbol || "Unknown",
+              quoteAddress,
+              pairAddress: poolAddress,
+              poolUrl: "https://www.geckoterminal.com/" + network.id + "/pools/" + poolAddress,
+              dexScreenerUrl: "https://dexscreener.com/" + network.dexChain + "/" + poolAddress,
+              createdAt: new Date(created).toISOString(),
+              ageMinutes: Math.round(ageMinutes * 10) / 10,
+              liquidityUSDApprox: liquidity,
+              volume1hUSD: volume1h,
+              buys1h: Number(tx1h.buys || 0),
+              sells1h: Number(tx1h.sells || 0),
+              priceChange1h,
+              usdtDirect: String(quote.symbol || "").toUpperCase() === "USDT",
+              usdtRouteStatus: "not_verified",
+              riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
+            });
+          }
+        } catch (error) {
+          errors.push({ chain: network.name, error: String(error) });
+        }
+      }
+      results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
+      return json({
+        ok: errors.length === 0,
+        complete: errors.length === 0,
+        mode: "multichain-new-pools",
+        chains: networks.map((x) => x.name),
+        minutes,
+        minLiquidityUSD: minLiquidity,
+        dataSource: "GeckoTerminal public API",
+        count: results.length,
+        pools: results,
+        chainErrors: errors,
+        limitations: [
+          "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
+          "GeckoTerminal new_pools 为第三方索引的有限分页结果，不保证覆盖全部新池。",
+          "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
+          "USDT 直连暂按报价代币 symbol 标记，尚未完成各链 USDT 合约地址白名单校验；USDT 路由状态暂未验证。",
+          "本接口只读，不执行兑换或交易。"
+        ],
+        generatedAt: new Date().toISOString()
+      });
+    }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
     const minutes = Number(url.searchParams.get("minutes") || 15);
