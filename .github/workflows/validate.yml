@@ -22,6 +22,8 @@ jobs:
           node-version: 22
       - name: Check Worker JavaScript syntax
         run: node --check worker.js
+      - name: Run Worker route tests
+        run: node --experimental-default-type=module --test tests/worker.test.mjs
       - name: Extract and check dashboard JavaScript
         run: |
           python3 - <<'PY'
