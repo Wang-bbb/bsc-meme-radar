@@ -171,6 +171,99 @@ export default {
     if (url.pathname === "/" || url.pathname === "/health") {
       return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + multiple BSC DEX factories", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
     }
+    if (url.pathname === "/history") {
+      const hours = Number(url.searchParams.get("hours") || 24);
+      if (![6, 12, 24].includes(hours)) return json({ ok: false, error: "hours must be 6, 12, or 24" }, 400);
+      try {
+        const latestHex = await rpc("eth_blockNumber", [], rpcUrl);
+        const latest = asNumber(latestHex);
+        const latestBlock = await rpc("eth_getBlockByNumber", [latestHex, false], rpcUrl);
+        const latestTime = asNumber(latestBlock.timestamp) * 1000;
+        const sampleBlock = await rpc("eth_getBlockByNumber", [hexNum(Math.max(0, latest - 1000)), false], rpcUrl);
+        const elapsed = latestTime - asNumber(sampleBlock.timestamp) * 1000;
+        const secondsPerBlock = elapsed > 0 ? elapsed / 1000 : 3;
+        const targetBlocks = Math.ceil(hours * 3600 / secondsPerBlock * 1.08);
+        const fromBlock = Math.max(0, latest - targetBlocks);
+        const chunkSize = 4000;
+        const chunks = [];
+        for (let start = fromBlock; start <= latest; start += chunkSize) {
+          chunks.push({ fromBlock: start, toBlock: Math.min(latest, start + chunkSize - 1) });
+        }
+        const allFactories = [
+          ...V2_FACTORIES.map((factory) => ({ ...factory, version: "v2", topic: PAIR_CREATED })),
+          ...V3_FACTORIES.map((factory) => ({ ...factory, version: "v3", topic: V3_POOL_CREATED }))
+        ];
+        const tasks = allFactories.flatMap((factory) => chunks.map((chunk) => ({ factory, chunk })));
+        const results = await mapLimit(tasks, 3, async ({ factory, chunk }) => {
+          const logs = await rpc("eth_getLogs", [{
+            fromBlock: hexNum(chunk.fromBlock),
+            toBlock: hexNum(chunk.toBlock),
+            address: factory.address,
+            topics: [factory.topic]
+          }], rpcUrl);
+          const usdtLogs = logs.filter((log) =>
+            fromTopic(log.topics[1] || "") === USDT.toLowerCase() ||
+            fromTopic(log.topics[2] || "") === USDT.toLowerCase()
+          );
+          return { factory, logs, usdtLogs };
+        });
+        const summary = allFactories.map((factory) => {
+          const matching = results.filter((x) => x.factory.address === factory.address);
+          const logs = matching.flatMap((x) => x.logs);
+          const usdtLogs = matching.flatMap((x) => x.usdtLogs);
+          const uniqueUsdt = new Map();
+          for (const log of usdtLogs) {
+            const token0 = fromTopic(log.topics[1] || "");
+            const token1 = fromTopic(log.topics[2] || "");
+            const poolAddress = factory.version === "v2"
+              ? "0x" + word(log.data, 0).slice(-40).toLowerCase()
+              : "0x" + word(log.data, 1).slice(-40).toLowerCase();
+            uniqueUsdt.set(poolAddress, {
+              token0, token1, poolAddress,
+              blockNumber: asNumber(log.blockNumber),
+              transactionHash: log.transactionHash
+            });
+          }
+          return {
+            dex: factory.name,
+            version: factory.version,
+            factoryAddress: factory.address,
+            eventCount: logs.length,
+            usdtPoolEventCount: uniqueUsdt.size,
+            sampleUsdtPools: Array.from(uniqueUsdt.values()).slice(0, 5)
+          };
+        });
+        const errors = results.filter((x) => x && x._error).map((x) => x._error);
+        return json({
+          ok: true,
+          mode: "historical-usdt-pool-validation",
+          chain: "BSC",
+          quoteToken: { symbol: "USDT", address: USDT },
+          hours,
+          fromBlock,
+          latestBlock: latest,
+          estimatedSecondsPerBlock: secondsPerBlock,
+          chunkSize,
+          chunksScanned: chunks.length,
+          factoriesScanned: summary.length,
+          totalFactoryEvents: summary.reduce((n, x) => n + x.eventCount, 0),
+          totalUsdtPoolEvents: summary.reduce((n, x) => n + x.usdtPoolEventCount, 0),
+          results: summary,
+          limitations: [
+            "按已配置工厂地址和对应 V2/V3 创建池事件扫描，不代表覆盖 BSC 全部 DEX。",
+            "历史建池事件数量不等于当前仍有流动性或可正常卖出。",
+            "USDT 配对通过精确合约地址识别，不依赖代币名称或 symbol。"
+          ]
+        });
+      } catch (error) {
+        return json({
+          ok: false,
+          mode: "historical-usdt-pool-validation",
+          error: String(error),
+          hint: "历史验证失败不代表没有 USDT 池；请检查 RPC 限流或日志查询范围。"
+        }, 502);
+      }
+    }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
     const minutes = Number(url.searchParams.get("minutes") || 15);
