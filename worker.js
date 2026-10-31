@@ -337,7 +337,7 @@ export default {
       }
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       return json({
-        ok: errors.length === 0,
+        ok: true,
         complete: errors.length === 0,
         mode: "multichain-new-pools",
         chains: networks.map((x) => x.name),
