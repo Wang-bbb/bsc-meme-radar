@@ -374,6 +374,28 @@ export default {
           v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length])),
           v3: Object.fromEntries(v3FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length]))
         },
+        factoryDiagnostics: {
+          v2: v2FactoryResults.map((x) => ({
+            dex: x.factory.name,
+            hasContractCode: null,
+            eventCount: x.allLogs.length,
+            usdtEventCount: x.usdtLogs.length,
+            sampleTokenPairs: x.allLogs.slice(0, 2).map((log) => ({
+              token0: fromTopic(log.topics[1]),
+              token1: fromTopic(log.topics[2])
+            }))
+          })),
+          v3: v3FactoryResults.map((x) => ({
+            dex: x.factory.name,
+            hasContractCode: null,
+            eventCount: x.allLogs.length,
+            usdtEventCount: x.usdtLogs.length,
+            sampleTokenPairs: x.allLogs.slice(0, 2).map((log) => ({
+              token0: fromTopic(log.topics[1]),
+              token1: fromTopic(log.topics[2])
+            }))
+          }))
+        },
         createdPairsFound: creationLogs.length + v3CreationLogs.length,
         freshPairsFound: fresh.length + v3Fresh.length,
         count: pools.length,
