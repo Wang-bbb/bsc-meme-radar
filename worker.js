@@ -783,8 +783,8 @@ export default {
                     volume1hUSD: Number(activity.volume_usd || 0),
                     buys1h: Number(activity.buys || 0), sells1h: Number(activity.sells || 0),
                     priceChange1h: activity.last_price_usd_change == null ? null : Number(activity.last_price_usd_change),
-                    priceChange5m: activity["5m"] && activity["5m"].last_price_usd_change != null ? Number(activity["5m"].last_price_usd_change) : null,
-                    priceChange15m: activity["15m"] && activity["15m"].last_price_usd_change != null ? Number(activity["15m"].last_price_usd_change) : null,
+                    priceChange5m: detail["5m"] && detail["5m"].last_price_usd_change != null ? Number(detail["5m"].last_price_usd_change) : null,
+                    priceChange15m: detail["15m"] && detail["15m"].last_price_usd_change != null ? Number(detail["15m"].last_price_usd_change) : null,
                     usdtRouteStatus: "not_verified", source: "DexPaprika independent fallback",
                     riskNote: "第三方独立备用索引；只返回首批有限池并逐池补充代币信息，覆盖范围不完整；USDT 路由未验证。"
                   });
