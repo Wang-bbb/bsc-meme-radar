@@ -179,9 +179,10 @@ export default {
       const blockWindow = Math.min(10000, Math.ceil(minutes * 60 / secondsPerBlock * 1.15) + 100);
       const fromBlock = Math.max(0, latest - blockWindow);
       const filterBase = { address: FACTORY, fromBlock: hexNum(fromBlock), toBlock: latestHex };
-      const [logs0, logs1] = await Promise.all([
+      const [logs0, logs1, allV2FactoryLogs] = await Promise.all([
         rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, USDT_TOPIC, null] }], rpcUrl),
-        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, null, USDT_TOPIC] }], rpcUrl)
+        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, null, USDT_TOPIC] }], rpcUrl),
+        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED] }], rpcUrl)
       ]);
       const logMap = new Map();
       for (const log of [...logs0, ...logs1]) {
@@ -191,9 +192,10 @@ export default {
 
       const timeCache = new Map();
       const v3FilterBase = { address: V3_FACTORY, fromBlock: hexNum(fromBlock), toBlock: latestHex };
-      const [v3Logs0, v3Logs1] = await Promise.all([
+      const [v3Logs0, v3Logs1, allV3FactoryLogs] = await Promise.all([
         rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, USDT_TOPIC, null] }], rpcUrl),
-        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, null, USDT_TOPIC] }], rpcUrl)
+        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, null, USDT_TOPIC] }], rpcUrl),
+        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED] }], rpcUrl)
       ]);
       const v3LogMap = new Map();
       for (const log of [...v3Logs0, ...v3Logs1]) {
@@ -331,6 +333,8 @@ export default {
         factory: FACTORY,
         latestBlock: latest,
         blockWindow: blockWindow,
+        factoryEventsFound: { v2: allV2FactoryLogs.length, v3: allV3FactoryLogs.length },
+        usdtPoolEventsFound: { v2: logs0.length + logs1.length, v3: v3Logs0.length + v3Logs1.length },
         createdPairsFound: creationLogs.length + v3CreationLogs.length,
         freshPairsFound: fresh.length + v3Fresh.length,
         count: pools.length,
