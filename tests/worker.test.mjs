@@ -534,7 +534,8 @@ test("price risk does not reject large positive moves solely because of their ga
     buys1h: 40,
     sells1h: 15,
     marketHistoryStatus: "checked",
-    drawdownFromHighPct: -2
+    drawdownFromHighPct: -2,
+    liquiditySnapshotStatus: "checked"
   });
   assert.equal(result.level, "watch");
   assert.match(result.reason, /不因涨幅拦截/);
@@ -643,6 +644,7 @@ test("price risk reviews and blocks drawdowns from observed candle highs", () =>
     priceChange15m: 4,
     drawdownFromHighPct: -25,
     marketHistoryStatus: "checked",
+    liquiditySnapshotStatus: "checked",
     buys1h: 30,
     sells1h: 10
   });
