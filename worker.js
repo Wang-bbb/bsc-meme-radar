@@ -410,7 +410,9 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
   const drawdownPct = (latest.close / maxHigh - 1) * 100;
   const changeFromMinutes = (minutes) => {
     const target = latest.timestamp - minutes * 60;
-    const reference = candles.filter((row) => row.timestamp <= target).slice(-1)[0];
+    const reference = candles.reduce((best, row) =>
+      !best || Math.abs(row.timestamp - target) < Math.abs(best.timestamp - target) ? row : best
+    , null);
     if (!reference) return null;
     const elapsed = latest.timestamp - reference.timestamp;
     const minElapsed = minutes === 5 ? 4 * 60 : minutes === 15 ? 12 * 60 : 45 * 60;
