@@ -570,3 +570,64 @@ test("four user-reported Solana dump cases are retained as regression sample ide
     assert.match(mint, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
   }
 });
+
+
+test("pool-risk computes high-water drawdown and short-window changes from GeckoTerminal minute candles", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    assert.equal(url.hostname, "api.geckoterminal.com");
+    assert.match(url.pathname, /\/networks\/solana\/pools\/TestPool\/ohlcv\/minute$/);
+    assert.equal(url.searchParams.get("aggregate"), "1");
+    assert.equal(url.searchParams.get("currency"), "usd");
+    assert.equal(url.searchParams.get("token"), "TestMint");
+    const now = Math.floor(Date.now() / 1000);
+    const rows = [];
+    for (let minutesAgo = 0; minutesAgo < 60; minutesAgo++) {
+      let close = 50;
+      if (minutesAgo === 15) close = 90;
+      else if (minutesAgo === 5) close = 80;
+      else if (minutesAgo === 0) close = 70;
+      else if (minutesAgo < 20) close = 75;
+      const high = minutesAgo === 8 ? 100 : close + 2;
+      rows.push([now - minutesAgo * 60, close, high, close - 1, close, 1000]);
+    }
+    return response({ data: { attributes: { ohlcv_list: rows } } });
+  };
+  const res = await worker.fetch(request(
+    "/pool-risk?chain=solana&pool=TestPool&token=TestMint"
+  ), {});
+  const data = await res.json();
+  assert.equal(data.status, "checked");
+  assert.equal(data.candleCount, 60);
+  assert.equal(data.drawdownFromHighPct, -30);
+  assert.equal(data.priceChange5m, -12.5);
+  assert.equal(Number(data.priceChange15m.toFixed(2)), -22.22);
+  assert.equal(data.priceChange1h, 40);
+});
+
+test("pool-risk marks insufficient candle history as unverified instead of clear", async () => {
+  globalThis.fetch = async () => response({
+    data: { attributes: { ohlcv_list: [
+      [Math.floor(Date.now() / 1000), 1, 1.1, 0.9, 1, 10],
+      [Math.floor(Date.now() / 1000) - 60, 0.9, 1, 0.8, 0.9, 10]
+    ] } }
+  });
+  const res = await worker.fetch(request(
+    "/pool-risk?chain=base&pool=TestPool&token=TestMint"
+  ), {});
+  const data = await res.json();
+  assert.equal(data.status, "insufficient");
+  assert.equal(data.candleCount, 2);
+  assert.match(data.error, /不足3根/);
+});
+
+test("pool-risk validates supported networks and required pool/token identifiers", async () => {
+  const badNetwork = await worker.fetch(request(
+    "/pool-risk?chain=unknown&pool=TestPool&token=TestMint"
+  ), {});
+  assert.equal(badNetwork.status, 400);
+  const missingPool = await worker.fetch(request(
+    "/pool-risk?chain=bsc&token=TestMint"
+  ), {});
+  assert.equal(missingPool.status, 400);
+});
