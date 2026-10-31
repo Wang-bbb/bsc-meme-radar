@@ -1,7 +1,6 @@
 const USDT = "0x55d398326f99059ff775485246999027b319795";
 const USDT_TOPIC = "0x" + USDT.slice(2).toLowerCase().padStart(64, "0");
 const FACTORY = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
-const RPC = "https://bsc-rpc.publicnode.com";
 const PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9";
 const SWAP_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
 const HEADERS = {
@@ -13,11 +12,11 @@ const HEADERS = {
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
 
-async function rpc(method, params) {
+async function rpc(method, params, rpcUrl) {
   let lastError;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const response = await fetch(RPC, {
+      const response = await fetch(rpcUrl, {
         method: "POST",
         headers: { "content-type": "application/json", "accept": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: method, params: params })
@@ -81,23 +80,23 @@ function decodeAbiString(hex) {
   } catch (_) { return ""; }
 }
 
-async function blockTime(blockNumber, cache) {
+async function blockTime(blockNumber, cache, rpcUrl) {
   if (cache.has(blockNumber)) return cache.get(blockNumber);
-  const block = await rpc("eth_getBlockByNumber", [hexNum(blockNumber), false]);
+  const block = await rpc("eth_getBlockByNumber", [hexNum(blockNumber), false], rpcUrl);
   const time = block ? asNumber(block.timestamp) * 1000 : 0;
   cache.set(blockNumber, time);
   return time;
 }
 
-async function readPair(log) {
+async function readPair(log, rpcUrl) {
   const token0 = fromTopic(log.topics[1]);
   const token1 = fromTopic(log.topics[2]);
   const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
   const usdtIs0 = token0 === USDT.toLowerCase();
   const token = usdtIs0 ? token1 : token0;
-  const safeCall = (data) => rpc("eth_call", [{ to: token, data: data }, "latest"]).catch(() => "0x");
+  const safeCall = (data) => rpc("eth_call", [{ to: token, data: data }, "latest"], rpcUrl).catch(() => "0x");
   const calls = await Promise.all([
-    rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"]),
+    rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"], rpcUrl),
     safeCall("0x95d89b41"),
     safeCall("0x06fdde03"),
     safeCall("0x313ce567")
@@ -123,11 +122,13 @@ async function readPair(log) {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
+    const rpcUrl = env.NODEREAL_RPC_URL;
+    if (!rpcUrl) return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
     if (url.pathname === "/" || url.pathname === "/health") {
-      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "PublicNode BSC RPC + PancakeSwap V2 PairCreated", supportedMinutes: [15, 30, 60], note: "只读监控；当前扫描 PancakeSwap V2 USDT 池" });
+      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + PancakeSwap V2 PairCreated", supportedMinutes: [15, 30, 60], note: "只读监控；当前扫描 PancakeSwap V2 USDT 池" });
     }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
@@ -136,13 +137,13 @@ export default {
     const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
 
     try {
-      const latestHex = await rpc("eth_blockNumber", []);
+      const latestHex = await rpc("eth_blockNumber", [], rpcUrl);
       const latest = asNumber(latestHex);
-      const latestBlock = await rpc("eth_getBlockByNumber", [latestHex, false]);
+      const latestBlock = await rpc("eth_getBlockByNumber", [latestHex, false], rpcUrl);
       const latestTime = asNumber(latestBlock.timestamp) * 1000;
       let secondsPerBlock = 0.5;
       try {
-        const sample = await rpc("eth_getBlockByNumber", [hexNum(Math.max(0, latest - 1000)), false]);
+        const sample = await rpc("eth_getBlockByNumber", [hexNum(Math.max(0, latest - 1000)), false], rpcUrl);
         const elapsed = latestTime - asNumber(sample.timestamp) * 1000;
         if (elapsed > 0) secondsPerBlock = elapsed / 1000000;
       } catch (_) {}
@@ -150,8 +151,8 @@ export default {
       const fromBlock = Math.max(0, latest - blockWindow);
       const filterBase = { address: FACTORY, fromBlock: hexNum(fromBlock), toBlock: latestHex };
       const [logs0, logs1] = await Promise.all([
-        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, USDT_TOPIC, null] }]),
-        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, null, USDT_TOPIC] }])
+        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, USDT_TOPIC, null] }], rpcUrl),
+        rpc("eth_getLogs", [{ ...filterBase, topics: [PAIR_CREATED, null, USDT_TOPIC] }], rpcUrl)
       ]);
       const logMap = new Map();
       for (const log of [...logs0, ...logs1]) {
@@ -163,11 +164,11 @@ export default {
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
       const withTimes = await mapLimit(creationLogs, 3, async (log) => ({
         log: log,
-        createdAt: await blockTime(asNumber(log.blockNumber), timeCache)
+        createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
       }));
       const fresh = withTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
       const pairData = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
-        const p = await readPair(x.log);
+        const p = await readPair(x.log, rpcUrl);
         p.createdAt = x.createdAt;
         return p;
       });
@@ -182,7 +183,7 @@ export default {
             fromBlock: hexNum(Math.min(...valid.map((p) => p.createdBlock))),
             toBlock: latestHex,
             topics: [SWAP_TOPIC]
-          }]);
+          }], rpcUrl);
         } catch (e) { swapError = String(e); }
       }
 
@@ -195,7 +196,7 @@ export default {
         swapsByPair.get(key).push(log);
       }
       const allSwapBlocks = Array.from(new Set(swapLogs.map((l) => asNumber(l.blockNumber))));
-      await mapLimit(allSwapBlocks, 3, async (n) => blockTime(n, timeCache));
+      await mapLimit(allSwapBlocks, 3, async (n) => blockTime(n, timeCache, rpcUrl));
 
       const pools = valid.map((p) => {
         const swaps = (swapsByPair.get(p.pair.toLowerCase()) || []).sort((a, b) => {
@@ -265,9 +266,8 @@ export default {
         quote: "USDT",
         minutes: minutes,
         minLiquidityUSDApprox: minLiquidity,
-        dataSource: "PublicNode BSC RPC · PancakeSwap V2 Factory",
+        dataSource: "NodeReal BSC RPC · PancakeSwap V2 Factory",
         factory: FACTORY,
-        rpc: RPC,
         latestBlock: latest,
         blockWindow: blockWindow,
         createdPairsFound: creationLogs.length,
@@ -289,9 +289,9 @@ export default {
     } catch (error) {
       return json({
         ok: false,
-        dataSource: "PublicNode BSC RPC · PancakeSwap V2 Factory",
+        dataSource: "NodeReal BSC RPC · PancakeSwap V2 Factory",
         error: String(error),
-        hint: "如果是 eth_getLogs 范围或速率限制，将缩小区块范围或更换 RPC 节点；不要将错误当成没有新池。"
+        hint: "请检查 NodeReal RPC 配额、端点和 eth_getLogs 权限；不要将错误当成没有新池。"
       }, 502);
     }
   }
