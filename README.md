@@ -1,39 +1,41 @@
 # 多链 Meme Radar（PWA）
 
-只读观察工具，不会自动交易，不需要钱包私钥、助记词或交易所 API Key。
+只读观察工具，用于发现 BSC、Solana、Ethereum、Base 的早期新池线索。不会自动交易，不需要钱包私钥、助记词或交易所 API Key。
 
-## 当前升级目标
-- 链：BSC、Solana、Ethereum、Base
-- 排序：优先池龄最新的候选；同等池龄下参考成交量
-- 最低流动性：默认约 5,000 USD
-- 资金偏好：USDT 直接交易优先，也计划支持通过钱包路由兑换
-- 观察窗口：15 / 30 / 60 分钟
+## 当前功能
+- 覆盖链：BSC、Solana、Ethereum、Base。
+- 默认观察窗口：最近 15 分钟，可切换 30 / 60 分钟。
+- 默认最低流动性：约 5,000 USD。
+- 排序：优先池龄最新；同等池龄参考成交量。
+- BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
+- Solana / Ethereum / Base：使用 GeckoTerminal public API 的 new_pools 索引；显示索引提供的报价资产符号，但**不判断 USDT 直连，也不验证钱包兑换路径**。
+- 前端合并 BSC 与其他三链结果，并按池龄排序。
+- 每条链每轮最多对最早的 5 个候选执行安全检查；通过的进入候选列表，明确高危的进入拦截区，检测失败或信息不完整的进入待复核区。未检查的候选不会进入通过筛查列表。
 
-## 当前实现状态（首阶段）
-- BSC：保留原有 NodeReal RPC + 已配置 V2/V3 DEX 工厂扫描。
-- Solana / Ethereum / Base：新增 `/multiscan`，使用 GeckoTerminal public API 的 new_pools 数据。
-- 前端：同时请求 BSC `/scan` 和其他三链 `/multiscan`，按池龄从新到旧排序。
-- 前端每条链本轮最多对最早的 5 个候选执行安全检查；通过检查的进入主列表。检测到貔貅或严重风险的直接剔除；安全接口不可用、模拟失败、风险数据不完整或 LP 锁定信号不足的放入待复核区，不进入主列表。
-- EVM 买卖模拟只覆盖 Honeypot.is 当前支持的 Ethereum、BSC、Base 和其支持的 DEX 路由；不能覆盖所有池型或所有恶意行为。Solana 使用 RugCheck 摘要风险和 LP 锁定信号。
-- 这不是完整审计：目前尚未完成创建者/关联钱包历史、EVM 全量持币集中度、LP 锁仓合约可信度和实时流动性撤出监控。通过筛查不代表绝对安全。
-- 其他三链的 USDT 路由：目前**尚未实时报价验证**；报价代币 symbol 显示 USDT 也不代表已通过合约地址核验或可成功成交。后续必须接入各链官方/可信 USDT 合约白名单和实际路由报价。
-- GeckoTerminal 每条链本版本只取第一页（最多20个池）；公共 API 约每分钟10次调用、数据约每分钟缓存更新。频繁刷新可能触发限流，不保证捕获所有新池。
+## 安全筛查范围与限制
+- EVM 使用 Honeypot.is 买卖模拟及风险信号，覆盖范围受其支持的链、DEX 和交易路由限制。
+- Solana 使用 RugCheck 风险摘要、权限和 LP 锁定信号。
+- 通过筛查不代表绝对安全，也不是完整合约审计。
+- 尚未完整实现：创建者及关联钱包历史、EVM 全量持币集中度、LP 锁仓合约可信度验证、持续监控流动性撤出。
+- 安全数据不可用、模拟失败或信息不完整时，按待复核处理，不进入通过筛查列表。
 
-## 部署
-1. Cloudflare Worker 使用仓库中的 `worker.js`，保留已配置的 `NODEREAL_RPC_URL` Secret。
+## 数据覆盖限制
+- GeckoTerminal 每条链当前只取 new_pools 第一页（最多 20 个池），不保证覆盖所有新池。
+- 公共 API 可能限流；数据约每分钟缓存更新，频繁刷新可能触发 429。
+- 多链流动性、成交量、买卖次数和价格变化来自第三方索引，可能延迟、缺失或存在统计口径差异。
+- BSC 仅覆盖代码中配置的 DEX 工厂，不等于全 BSC DEX；流动性为估算值，V3 成交统计尚未接入。
+- BSC USDT 直连池与其他链的钱包兑换路径是两回事；其他三链目前不提供 USDT 直连或可成交保证。
+
+## 部署说明
+1. Cloudflare Worker 使用仓库中的 `worker.js`，并在 Cloudflare Secret 中配置 `NODEREAL_RPC_URL`。
 2. GitHub Pages 发布仓库根目录的 `index.html`。
 3. 手机浏览器打开 Pages 地址，可添加到主屏幕。
 
-## 重要限制
-- 当前 `/multiscan` 首阶段只覆盖 Solana、Ethereum、Base 的 GeckoTerminal new_pools 索引，不等于完整链上监听。
-- 流动性、成交量、买卖次数和价格变化来自第三方索引，可能延迟、缺失或口径不同。
-- BSC 现有接口仍有已接入 DEX 范围限制，V3 成交统计尚未完整接入。
-- Honeypot.is 模拟及 RugCheck 摘要属于初步过滤，不是完整合约审计；EVM 持币集中度、创建者关联钱包和 LP 锁仓合约验证仍待实现。
-- USDT 兑换路径必须逐条验证网络、代币合约、可执行报价、滑点和手续费；跨链兑换不等于每个代币都可买入。
-- Worker 和网页公开可访问；不得放入私钥、助记词或交易密钥。
+Worker 和网页均可能公开访问；不得把私钥、助记词或交易密钥放入仓库、网页或 Worker 响应。
 
 ## API
 - `/health`：服务状态
-- `/scan?minutes=15&minLiquidity=5000`：BSC 原有扫描
-- `/multiscan?minutes=15&minLiquidity=5000`：Solana、Ethereum、Base 首阶段新池扫描
+- `/scan?minutes=15&minLiquidity=5000`：BSC USDT 直连新池扫描
+- `/multiscan?minutes=15&minLiquidity=5000`：Solana、Ethereum、Base 新池索引
+- `/security-check?chain=...&address=...`：单个代币安全预检
 - `/history?hours=24&dex=pancakeswap-v2`：BSC 单工厂历史验证
