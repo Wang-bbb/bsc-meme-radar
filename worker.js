@@ -181,7 +181,7 @@ export default {
         const latestTime = asNumber(latestBlock.timestamp) * 1000;
         const sampleBlock = await rpc("eth_getBlockByNumber", [hexNum(Math.max(0, latest - 1000)), false], rpcUrl);
         const elapsed = latestTime - asNumber(sampleBlock.timestamp) * 1000;
-        const secondsPerBlock = elapsed > 0 ? elapsed / 1000 : 3;
+        const secondsPerBlock = elapsed > 0 ? elapsed / 1000000 : 0.5;
         const targetBlocks = Math.ceil(hours * 3600 / secondsPerBlock * 1.08);
         const fromBlock = Math.max(0, latest - targetBlocks);
         const chunkSize = 4000;
