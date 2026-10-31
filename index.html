@@ -18,7 +18,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 .stat{background:#0d1727;padding:9px;border-radius:9px}.stat small{display:block;color:#9aabc4;font-size:11px}.stat strong{font-size:14px}
 .links{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}.links a{color:#91c7ff;text-decoration:none;font-size:13px}
 .status{border:1px solid #26344b;border-radius:12px;padding:10px 12px;color:#9aabc4;font-size:13px;margin-bottom:12px}
-.empty{padding:26px;text-align:center;color:#9aabc4}.note{font-size:12px;line-height:1.65;color:#9aabc4;margin:14px 2px}
+.empty{padding:26px;text-align:center;color:#9aabc4}.section-title{font-size:15px;margin:18px 2px 8px;color:#dce8f8}.review-card{border-color:#806b37}.note{font-size:12px;line-height:1.65;color:#9aabc4;margin:14px 2px}
 @media(min-width:650px){.cards{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(3,1fr)}}
 </style>
 </head>
@@ -31,7 +31,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <button id="notify">开启通知权限</button>
 </div>
 <div id="status" class="status">数据源：BSC 链上扫描 + Solana / Ethereum / Base 第三方新池索引。点击刷新开始扫描。</div>
-<div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div>
+<h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div>
 <div class="note">
 <b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 首阶段使用 GeckoTerminal 新池索引。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口主要识别 BSC USDT 直连池；其他链的 USDT 直连标记和钱包兑换路径仍需后续按各链真实合约地址及实时报价验证。
 <br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
@@ -45,8 +45,9 @@ const ageText=n=>{if(n==null||!Number.isFinite(Number(n)))return "未知";n=Numb
 const pct=n=>n==null?"—":(Number(n)>0?"+":"")+Number(n).toFixed(2)+"%";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function scan(){
-  $("status").textContent="正在扫描四条链：BSC、Solana、Ethereum、Base…";
-  $("cards").innerHTML='<div class="empty">扫描中，请稍候…</div>';
+  $("status").textContent="正在扫描四条链并进行安全检测…";
+  $("cards").innerHTML='<div class="empty">扫描中…</div>';
+  $("review-cards").innerHTML="";
   try{
     const minutes=Number($("age").value);
     const base=API_BASE.replace(/\\/$/,"");
@@ -59,42 +60,79 @@ async function scan(){
     const multi=settled[1].status==="fulfilled"?settled[1].value:null;
     if(!bsc)failures.push("BSC："+(settled[0].reason?.message||"扫描失败"));
     if(!multi)failures.push("Solana/Ethereum/Base："+(settled[1].reason?.message||"扫描失败"));
-    const pools=[];
-    if(bsc)(bsc.pools||[]).forEach(p=>pools.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl}));
-    if(multi)(multi.pools||[]).forEach(p=>pools.push(p));
-    pools.sort((a,b)=>(Number(a.ageMinutes)||0)-(Number(b.ageMinutes)||0));
-    if(!pools.length){
-      $("cards").innerHTML='<div class="empty">本轮没有发现达到 $5,000 流动性门槛的候选池。若有链扫描失败，请查看上方错误信息。</div>';
-    }else{
-      $("cards").innerHTML=pools.map(p=>{
-        const quote=esc(p.quoteSymbol||"未知报价资产");
-        const usdtStatus=p.chain==="BSC"?"BSC USDT 直连池":(p.usdtDirect?"报价符号为 USDT（合约地址待校验）":"USDT 兑换路径未验证");
-        const price=p.priceChange1h==null?"—":pct(p.priceChange1h);
-        const poolLink=p.poolUrl||p.dexScreenerUrl||"#";
-        const tokenLink=p.bscScanUrl||(p.chain==="Solana"?"https://solscan.io/token/"+encodeURIComponent(p.tokenAddress):p.chain==="Base"?"https://basescan.org/token/"+encodeURIComponent(p.tokenAddress):"https://etherscan.io/token/"+encodeURIComponent(p.tokenAddress));
-        return '<article class="card">'+
-          '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
-          '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
-          '<div class="stats">'+
-          '<div class="stat"><small>估算流动性 USD</small><strong>$'+fmt(p.liquidityUSDApprox)+'</strong></div>'+
-          '<div class="stat"><small>近1小时成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
-          '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
-          '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div>'+
-          '</div><div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
-          '<div class="links"><a target="_blank" rel="noopener" href="'+esc(poolLink)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(tokenLink)+'">查看合约 ↗</a><a href="#" data-copy="'+esc(p.tokenAddress||"")+'">复制合约</a></div>'+
-          '<div class="note">'+esc(p.riskNote||"早期新池风险高，请独立核实合约、持币集中度、卖出能力及流动性变化。")+'</div></article>';
-      }).join("");
-      document.querySelectorAll("[data-copy]").forEach(a=>a.addEventListener("click",async e=>{
-        e.preventDefault();const value=a.getAttribute("data-copy");if(!value)return;
-        try{await navigator.clipboard.writeText(value);a.textContent="已复制";}catch(_){a.textContent="复制失败";}
-      }));
-    }
-    $("status").textContent=(failures.length?"部分扫描失败："+failures.join("；")+"。":"四链扫描完成。")+
-      " 符合条件候选 "+pools.length+" 个（BSC "+(bsc?.count??"—")+"；Solana/Ethereum/Base "+(multi?.count??"—")+"）。按池龄从新到旧排序。"+
-      (multi?.chainErrors?.length?"；第三方数据源错误："+multi.chainErrors.map(x=>x.chain).join(", "):"");
+    const all=[];
+    if(bsc)(bsc.pools||[]).forEach(p=>all.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl}));
+    if(multi)(multi.pools||[]).forEach(p=>all.push(p));
+    all.sort((a,b)=>(Number(a.ageMinutes)||0)-(Number(b.ageMinutes)||0));
+    const checked=[], pending=[];
+    const perChain={};
+    all.forEach(p=>{perChain[p.chain]=(perChain[p.chain]||0)+1;});
+    const selected=all.filter(p=>{
+      const key=p.chain;
+      const n=all.filter(x=>x.chain===key).indexOf(p);
+      return n<5;
+    });
+    let cursor=0;
+    const workers=Array.from({length:3},async()=>{
+      while(cursor<selected.length){
+        const p=selected[cursor++];
+        try{
+          const chain=p.chain==="BSC"?"bsc":p.chain==="Solana"?"solana":p.chain==="Base"?"base":"ethereum";
+          const params=new URLSearchParams({chain,address:p.tokenAddress||""});
+          if(p.pairAddress)params.set("pair",p.pairAddress);
+          const response=await fetch(base+"/security-check?"+params.toString());
+          const report=await response.json();
+          p.security=report;
+          if(report.status==="pass")checked.push(p);
+          else if(report.status==="blocked"){p.pendingReason=(report.reasons||[]).join("；")||"检测到高危信号";pending.push({...p,blocked:true});}
+          else {p.pendingReason=(report.reasons||[]).join("；")||report.error||"安全信息不足";pending.push(p);}
+        }catch(e){p.security={status:"unverified"};p.pendingReason="安全检测请求失败";pending.push(p);}
+      }
+    });
+    await Promise.all(workers);
+    all.filter(p=>!selected.includes(p)).forEach(p=>{p.security={status:"unverified"};p.pendingReason="本轮安全检测名额有限，尚未检查";pending.push(p);});
+    checked.sort((a,b)=>(Number(a.ageMinutes)||0)-(Number(b.ageMinutes)||0)||Number(b.volume1hUSD||0)-Number(a.volume1hUSD||0));
+    const renderCard=p=>{
+      const quote=esc(p.quoteSymbol||"未知报价资产");
+      const usdtStatus=p.chain==="BSC"?"USDT 直连池":(p.usdtDirect?"报价符号为 USDT（地址待核验）":"USDT 兑换路径未验证");
+      const price=p.priceChange1h==null?"—":pct(p.priceChange1h);
+      const poolLink=p.poolUrl||p.dexScreenerUrl||"#";
+      const tokenLink=p.bscScanUrl||(p.chain==="Solana"?"https://solscan.io/token/"+encodeURIComponent(p.tokenAddress):p.chain==="Base"?"https://basescan.org/token/"+encodeURIComponent(p.tokenAddress):"https://etherscan.io/token/"+encodeURIComponent(p.tokenAddress));
+      const sec=p.security||{};
+      const secInfo=sec.provider==="Honeypot.is"
+        ?"卖出税："+(sec.sellTax==null?"未知":Number(sec.sellTax).toFixed(2)+"%")+" · 模拟："+(sec.simulationSuccess?"成功":"未成功")
+        :"RugCheck 风险分："+(sec.riskScore==null?"未知":sec.riskScore)+" · LP锁定："+(sec.lpLockedPct==null?"未知":sec.lpLockedPct+"%");
+      return '<article class="card '+(p.blocked?"review-card":"")+'">'+
+        '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
+        '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
+        '<div class="stats">'+
+        '<div class="stat"><small>估算流动性 USD</small><strong>$'+fmt(p.liquidityUSDApprox)+'</strong></div>'+
+        '<div class="stat"><small>近1小时成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
+        '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
+        '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
+        '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
+        '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
+        (p.pendingReason?'<div class="muted">未通过原因：'+esc(p.pendingReason)+'</div>':'')+
+        '<div class="links"><a target="_blank" rel="noopener" href="'+esc(poolLink)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(tokenLink)+'">查看合约 ↗</a><a href="#" data-copy="'+esc(p.tokenAddress||"")+'">复制合约</a></div>'+
+        '<div class="note">'+esc(p.riskNote||"安全筛查不能保证绝对安全，请持续观察合约权限、持币集中度和流动性变化。")+'</div></article>';
+    };
+    $("cards").innerHTML=checked.length?checked.map(renderCard).join(""):'<div class="empty">本轮没有代币通过安全筛查。请勿把待复核或被剔除的币当作安全候选。</div>';
+    const review=pending.filter(p=>!p.blocked);
+    const blocked=pending.filter(p=>p.blocked);
+    $("review-cards").innerHTML=review.length?review.map(renderCard).join(""):'<div class="empty">没有待复核代币。</div>';
+    document.querySelectorAll("[data-copy]").forEach(a=>a.addEventListener("click",async e=>{
+      e.preventDefault();const value=a.getAttribute("data-copy");if(!value)return;
+      try{await navigator.clipboard.writeText(value);a.textContent="已复制";}catch(_){a.textContent="复制失败";}
+    }));
+    const unverified=review.length;
+    $("status").textContent=(failures.length?"部分链扫描失败："+failures.join("；")+"。":"四链扫描完成。")+
+      " 原始池 "+all.length+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"。"+
+      "仅对每条链最早的5个候选执行本轮安全检测，未检查的币不会进入通过筛查列表。"+
+      (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", "):"");
   }catch(e){
     $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试。";
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
+    $("review-cards").innerHTML="";
   }
 }
 $("refresh").onclick=scan;
