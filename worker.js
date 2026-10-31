@@ -216,6 +216,26 @@ export default {
         );
         return { factory, allLogs: logs, usdtLogs };
       }));
+      const factoryCodeChecks = await Promise.all(
+        [...V2_FACTORIES, ...V3_FACTORIES].map(async (factory) => {
+          try {
+            const code = await rpc("eth_getCode", [factory.address, "latest"], rpcUrl);
+            return {
+              dex: factory.name,
+              address: factory.address,
+              contractCodePresent: !!code && code !== "0x",
+              codeBytes: code && code !== "0x" ? Math.max(0, (code.length - 2) / 2) : 0
+            };
+          } catch (error) {
+            return {
+              dex: factory.name,
+              address: factory.address,
+              contractCodePresent: null,
+              codeCheckError: String(error)
+            };
+          }
+        })
+      );
       const allV3FactoryLogs = v3FactoryResults.flatMap((x) => x.allLogs);
       const v3UsdtEvents = v3FactoryResults.flatMap(({ factory, usdtLogs }) =>
         usdtLogs.map((log) => ({ ...log, _dex: factory.name, _dexId: factory.dexId }))
@@ -374,6 +394,7 @@ export default {
           v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length])),
           v3: Object.fromEntries(v3FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length]))
         },
+        factoryCodeChecks: factoryCodeChecks,
         factoryDiagnostics: {
           v2: v2FactoryResults.map((x) => ({
             dex: x.factory.name,
