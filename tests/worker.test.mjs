@@ -386,7 +386,7 @@ test("multiscan marks DexPaprika fallback incomplete when pool detail requests a
         dex_name: "Test DEX"
       }] });
     }
-    if (url.hostname === "api.dexpaprika.com" && /\\/pools\\//.test(url.pathname)) {
+    if (url.hostname === "api.dexpaprika.com" && /\/pools\//.test(url.pathname)) {
       return new Response("rate limited", { status: 429 });
     }
     throw new Error("Unexpected URL " + url.href);
