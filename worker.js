@@ -14,15 +14,33 @@ const HEADERS = {
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
 
 async function rpc(method, params) {
-  const response = await fetch(RPC, {
-    method: "POST",
-    headers: { "content-type": "application/json", "accept": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: method, params: params })
-  });
-  if (!response.ok) throw new Error("BSC RPC HTTP " + response.status);
-  const body = await response.json();
-  if (body.error) throw new Error("BSC RPC " + body.error.code + ": " + body.error.message);
-  return body.result;
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const response = await fetch(RPC, {
+        method: "POST",
+        headers: { "content-type": "application/json", "accept": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: method, params: params })
+      });
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error("BSC RPC HTTP " + response.status);
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 700 * Math.pow(2, attempt)));
+          continue;
+        }
+        throw lastError;
+      }
+      if (!response.ok) throw new Error("BSC RPC HTTP " + response.status);
+      const body = await response.json();
+      if (body.error) throw new Error("BSC RPC " + body.error.code + ": " + body.error.message);
+      return body.result;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 3 || !/429|fetch failed|network|timeout/i.test(String(error))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 700 * Math.pow(2, attempt)));
+    }
+  }
+  throw lastError || new Error("BSC RPC request failed");
 }
 
 const hexNum = (n) => "0x" + Math.max(0, n).toString(16);
@@ -143,12 +161,12 @@ export default {
 
       const timeCache = new Map();
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
-      const withTimes = await mapLimit(creationLogs, 8, async (log) => ({
+      const withTimes = await mapLimit(creationLogs, 3, async (log) => ({
         log: log,
         createdAt: await blockTime(asNumber(log.blockNumber), timeCache)
       }));
       const fresh = withTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
-      const pairData = await mapLimit(fresh.slice(0, 40), 8, async (x) => {
+      const pairData = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
         const p = await readPair(x.log);
         p.createdAt = x.createdAt;
         return p;
@@ -177,7 +195,7 @@ export default {
         swapsByPair.get(key).push(log);
       }
       const allSwapBlocks = Array.from(new Set(swapLogs.map((l) => asNumber(l.blockNumber))));
-      await mapLimit(allSwapBlocks, 8, async (n) => blockTime(n, timeCache));
+      await mapLimit(allSwapBlocks, 3, async (n) => blockTime(n, timeCache));
 
       const pools = valid.map((p) => {
         const swaps = (swapsByPair.get(p.pair.toLowerCase()) || []).sort((a, b) => {
