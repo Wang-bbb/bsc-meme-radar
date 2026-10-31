@@ -66,6 +66,29 @@ async function fetchGeckoTerminal(endpoint) {
   }
   return lastResponse || new Response("GeckoTerminal request failed", { status: 502 });
 }
+
+async function fetchDexScreenerJson(endpoint) {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = new Request(endpoint, { method: "GET" });
+  if (cache) {
+    try {
+      const cached = await cache.match(cacheKey);
+      if (cached) return cached;
+    } catch (_) {}
+  }
+  const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
+  if (response.ok && cache) {
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "public, max-age=60");
+    try {
+      await cache.put(cacheKey, new Response(response.clone().body, {
+        status: response.status, statusText: response.statusText, headers
+      }));
+    } catch (_) {}
+  }
+  return response;
+}
+
 const VERIFIED_QUOTE_ASSETS = {
   solana: new Set([
     "so11111111111111111111111111111111111111112",
@@ -439,6 +462,8 @@ export default {
       ];
       const results = [];
       const errors = [];
+      const chainSources = [];
+      const failedNetworks = [];
       for (const network of networks) {
         try {
           const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
@@ -446,6 +471,7 @@ export default {
           if (!response.ok) throw new Error("GeckoTerminal HTTP " + response.status);
           const body = await response.json();
           const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
+          let chainPoolCount = 0;
           for (const item of body.data || []) {
             const a = item.attributes || {};
             const rel = item.relationships || {};
@@ -464,37 +490,107 @@ export default {
             const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
               ? Number(a.price_change_percentage.h1) : null;
             const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
-            const baseAddress = (base.address || (baseId || "").split("_").slice(1).join("_"));
             const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
             const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
             if (candidate.skip) continue;
             results.push({
-              chain: network.name,
-              chainId: network.dexChain,
+              chain: network.name, chainId: network.dexChain,
               dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
-              symbol: candidate.symbol || "Unknown",
-              name: candidate.name || "Unknown token",
-              tokenAddress: candidate.address,
-              tokenSelectionVerified: candidate.verified,
+              symbol: candidate.symbol || "Unknown", name: candidate.name || "Unknown token",
+              tokenAddress: candidate.address, tokenSelectionVerified: candidate.verified,
               tokenSelectionNote: candidate.verified ? "" : "交易池两侧均未匹配已知主流报价资产，暂按 base token 显示，代币方向未确认。",
-              quoteSymbol: quote.symbol || "Unknown",
-              quoteAddress,
+              quoteSymbol: quote.symbol || "Unknown", quoteAddress,
               pairAddress: poolAddress,
               poolUrl: "https://www.geckoterminal.com/" + network.id + "/pools/" + poolAddress,
               dexScreenerUrl: "https://dexscreener.com/" + network.dexChain + "/" + poolAddress,
-              createdAt: new Date(created).toISOString(),
-              ageMinutes: Math.round(ageMinutes * 10) / 10,
-              liquidityUSDApprox: liquidity,
-              volume1hUSD: volume1h,
-              buys1h: Number(tx1h.buys || 0),
-              sells1h: Number(tx1h.sells || 0),
-              priceChange1h,
-              usdtRouteStatus: "not_verified",
+              createdAt: new Date(created).toISOString(), ageMinutes: Math.round(ageMinutes * 10) / 10,
+              liquidityUSDApprox: liquidity, volume1hUSD: volume1h,
+              buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
+              priceChange1h, usdtRouteStatus: "not_verified", source: "GeckoTerminal",
               riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
             });
+            chainPoolCount++;
           }
+          chainSources.push({ chain: network.name, provider: "GeckoTerminal", status: "ok", pools: chainPoolCount });
         } catch (error) {
-          errors.push({ chain: network.name, error: String(error) });
+          failedNetworks.push({ network, error: String(error) });
+        }
+      }
+
+      // Supplemental fallback only: this feed contains latest token profiles,
+      // not a complete global new-pool feed. Pair creation time and liquidity
+      // are independently checked before any pool is admitted.
+      const fallbackChains = [];
+      if (failedNetworks.length) {
+        try {
+          const profileResponse = await fetchDexScreenerJson("https://api.dexscreener.com/token-profiles/latest/v1");
+          if (!profileResponse.ok) throw new Error("DexScreener profiles HTTP " + profileResponse.status);
+          const profiles = await profileResponse.json();
+          if (!Array.isArray(profiles)) throw new Error("DexScreener profiles returned an unexpected response");
+          for (const failed of failedNetworks) {
+            const network = failed.network;
+            try {
+              const addresses = [...new Set(profiles
+                .filter((profile) => profile && profile.chainId === network.dexChain && profile.tokenAddress)
+                .map((profile) => String(profile.tokenAddress)))].slice(0, 30);
+              if (!addresses.length) throw new Error("DexScreener latest profiles has no tokens for this chain");
+              const endpoint = "https://api.dexscreener.com/tokens/v1/" + network.dexChain + "/" + addresses.map(encodeURIComponent).join(",");
+              const pairResponse = await fetchDexScreenerJson(endpoint);
+              if (!pairResponse.ok) throw new Error("DexScreener token pairs HTTP " + pairResponse.status);
+              const pairs = await pairResponse.json();
+              if (!Array.isArray(pairs)) throw new Error("DexScreener token pairs returned an unexpected response");
+              let chainPoolCount = 0;
+              const seenPairs = new Set();
+              for (const pair of pairs) {
+                if (!pair || pair.chainId !== network.dexChain || !pair.pairAddress || seenPairs.has(pair.pairAddress)) continue;
+                seenPairs.add(pair.pairAddress);
+                const created = Number(pair.pairCreatedAt || 0);
+                const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
+                const liquidity = Number(pair.liquidity && pair.liquidity.usd || 0);
+                if (ageMinutes == null || ageMinutes < 0 || ageMinutes > minutes || liquidity < minLiquidity) continue;
+                const base = pair.baseToken || {};
+                const quote = pair.quoteToken || {};
+                const candidate = choosePoolToken(network.id, base, quote, "", "");
+                if (candidate.skip) continue;
+                const quoteAsset = candidate.side === "quote" ? base : quote;
+                const tx1h = pair.txns && pair.txns.h1 || {};
+                results.push({
+                  chain: network.name, chainId: network.dexChain,
+                  dex: pair.dexId || "DexScreener indexed DEX",
+                  symbol: candidate.symbol || "Unknown", name: candidate.name || "Unknown token",
+                  tokenAddress: candidate.address, tokenSelectionVerified: candidate.verified,
+                  tokenSelectionNote: candidate.verified ? "" : "交易池两侧均未匹配已知主流报价资产，暂按 base token 显示，代币方向未确认。",
+                  quoteSymbol: quoteAsset.symbol || "Unknown", quoteAddress: quoteAsset.address || "",
+                  pairAddress: pair.pairAddress,
+                  poolUrl: pair.url || "https://dexscreener.com/" + network.dexChain + "/" + pair.pairAddress,
+                  dexScreenerUrl: pair.url || "https://dexscreener.com/" + network.dexChain + "/" + pair.pairAddress,
+                  createdAt: new Date(created).toISOString(), ageMinutes: Math.round(ageMinutes * 10) / 10,
+                  liquidityUSDApprox: liquidity,
+                  volume1hUSD: Number(pair.volume && pair.volume.h1 || 0),
+                  buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
+                  priceChange1h: pair.priceChange && pair.priceChange.h1 != null ? Number(pair.priceChange.h1) : null,
+                  usdtRouteStatus: "not_verified",
+                  source: "DexScreener latest token profiles fallback",
+                  riskNote: "备用索引只从 DexScreener 最新 Token Profile 名单反查交易池，覆盖范围小于完整新池索引；不代表捕获该链全部新池。"
+                });
+                chainPoolCount++;
+              }
+              chainSources.push({
+                chain: network.name, provider: "DexScreener latest token profiles",
+                status: "fallback", coverage: "partial", pools: chainPoolCount,
+                primaryError: failed.error
+              });
+              fallbackChains.push(network.name);
+            } catch (fallbackError) {
+              errors.push({ chain: network.name, error: failed.error + "; fallback: " + String(fallbackError) });
+              chainSources.push({ chain: network.name, provider: "GeckoTerminal + DexScreener", status: "error" });
+            }
+          }
+        } catch (fallbackError) {
+          for (const failed of failedNetworks) {
+            errors.push({ chain: failed.network.name, error: failed.error + "; DexScreener fallback: " + String(fallbackError) });
+            chainSources.push({ chain: failed.network.name, provider: "GeckoTerminal + DexScreener", status: "error" });
+          }
         }
       }
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
@@ -505,14 +601,17 @@ export default {
         chains: networks.map((x) => x.name),
         minutes,
         minLiquidityUSD: minLiquidity,
-        dataSource: "GeckoTerminal public API",
+        dataSource: "GeckoTerminal primary; DexScreener latest token profiles supplemental fallback",
+        coverage: fallbackChains.length ? "partial" : "primary-index",
+        chainSources,
+        fallbackChains,
         count: results.length,
         pools: results,
         chainErrors: errors,
         limitations: [
           "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
-          "GeckoTerminal 公共 API 可能限流；Worker 对成功的新池索引响应缓存 60 秒，并在 HTTP 429 / 5xx 时按 Retry-After 退避重试。",
+          "GeckoTerminal 公共 API 可能限流；Worker 对成功响应缓存 60 秒并进行有限重试。失败时改用 DexScreener 最新 Token Profile 名单反查新池；该备用名单覆盖不完整，必须显示为部分覆盖，不能当作完整新池扫描。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
           "本接口只读，不执行兑换或交易。"
