@@ -25,6 +25,47 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+
+async function fetchGeckoTerminal(endpoint) {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = new Request(endpoint, { method: "GET" });
+  if (cache) {
+    try {
+      const cached = await cache.match(cacheKey);
+      if (cached) return cached;
+    } catch (_) {}
+  }
+
+  let lastResponse;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(endpoint, {
+      headers: { "accept": "application/json;version=20230203" }
+    });
+    if (response.status !== 429 && response.status < 500) {
+      if (response.ok && cache) {
+        const headers = new Headers(response.headers);
+        headers.set("cache-control", "public, max-age=60");
+        try {
+          await cache.put(cacheKey, new Response(response.clone().body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers
+          }));
+        } catch (_) {}
+      }
+      return response;
+    }
+    lastResponse = response;
+    if (attempt < 2 && (response.status === 429 || response.status >= 500)) {
+      const retryAfter = Number(response.headers.get("retry-after") || 0);
+      const delay = Math.min(5000, Math.max(retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1), 500));
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    } else {
+      break;
+    }
+  }
+  return lastResponse || new Response("GeckoTerminal request failed", { status: 502 });
+}
 const VERIFIED_QUOTE_ASSETS = {
   solana: new Set([
     "so11111111111111111111111111111111111111112",
@@ -401,7 +442,7 @@ export default {
       for (const network of networks) {
         try {
           const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
-          const response = await fetch(endpoint, { headers: { "accept": "application/json;version=20230203" } });
+          const response = await fetchGeckoTerminal(endpoint);
           if (!response.ok) throw new Error("GeckoTerminal HTTP " + response.status);
           const body = await response.json();
           const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
@@ -471,7 +512,7 @@ export default {
         limitations: [
           "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
-          "GeckoTerminal 公共 API 有约每分钟10次调用的限额，且数据约每分钟缓存更新；频繁刷新可能触发限流。",
+          "GeckoTerminal 公共 API 可能限流；Worker 对成功的新池索引响应缓存 60 秒，并在 HTTP 429 / 5xx 时按 Retry-After 退避重试。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
           "本接口只读，不执行兑换或交易。"

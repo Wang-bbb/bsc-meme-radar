@@ -80,6 +80,28 @@ test("non-BSC preflight requests do not depend on the NodeReal secret", async ()
   assert.equal(res.headers.get("access-control-allow-origin"), "*");
 });
 
+test("multiscan retries GeckoTerminal rate limits without reporting a false empty success", async () => {
+  const attempts = new Map();
+  globalThis.fetch = async (input) => {
+    const network = new URL(input).pathname.split("/")[4];
+    const count = (attempts.get(network) || 0) + 1;
+    attempts.set(network, count);
+    if (count === 1) {
+      return new Response("rate limited", {
+        status: 429,
+        headers: { "retry-after": "0" }
+      });
+    }
+    return response({ data: [], included: [] });
+  };
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.complete, true);
+  assert.equal(data.pools.length, 0);
+  assert.deepEqual([...attempts.values()], [2, 2, 2]);
+});
+
 test("multiscan combines indexed pools and applies the age and liquidity filters", async () => {
   const networks = ["solana", "eth", "base"];
   globalThis.fetch = async (input) => {
