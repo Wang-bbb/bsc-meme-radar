@@ -169,7 +169,7 @@ export default {
     if (!rpcUrl) return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
     if (url.pathname === "/" || url.pathname === "/health") {
-      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + PancakeSwap V2/V3 PoolCreated", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
+      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + multiple BSC DEX factories", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
     }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
@@ -326,7 +326,7 @@ export default {
       }).sort((a, b) => a.ageMinutes - b.ageMinutes);
 
       pools.push(...v3Valid.map((p) => ({
-        chain: "BSC", dex: "PancakeSwap V3",
+        chain: "BSC", dex: p.dex || "PancakeSwap V3",
         symbol: p.symbol, name: p.name, tokenAddress: p.tokenAddress,
         pairAddress: p.pair,
         poolUrl: "https://dexscreener.com/bsc/" + p.pair,
@@ -383,7 +383,7 @@ export default {
         swapStatsError: swapError,
         generatedAt: new Date(latestTime).toISOString(),
         limitations: [
-          "当前覆盖 PancakeSwap、Biswap、ApeSwap、MDEX、BabySwap、Nomiswap 的 V2 工厂，以及 PancakeSwap、Uniswap 的 V3 工厂；未覆盖其他 BSC DEX。",
+          "当前覆盖配置中的多个 BSC V2/V3 DEX 工厂；未覆盖全部 BSC DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
           "当前成交量、买卖次数仅对 V2 新池统计；V3 新池仅显示创建和 USDT 余额估算，成交统计待接入。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
