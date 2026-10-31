@@ -174,6 +174,17 @@ export default {
     if (url.pathname === "/history") {
       const hours = Number(url.searchParams.get("hours") || 24);
       if (![6, 12, 24].includes(hours)) return json({ ok: false, error: "hours must be 6, 12, or 24" }, 400);
+      const allFactories = [
+        ...V2_FACTORIES.map((factory) => ({ ...factory, version: "v2", topic: PAIR_CREATED, key: factory.dexId + "-v2" })),
+        ...V3_FACTORIES.map((factory) => ({ ...factory, version: "v3", topic: V3_POOL_CREATED, key: factory.dexId }))
+      ];
+      const dexKey = url.searchParams.get("dex") || "pancakeswap-v2";
+      const factory = allFactories.find((item) => item.key === dexKey);
+      if (!factory) return json({
+        ok: false,
+        error: "Unknown dex",
+        supportedDex: allFactories.map((item) => ({ key: item.key, name: item.name }))
+      }, 400);
       try {
         const latestHex = await rpc("eth_blockNumber", [], rpcUrl);
         const latest = asNumber(latestHex);
@@ -184,17 +195,13 @@ export default {
         const secondsPerBlock = elapsed > 0 ? elapsed / 1000000 : 0.5;
         const targetBlocks = Math.ceil(hours * 3600 / secondsPerBlock * 1.08);
         const fromBlock = Math.max(0, latest - targetBlocks);
-        const chunkSize = 4000;
+        // One DEX per invocation and 8,000-block chunks keep RPC subrequests below Worker limits.
+        const chunkSize = 8000;
         const chunks = [];
         for (let start = fromBlock; start <= latest; start += chunkSize) {
           chunks.push({ fromBlock: start, toBlock: Math.min(latest, start + chunkSize - 1) });
         }
-        const allFactories = [
-          ...V2_FACTORIES.map((factory) => ({ ...factory, version: "v2", topic: PAIR_CREATED })),
-          ...V3_FACTORIES.map((factory) => ({ ...factory, version: "v3", topic: V3_POOL_CREATED }))
-        ];
-        const tasks = allFactories.flatMap((factory) => chunks.map((chunk) => ({ factory, chunk })));
-        const results = await mapLimit(tasks, 3, async ({ factory, chunk }) => {
+        const results = await mapLimit(chunks, 2, async (chunk) => {
           const logs = await rpc("eth_getLogs", [{
             fromBlock: hexNum(chunk.fromBlock),
             toBlock: hexNum(chunk.toBlock),
@@ -205,61 +212,60 @@ export default {
             fromTopic(log.topics[1] || "") === USDT.toLowerCase() ||
             fromTopic(log.topics[2] || "") === USDT.toLowerCase()
           );
-          return { factory, logs, usdtLogs };
+          return { chunk, logs, usdtLogs };
         });
-        const summary = allFactories.map((factory) => {
-          const matching = results.filter((x) => x && x.factory && x.factory.address === factory.address);
-          const logs = matching.flatMap((x) => x.logs);
-          const usdtLogs = matching.flatMap((x) => x.usdtLogs);
-          const uniqueUsdt = new Map();
-          for (const log of usdtLogs) {
-            const token0 = fromTopic(log.topics[1] || "");
-            const token1 = fromTopic(log.topics[2] || "");
-            const poolAddress = factory.version === "v2"
-              ? "0x" + word(log.data, 0).slice(-40).toLowerCase()
-              : "0x" + word(log.data, 1).slice(-40).toLowerCase();
-            uniqueUsdt.set(poolAddress, {
-              token0, token1, poolAddress,
-              blockNumber: asNumber(log.blockNumber),
-              transactionHash: log.transactionHash
-            });
-          }
-          return {
-            dex: factory.name,
-            version: factory.version,
-            factoryAddress: factory.address,
-            eventCount: logs.length,
-            usdtPoolEventCount: uniqueUsdt.size,
-            sampleUsdtPools: Array.from(uniqueUsdt.values()).slice(0, 5)
-          };
-        });
-        const errors = results.filter((x) => x && x._error).map((x) => x._error);
+        const failedChunks = results.filter((item) => item && item._error);
+        const successfulChunks = results.filter((item) => item && !item._error);
+        const allLogs = successfulChunks.flatMap((item) => item.logs);
+        const usdtLogs = successfulChunks.flatMap((item) => item.usdtLogs);
+        const uniqueUsdt = new Map();
+        for (const log of usdtLogs) {
+          const token0 = fromTopic(log.topics[1] || "");
+          const token1 = fromTopic(log.topics[2] || "");
+          const poolAddress = factory.version === "v2"
+            ? "0x" + word(log.data, 0).slice(-40).toLowerCase()
+            : "0x" + word(log.data, 1).slice(-40).toLowerCase();
+          uniqueUsdt.set(poolAddress, {
+            token0, token1, poolAddress,
+            blockNumber: asNumber(log.blockNumber),
+            transactionHash: log.transactionHash
+          });
+        }
+        const complete = failedChunks.length === 0;
         return json({
-          ok: true,
+          ok: complete,
+          complete,
           mode: "historical-usdt-pool-validation",
           chain: "BSC",
+          dex: factory.name,
+          dexKey: factory.key,
+          factoryAddress: factory.address,
           quoteToken: { symbol: "USDT", address: USDT },
           hours,
           fromBlock,
           latestBlock: latest,
           estimatedSecondsPerBlock: secondsPerBlock,
           chunkSize,
-          chunksScanned: chunks.length,
-          factoriesScanned: summary.length,
-          totalFactoryEvents: summary.reduce((n, x) => n + x.eventCount, 0),
-          totalUsdtPoolEvents: summary.reduce((n, x) => n + x.usdtPoolEventCount, 0),
-          results: summary,
-          scanErrors: results.filter((x) => x && x._error).map((x) => ({ error: x._error })),
+          chunksTotal: chunks.length,
+          chunksScanned: successfulChunks.length,
+          chunksFailed: failedChunks.length,
+          eventCount: allLogs.length,
+          usdtPoolEventCount: uniqueUsdt.size,
+          sampleUsdtPools: Array.from(uniqueUsdt.values()).slice(0, 20),
+          scanErrors: failedChunks.map((item) => ({ chunk: item.chunk, error: item._error })),
           limitations: [
-            "按已配置工厂地址和对应 V2/V3 创建池事件扫描，不代表覆盖 BSC 全部 DEX。",
-            "历史建池事件数量不等于当前仍有流动性或可正常卖出。",
+            "本次只扫描一个 DEX 工厂，避免 Cloudflare Worker 单次请求次数超限。",
+            "complete=false 时结果不完整，不能将当前 USDT 池数量视为完整统计。",
+            "历史建池事件不代表池子当前仍有流动性或代币可正常卖出。",
             "USDT 配对通过精确合约地址识别，不依赖代币名称或 symbol。"
           ]
         });
       } catch (error) {
         return json({
           ok: false,
+          complete: false,
           mode: "historical-usdt-pool-validation",
+          dex: factory.name,
           error: String(error),
           hint: "历史验证失败不代表没有 USDT 池；请检查 RPC 限流或日志查询范围。"
         }, 502);
