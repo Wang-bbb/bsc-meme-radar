@@ -1,6 +1,8 @@
 const USDT = "0x55d398326f99059ff775485246999027b319795";
 const USDT_TOPIC = "0x" + USDT.slice(2).toLowerCase().padStart(64, "0");
 const FACTORY = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
+const V3_FACTORY = "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865";
+const V3_POOL_CREATED = "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118";
 const PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9";
 const SWAP_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
 const HEADERS = {
@@ -88,6 +90,33 @@ async function blockTime(blockNumber, cache, rpcUrl) {
   return time;
 }
 
+async function readV3Pool(log, createdAt, rpcUrl) {
+  const token0 = fromTopic(log.topics[1]);
+  const token1 = fromTopic(log.topics[2]);
+  const fee = asNumber(log.topics[3]);
+  const pair = "0x" + word(log.data, 1).slice(-40).toLowerCase();
+  const usdtIs0 = token0 === USDT.toLowerCase();
+  const token = usdtIs0 ? token1 : token0;
+  const balanceCall = await rpc("eth_call", [{
+    to: USDT,
+    data: "0x70a08231" + pair.slice(2).toLowerCase().padStart(64, "0")
+  }, "latest"], rpcUrl);
+  const usdtReserve = toFloat(BigInt(balanceCall || "0x0"), 18);
+  const safeCall = (data) => rpc("eth_call", [{ to: token, data }, "latest"], rpcUrl).catch(() => "0x");
+  const [symbolHex, nameHex, decimalsHex] = await Promise.all([
+    safeCall("0x95d89b41"), safeCall("0x06fdde03"), safeCall("0x313ce567")
+  ]);
+  const decimals = decimalsHex && decimalsHex !== "0x" ? Math.min(36, Math.max(0, asNumber(decimalsHex))) : 18;
+  return {
+    pair, token0, token1, tokenAddress: token,
+    symbol: decodeAbiString(symbolHex) || token.slice(0, 6) + "…" + token.slice(-4),
+    name: decodeAbiString(nameHex) || "Unknown token",
+    decimals, usdtReserve, liquidityUSD: usdtReserve * 2,
+    createdBlock: asNumber(log.blockNumber), createdAt,
+    createdTx: log.transactionHash, usdtIs0, fee
+  };
+}
+
 async function readPair(log, rpcUrl) {
   const token0 = fromTopic(log.topics[1]);
   const token1 = fromTopic(log.topics[2]);
@@ -128,7 +157,7 @@ export default {
     if (!rpcUrl) return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
     if (url.pathname === "/" || url.pathname === "/health") {
-      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + PancakeSwap V2 PairCreated", supportedMinutes: [15, 30, 60], note: "只读监控；当前扫描 PancakeSwap V2 USDT 池" });
+      return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + PancakeSwap V2/V3 PoolCreated", supportedMinutes: [15, 30, 60], note: "只读监控；扫描 PancakeSwap V2/V3 USDT 池" });
     }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
@@ -161,6 +190,24 @@ export default {
       }
 
       const timeCache = new Map();
+      const v3FilterBase = { address: V3_FACTORY, fromBlock: hexNum(fromBlock), toBlock: latestHex };
+      const [v3Logs0, v3Logs1] = await Promise.all([
+        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, USDT_TOPIC, null] }], rpcUrl),
+        rpc("eth_getLogs", [{ ...v3FilterBase, topics: [V3_POOL_CREATED, null, USDT_TOPIC] }], rpcUrl)
+      ]);
+      const v3LogMap = new Map();
+      for (const log of [...v3Logs0, ...v3Logs1]) {
+        const pool = "0x" + word(log.data, 1).slice(-40).toLowerCase();
+        v3LogMap.set(pool, log);
+      }
+      const v3CreationLogs = Array.from(v3LogMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
+      const v3WithTimes = await mapLimit(v3CreationLogs, 3, async (log) => ({
+        log, createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
+      }));
+      const v3Fresh = v3WithTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
+      const v3Read = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => readV3Pool(x.log, x.createdAt, rpcUrl));
+      const v3Valid = v3Read.filter((p) => !p._error && p.liquidityUSD >= minLiquidity);
+
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
       const withTimes = await mapLimit(creationLogs, 3, async (log) => ({
         log: log,
@@ -226,7 +273,7 @@ export default {
         const priceChange1h = prices.length > 1 && prices[0] > 0 ? (prices[prices.length - 1] / prices[0] - 1) * 100 : null;
         return {
           chain: "BSC",
-          dex: "PancakeSwap V2",
+          dex: p.dex || "PancakeSwap V2",
           symbol: p.symbol,
           name: p.name,
           tokenAddress: p.tokenAddress,
@@ -246,9 +293,23 @@ export default {
         };
       }).sort((a, b) => a.ageMinutes - b.ageMinutes);
 
+      pools.push(...v3Valid.map((p) => ({
+        chain: "BSC", dex: "PancakeSwap V3",
+        symbol: p.symbol, name: p.name, tokenAddress: p.tokenAddress,
+        pairAddress: p.pair,
+        poolUrl: "https://dexscreener.com/bsc/" + p.pair,
+        bscScanUrl: "https://bscscan.com/token/" + p.tokenAddress,
+        createdAt: new Date(p.createdAt).toISOString(),
+        ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
+        usdtReserve: p.usdtReserve, liquidityUSDApprox: p.liquidityUSD,
+        volume1hUSD: null, buys1h: null, sells1h: null,
+        priceChange1h: null, swapCount1h: null,
+        riskNote: "V3 新池；成交统计尚未接入。新池风险高，请核实合约权限、持币集中度、卖出限制及流动性变化。"
+      })));
+
       const pairs = pools.map((p) => ({
         chainId: "bsc",
-        dexId: "pancakeswap",
+        dexId: p.dex === "PancakeSwap V3" ? "pancakeswap-v3" : "pancakeswap",
         url: p.poolUrl,
         pairAddress: p.pairAddress,
         pairCreatedAt: Date.parse(p.createdAt),
@@ -266,12 +327,12 @@ export default {
         quote: "USDT",
         minutes: minutes,
         minLiquidityUSDApprox: minLiquidity,
-        dataSource: "NodeReal BSC RPC · PancakeSwap V2 Factory",
+        dataSource: "NodeReal BSC RPC · PancakeSwap V2 + V3",
         factory: FACTORY,
         latestBlock: latest,
         blockWindow: blockWindow,
-        createdPairsFound: creationLogs.length,
-        freshPairsFound: fresh.length,
+        createdPairsFound: creationLogs.length + v3CreationLogs.length,
+        freshPairsFound: fresh.length + v3Fresh.length,
         count: pools.length,
         pairs: pairs,
         pools: pools,
@@ -279,10 +340,10 @@ export default {
         swapStatsError: swapError,
         generatedAt: new Date(latestTime).toISOString(),
         limitations: [
-          "当前只扫描 PancakeSwap V2 Factory，不包括 V3 和其他 DEX。",
+          "当前扫描 PancakeSwap V2/V3 Factory，不包括其他 DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
-          "买卖次数和成交量来自本次扫描到的新池 Swap 事件；价格变化以首末可观测 Swap 估算。",
-          "公开 RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
+          "V2 买卖次数和成交量来自本次扫描到的新池 Swap 事件；V3 当前仅显示池创建和 USDT 余额估算，成交统计待接入。",
+          "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
         note: "只读观察，不会自动交易。"
       });
