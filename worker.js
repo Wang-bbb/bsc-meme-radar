@@ -280,7 +280,7 @@ export default {
       if (!address) return json({ ok: false, status: "unverified", error: "missing token address" }, 400);
       try {
         if (chain === "solana") {
-          const response = await fetch("https://api.rugcheck.xyz/v1/tokens/" + encodeURIComponent(address) + "/report/summary", { headers: { "accept": "application/json" } });
+          const response = await fetch("https://api.rugcheck.xyz/v1/tokens/" + encodeURIComponent(address) + "/report", { headers: { "accept": "application/json" } });
           if (!response.ok) throw new Error("RugCheck HTTP " + response.status);
           const report = await response.json();
           const risks = Array.isArray(report.risks) ? report.risks : [];
@@ -289,13 +289,20 @@ export default {
           const hasUsableReport = !!report.tokenProgram || risks.length > 0 || report.score_normalised != null || report.lpLockedPct != null;
           const weakLiquidityLock = report.lpLockedPct == null || Number(report.lpLockedPct) < 80;
           const rugged = report.rugged === true;
-          const activeAuthorities = report.mintAuthority != null || report.freezeAuthority != null;
-          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || activeAuthorities) ? "review" : "pass";
+          const mintAuthority = report.mintAuthority ?? report.token?.mintAuthority ?? null;
+          const freezeAuthority = report.freezeAuthority ?? report.token?.freezeAuthority ?? null;
+          const authorityFieldsPresent = Object.prototype.hasOwnProperty.call(report, "mintAuthority") ||
+            Object.prototype.hasOwnProperty.call(report, "freezeAuthority") ||
+            Object.prototype.hasOwnProperty.call(report.token || {}, "mintAuthority") ||
+            Object.prototype.hasOwnProperty.call(report.token || {}, "freezeAuthority");
+          const activeAuthorities = mintAuthority != null || freezeAuthority != null;
+          const unknownAuthorities = !authorityFieldsPresent;
+          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || activeAuthorities || unknownAuthorities) ? "review" : "pass";
           return json({
             ok: true, chain, tokenAddress: address, provider: "RugCheck",
             status, riskScore: report.score_normalised ?? null, lpLockedPct: report.lpLockedPct ?? null,
             risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
-            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : [])],
+            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : [])],
             note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
           });
         }
