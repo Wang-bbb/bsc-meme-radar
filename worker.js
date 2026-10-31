@@ -673,9 +673,13 @@ export default {
                 for (const summary of detailCandidates) {
                   const poolAddress = String(summary.id || "");
                   if (!poolAddress) continue;
-                  const detailResponse = await fetch("https://api.dexpaprika.com/networks/" + network.dexChain + "/pools/" + encodeURIComponent(poolAddress), {
-                    headers: { "accept": "application/json" }
-                  });
+                  const detailUrl = "https://api.dexpaprika.com/networks/" + network.dexChain + "/pools/" + encodeURIComponent(poolAddress);
+                  const detailResponse = await fetchDexPaprikaJson(detailUrl);
+                  // A rate limit or provider outage means this chain's fallback is
+                  // incomplete; don't silently report a successful empty result.
+                  if (detailResponse.status === 429 || detailResponse.status >= 500) {
+                    throw new Error("DexPaprika pool detail HTTP " + detailResponse.status);
+                  }
                   if (!detailResponse.ok) continue;
                   const detail = await detailResponse.json();
                   const created = Date.parse(detail.created_at || summary.created_at || "");
