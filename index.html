@@ -33,7 +33,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <div id="status" class="status">数据源：BSC 链上扫描 + Solana / Ethereum / Base 第三方新池索引。点击刷新开始扫描。</div>
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
-<b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 首阶段使用 GeckoTerminal 新池索引。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口主要识别 BSC USDT 直连池；其他链的 USDT 直连标记和钱包兑换路径仍需后续按各链真实合约地址及实时报价验证。
+<b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 首阶段使用 GeckoTerminal 新池索引。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口扫描 BSC USDT 直连池；Solana、Ethereum、Base 仅展示报价资产符号，不判断 USDT 直连，也不验证钱包兑换路径。
 <br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
@@ -109,7 +109,7 @@ async function scan(){
     });
     const renderCard=p=>{
       const quote=esc(p.quoteSymbol||"未知报价资产");
-      const usdtStatus=p.chain==="BSC"?"USDT 直连池":(p.usdtDirect?"报价符号为 USDT（地址待核验）":"USDT 兑换路径未验证");
+      const usdtStatus=p.chain==="BSC"?"BSC USDT 直连池":"钱包兑换路径未验证";
       const price=p.priceChange1h==null?"—":pct(p.priceChange1h);
       const poolLink=p.poolUrl||p.dexScreenerUrl||"#";
       const tokenLink=p.bscScanUrl||(p.chain==="Solana"?"https://solscan.io/token/"+encodeURIComponent(p.tokenAddress):p.chain==="Base"?"https://basescan.org/token/"+encodeURIComponent(p.tokenAddress):"https://etherscan.io/token/"+encodeURIComponent(p.tokenAddress));
