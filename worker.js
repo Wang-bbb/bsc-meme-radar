@@ -315,7 +315,7 @@ export default {
           (sellTax !== null && sellTax >= 20) || (buyTax !== null && buyTax >= 30) || criticalFlags.length > 0;
         const reviewRisk = !simOK || riskLevel === null || riskLevel >= 60 ||
           buyTax === null || sellTax === null || buyTax > 10 || sellTax > 10 ||
-          report.contractCode?.rootOpenSource === false;
+          report.contractCode?.rootOpenSource !== true;
         const status = hardRisk ? "blocked" : reviewRisk ? "review" : "pass";
         return json({
           ok: true, chain, tokenAddress: address, provider: "Honeypot.is",
