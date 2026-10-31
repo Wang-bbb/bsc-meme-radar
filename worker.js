@@ -423,6 +423,7 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
     drawdownFromHighPct: Math.round(drawdownPct * 100) / 100,
     priceChange5m: changeFromMinutes(5),
     priceChange15m: changeFromMinutes(15),
+    priceChange1h: changeFromMinutes(60),
     latestCloseUsd: latest.close,
     highestHighUsd: maxHigh,
     latestCandleAt: new Date(latest.timestamp * 1000).toISOString(),
