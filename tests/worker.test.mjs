@@ -1,0 +1,117 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import worker from "../worker.js";
+
+const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
+const originalFetch = globalThis.fetch;
+
+function response(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+
+function request(path) {
+  return new Request("https://worker.test" + path);
+}
+
+test.afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+test("EVM security gate passes only when simulation and source checks are complete", async () => {
+  globalThis.fetch = async () => response({
+    simulationSuccess: true,
+    simulationResult: { buyTax: 0, sellTax: 0 },
+    honeypotResult: { isHoneypot: false },
+    summary: { riskLevel: 10, flags: [] },
+    contractCode: { rootOpenSource: true }
+  });
+  const res = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), env);
+  const data = await res.json();
+  assert.equal(data.status, "pass");
+});
+
+test("EVM security gate sends missing source verification to review", async () => {
+  globalThis.fetch = async () => response({
+    simulationSuccess: true,
+    simulationResult: { buyTax: 0, sellTax: 0 },
+    honeypotResult: { isHoneypot: false },
+    summary: { riskLevel: 10, flags: [] }
+  });
+  const res = await worker.fetch(request("/security-check?chain=base&address=0x1111111111111111111111111111111111111111"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+});
+
+test("Solana security gate blocks a RugCheck report marked rugged", async () => {
+  globalThis.fetch = async () => response({
+    tokenProgram: "spl-token",
+    rugged: true,
+    risks: [],
+    score_normalised: 5,
+    lpLockedPct: 100
+  });
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.status, "blocked");
+});
+
+test("Solana security gate keeps elevated or incomplete reports in review", async () => {
+  globalThis.fetch = async () => response({
+    tokenProgram: "spl-token",
+    risks: [{ name: "Authority warning", level: "high" }],
+    score_normalised: 20,
+    lpLockedPct: 95,
+    mintAuthority: null,
+    freezeAuthority: null
+  });
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+});
+
+test("multiscan combines indexed pools and applies the age and liquidity filters", async () => {
+  const networks = ["solana", "eth", "base"];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    const network = url.pathname.split("/")[4];
+    assert.ok(networks.includes(network));
+    const tokenId = network + "_token";
+    const quoteId = network + "_quote";
+    const dexId = network + "_dex";
+    const poolAddress = "PoolAddress" + network;
+    return response({
+      data: [{
+        id: network + "_" + poolAddress,
+        attributes: {
+          address: poolAddress,
+          pool_created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          reserve_in_usd: "12000",
+          transactions: { h1: { buys: 7, sells: 3 } },
+          volume_usd: { h1: "2500" },
+          price_change_percentage: { h1: "4.2" }
+        },
+        relationships: {
+          base_token: { data: { id: tokenId } },
+          quote_token: { data: { id: quoteId } },
+          dex: { data: { id: dexId } }
+        }
+      }],
+      included: [
+        { id: tokenId, attributes: { address: "Token" + network, symbol: "MEME", name: "Meme Token" } },
+        { id: quoteId, attributes: { address: "Quote" + network, symbol: "USDC", name: "USD Coin" } },
+        { id: dexId, attributes: { name: "Test DEX" } }
+      ]
+    });
+  };
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), env);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.complete, true);
+  assert.equal(data.pools.length, 3);
+  assert.ok(data.pools.every(pool => pool.liquidityUSDApprox >= 5000));
+  assert.ok(data.pools.every(pool => pool.ageMinutes <= 15));
+  assert.ok(data.pools.every(pool => pool.usdtRouteStatus === "not_verified"));
+});
