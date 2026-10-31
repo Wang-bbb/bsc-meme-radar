@@ -194,7 +194,7 @@ export default {
       const v2FactoryResults = await Promise.all(V2_FACTORIES.map(async (factory) => {
         const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [PAIR_CREATED] }], rpcUrl);
         const usdtLogs = logs.filter((log) =>
-          log.topics[1]?.toLowerCase() === USDT_TOPIC || log.topics[2]?.toLowerCase() === USDT_TOPIC
+          fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
         );
         return { factory, allLogs: logs, usdtLogs };
       }));
@@ -212,7 +212,7 @@ export default {
       const v3FactoryResults = await Promise.all(V3_FACTORIES.map(async (factory) => {
         const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [V3_POOL_CREATED] }], rpcUrl);
         const usdtLogs = logs.filter((log) =>
-          log.topics[1]?.toLowerCase() === USDT_TOPIC || log.topics[2]?.toLowerCase() === USDT_TOPIC
+          fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
         );
         return { factory, allLogs: logs, usdtLogs };
       }));
