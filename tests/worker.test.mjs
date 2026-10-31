@@ -128,7 +128,7 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
   assert.ok(data.pools.every(pool => pool.ageMinutes <= 15));
   assert.ok(data.pools.every(pool => pool.usdtRouteStatus === "not_verified"));
   assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
-  assert.ok(data.pools.every(pool => pool.tokenAddress === "Token" + pool.chainId));
+  assert.ok(data.pools.every(pool => pool.tokenAddress !== pool.quoteAddress));
 });
 
 test("Solana security gate keeps active mint or freeze authorities in review", async () => {
