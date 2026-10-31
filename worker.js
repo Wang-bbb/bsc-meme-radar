@@ -208,7 +208,7 @@ export default {
           return { factory, logs, usdtLogs };
         });
         const summary = allFactories.map((factory) => {
-          const matching = results.filter((x) => x.factory.address === factory.address);
+          const matching = results.filter((x) => x && x.factory && x.factory.address === factory.address);
           const logs = matching.flatMap((x) => x.logs);
           const usdtLogs = matching.flatMap((x) => x.usdtLogs);
           const uniqueUsdt = new Map();
@@ -249,6 +249,7 @@ export default {
           totalFactoryEvents: summary.reduce((n, x) => n + x.eventCount, 0),
           totalUsdtPoolEvents: summary.reduce((n, x) => n + x.usdtPoolEventCount, 0),
           results: summary,
+          scanErrors: results.filter((x) => x && x._error).map((x) => ({ error: x._error })),
           limitations: [
             "按已配置工厂地址和对应 V2/V3 创建池事件扫描，不代表覆盖 BSC 全部 DEX。",
             "历史建池事件数量不等于当前仍有流动性或可正常卖出。",
