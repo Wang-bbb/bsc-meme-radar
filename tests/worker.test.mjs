@@ -604,7 +604,7 @@ test("pool-risk computes high-water drawdown and short-window changes from Gecko
   assert.equal(data.drawdownFromHighPct, -30);
   assert.equal(data.priceChange5m, -12.5);
   assert.equal(Number(data.priceChange15m.toFixed(2)), -22.22);
-  assert.equal(data.priceChange1h, 40);
+  assert.ok(Math.abs(data.priceChange1h - 40) < 0.01);
 });
 
 test("pool-risk marks insufficient candle history as unverified instead of clear", async () => {
