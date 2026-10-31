@@ -359,7 +359,7 @@ export default {
         quote: "USDT",
         minutes: minutes,
         minLiquidityUSDApprox: minLiquidity,
-        dataSource: "NodeReal BSC RPC · PancakeSwap / Biswap / ApeSwap / MDEX / BabySwap / Nomiswap / Uniswap"
+        dataSource: "NodeReal BSC RPC · PancakeSwap / Biswap / ApeSwap / MDEX / BabySwap / Nomiswap / Uniswap",
         factories: {
           v2: V2_FACTORIES.map((x) => ({ dex: x.name, address: x.address })),
           v3: V3_FACTORIES.map((x) => ({ dex: x.name, address: x.address }))
