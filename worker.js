@@ -29,7 +29,7 @@ const VERIFIED_QUOTE_ASSETS = {
   solana: new Set([
     "so11111111111111111111111111111111111111112",
     "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
-    "es9vmfrzacer mjfrf4h2fyd4kconky11mcce8benwnyb"
+    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb"
   ]),
   eth: new Set([
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
