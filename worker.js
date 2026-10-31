@@ -26,13 +26,28 @@ const HEADERS = {
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
 
+// Cache API may reject caching upstream 429 responses. Store them as synthetic
+// 200 responses with the original status in a header, then restore 429 on read.
+function restoreCachedResponse(cached) {
+  const originalStatus = Number(cached.headers.get("x-radar-original-status") || cached.status);
+  if (originalStatus === cached.status) return cached;
+  const headers = new Headers(cached.headers);
+  headers.delete("x-radar-original-status");
+  headers.delete("cache-control");
+  return new Response(cached.body, {
+    status: originalStatus,
+    statusText: originalStatus === 429 ? "Too Many Requests" : cached.statusText,
+    headers
+  });
+}
+
 async function fetchGeckoTerminal(endpoint) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(endpoint, { method: "GET" });
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return cached;
+      if (cached) return restoreCachedResponse(cached);
     } catch (_) {}
   }
 
@@ -46,10 +61,11 @@ async function fetchGeckoTerminal(endpoint) {
     if (response.status === 429) {
       if (cache) {
         const headers = new Headers(response.headers);
+        headers.set("x-radar-original-status", "429");
         headers.set("cache-control", "public, max-age=15");
         try {
           await cache.put(cacheKey, new Response(response.clone().body, {
-            status: response.status, statusText: response.statusText, headers
+            status: 200, statusText: "OK", headers
           }));
         } catch (_) {}
       }
@@ -87,16 +103,20 @@ async function fetchDexPaprikaJson(endpoint) {
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return cached;
+      if (cached) return restoreCachedResponse(cached);
     } catch (_) {}
   }
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
   if (cache && (response.ok || response.status === 429)) {
     const headers = new Headers(response.headers);
-    headers.set("cache-control", "public, max-age=" + (response.status === 429 ? 15 : 60));
+    const wasRateLimited = response.status === 429;
+    if (wasRateLimited) headers.set("x-radar-original-status", "429");
+    headers.set("cache-control", "public, max-age=" + (wasRateLimited ? 15 : 60));
     try {
       await cache.put(cacheKey, new Response(response.clone().body, {
-        status: response.status, statusText: response.statusText, headers
+        status: wasRateLimited ? 200 : response.status,
+        statusText: wasRateLimited ? "OK" : response.statusText,
+        headers
       }));
     } catch (_) {}
   }
@@ -109,7 +129,7 @@ async function fetchDexScreenerJson(endpoint) {
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return cached;
+      if (cached) return restoreCachedResponse(cached);
     } catch (_) {}
   }
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
@@ -117,10 +137,11 @@ async function fetchDexScreenerJson(endpoint) {
     // Briefly cache rate-limit responses to prevent each chain fallback from
     // hammering the same shared profile/boost feeds on every refresh.
     const headers = new Headers(response.headers);
+    headers.set("x-radar-original-status", "429");
     headers.set("cache-control", "public, max-age=15");
     try {
       await cache.put(cacheKey, new Response(response.clone().body, {
-        status: response.status, statusText: response.statusText, headers
+        status: 200, statusText: "OK", headers
       }));
     } catch (_) {}
     return response;
