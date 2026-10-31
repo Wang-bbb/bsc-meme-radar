@@ -377,7 +377,6 @@ export default {
         factoryDiagnostics: {
           v2: v2FactoryResults.map((x) => ({
             dex: x.factory.name,
-            hasContractCode: null,
             eventCount: x.allLogs.length,
             usdtEventCount: x.usdtLogs.length,
             sampleTokenPairs: x.allLogs.slice(0, 2).map((log) => ({
@@ -387,7 +386,6 @@ export default {
           })),
           v3: v3FactoryResults.map((x) => ({
             dex: x.factory.name,
-            hasContractCode: null,
             eventCount: x.allLogs.length,
             usdtEventCount: x.usdtLogs.length,
             sampleTokenPairs: x.allLogs.slice(0, 2).map((log) => ({
