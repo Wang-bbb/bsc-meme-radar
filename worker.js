@@ -28,7 +28,8 @@ const json = (data, status) => new Response(JSON.stringify(data), { status: stat
 const VERIFIED_QUOTE_ASSETS = {
   solana: new Set([
     "so11111111111111111111111111111111111111112",
-    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v"
+    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
+    "es9vmfrzacer mjfrf4h2fyd4kconky11mcce8benwnyb".replace(/ /g, "")
   ]),
   eth: new Set([
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
@@ -38,7 +39,8 @@ const VERIFIED_QUOTE_ASSETS = {
   ]),
   base: new Set([
     "0x4200000000000000000000000000000000000006",
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
   ])
 };
 const VERIFIED_USDT_ASSETS = {
