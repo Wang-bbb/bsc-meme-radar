@@ -602,6 +602,7 @@ export default {
         minutes,
         minLiquidityUSD: minLiquidity,
         dataSource: "GeckoTerminal primary; DexScreener latest token profiles supplemental fallback",
+        coverage: fallbackChains.length ? "partial" : "primary-index",
         chainSources,
         fallbackChains,
         count: results.length,
