@@ -33,7 +33,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <div id="status" class="status">数据源：BSC 链上扫描 + Solana / Ethereum / Base 第三方新池索引。点击刷新开始扫描。</div>
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
-<b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 首阶段使用 GeckoTerminal 新池索引。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口扫描 BSC USDT 直连池；Solana、Ethereum、Base 仅展示报价资产符号，不判断 USDT 直连，也不验证钱包兑换路径。
+<b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 优先使用 GeckoTerminal 新池索引。若 GeckoTerminal 限流，则备用使用 DexScreener 最新 Token Profile 名单反查交易池，并核验池龄与流动性；该备用名单覆盖不完整，不代表完整新池扫描。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口扫描 BSC USDT 直连池；Solana、Ethereum、Base 仅展示报价资产符号，不判断 USDT 直连，也不验证钱包兑换路径。
 <br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
@@ -127,6 +127,7 @@ async function scan(){
         '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
+        (p.source?'<div class="muted">数据源：'+esc(p.source)+'</div>':'')+
         (p.tokenSelectionNote?'<div class="muted">代币识别：'+esc(p.tokenSelectionNote)+'</div>':'')+
         (p.pendingReason?'<div class="muted">未通过原因：'+esc(p.pendingReason)+'</div>':'')+
         '<div class="links"><a target="_blank" rel="noopener" href="'+esc(poolLink)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(tokenLink)+'">查看合约 ↗</a><a href="#" data-copy="'+esc(p.tokenAddress||"")+'">复制合约</a></div>'+
@@ -145,7 +146,8 @@ async function scan(){
     $("status").textContent=(failures.length?"部分链扫描失败："+failures.join("；")+"。":"四链扫描完成。")+
       " 原始池 "+all.length+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"。"+
       "仅对每条链最早的5个候选执行本轮安全检测，未检查的币不会进入通过筛查列表。"+
-      (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", ")+"；失败链未返回有效数据，零结果不代表没有新池。":"");
+      (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", ")+"；失败链未返回有效数据，零结果不代表没有新池。":"")+
+      (multi?.fallbackChains?.length?"；备用索引已启用："+multi.fallbackChains.join(", ")+"（DexScreener Token Profile 仅部分覆盖，不代表完整新池）。":"");
   }catch(e){
     $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试。";
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
