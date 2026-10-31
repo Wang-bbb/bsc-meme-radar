@@ -365,6 +365,71 @@ async function readPair(log, rpcUrl) {
   };
 }
 
+async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
+  const params = new URLSearchParams({
+    aggregate: "1",
+    limit: "60",
+    currency: "usd",
+    token: tokenAddress
+  });
+  const endpoint = "https://api.geckoterminal.com/api/v2/networks/" +
+    encodeURIComponent(network) + "/pools/" + encodeURIComponent(poolAddress) +
+    "/ohlcv/minute?" + params.toString();
+  const response = await fetchGeckoTerminal(endpoint);
+  if (!response.ok) {
+    return { status: "unavailable", error: "GeckoTerminal OHLCV HTTP " + response.status };
+  }
+  const body = await response.json();
+  const rows = body && body.data && body.data.attributes && body.data.attributes.ohlcv_list;
+  if (!Array.isArray(rows)) {
+    return { status: "unavailable", error: "OHLCV response missing data.attributes.ohlcv_list" };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const candles = rows.map((row) => ({
+    timestamp: Number(row && row[0]),
+    high: Number(row && row[2]),
+    close: Number(row && row[4])
+  })).filter((row) =>
+    Number.isFinite(row.timestamp) &&
+    Number.isFinite(row.high) && row.high > 0 &&
+    Number.isFinite(row.close) && row.close > 0 &&
+    row.timestamp <= now + 60 && row.timestamp >= now - 60 * 65
+  ).sort((a, b) => a.timestamp - b.timestamp);
+  if (candles.length < 3) {
+    return {
+      status: "insufficient",
+      candleCount: candles.length,
+      error: "近60分钟有效1分钟K线不足3根，无法可靠计算高点回撤"
+    };
+  }
+  const latest = candles[candles.length - 1];
+  const oldest = candles[0];
+  const maxHigh = Math.max(...candles.map((row) => row.high));
+  const drawdownPct = (latest.close / maxHigh - 1) * 100;
+  const changeFromMinutes = (minutes) => {
+    const target = latest.timestamp - minutes * 60;
+    const reference = candles.filter((row) => row.timestamp <= target).slice(-1)[0];
+    if (!reference) return null;
+    const elapsed = latest.timestamp - reference.timestamp;
+    const minElapsed = minutes === 5 ? 4 * 60 : 12 * 60;
+    const maxElapsed = minutes === 5 ? 7 * 60 : 18 * 60;
+    if (elapsed < minElapsed || elapsed > maxElapsed) return null;
+    return (latest.close / reference.close - 1) * 100;
+  };
+  return {
+    status: "checked",
+    candleCount: candles.length,
+    historyMinutes: Math.round((latest.timestamp - oldest.timestamp) / 60),
+    drawdownFromHighPct: Math.round(drawdownPct * 100) / 100,
+    priceChange5m: changeFromMinutes(5),
+    priceChange15m: changeFromMinutes(15),
+    latestCloseUsd: latest.close,
+    highestHighUsd: maxHigh,
+    latestCandleAt: new Date(latest.timestamp * 1000).toISOString(),
+    source: "GeckoTerminal 1m OHLCV"
+  };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -375,6 +440,24 @@ export default {
     }
     if (url.pathname === "/" || url.pathname === "/health") {
       return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + multiple BSC DEX factories", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
+    }
+    if (url.pathname === "/pool-risk") {
+      const network = url.searchParams.get("chain") || "";
+      const poolAddress = url.searchParams.get("pool") || "";
+      const tokenAddress = url.searchParams.get("token") || "";
+      if (!["bsc", "solana", "eth", "base"].includes(network)) {
+        return json({ ok: false, status: "unavailable", error: "Unsupported GeckoTerminal network" }, 400);
+      }
+      if (!poolAddress || !tokenAddress || poolAddress.length > 160 || tokenAddress.length > 160) {
+        return json({ ok: false, status: "unavailable", error: "pool and token are required" }, 400);
+      }
+      try {
+        const history = await getPoolMarketHistory(network, poolAddress, tokenAddress);
+        return json({ ok: true, chain: network, poolAddress, tokenAddress, ...history });
+      } catch (error) {
+        return json({ ok: true, chain: network, poolAddress, tokenAddress,
+          status: "unavailable", error: String(error) });
+      }
     }
     if (url.pathname === "/history") {
       const hours = Number(url.searchParams.get("hours") || 24);
