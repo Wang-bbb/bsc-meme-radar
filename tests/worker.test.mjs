@@ -113,26 +113,29 @@ test("non-BSC preflight requests do not depend on the NodeReal secret", async ()
   assert.equal(res.headers.get("access-control-allow-origin"), "*");
 });
 
-test("multiscan retries GeckoTerminal rate limits without reporting a false empty success", async () => {
+test("multiscan stops retrying GeckoTerminal immediately after HTTP 429 and does not report a false empty success", async () => {
   const attempts = new Map();
   globalThis.fetch = async (input) => {
-    const network = new URL(input).pathname.split("/")[4];
-    const count = (attempts.get(network) || 0) + 1;
-    attempts.set(network, count);
-    if (count === 1) {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      const network = url.pathname.split("/")[4];
+      attempts.set(network, (attempts.get(network) || 0) + 1);
       return new Response("rate limited", {
         status: 429,
         headers: { "retry-after": "0" }
       });
     }
-    return response({ data: [], included: [] });
+    if (url.pathname === "/token-profiles/latest/v1" || url.pathname === "/token-boosts/latest/v1") {
+      return response([]);
+    }
+    throw new Error("Unexpected URL " + url.href);
   };
   const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
   const data = await res.json();
-  assert.equal(data.ok, true);
-  assert.equal(data.complete, true);
+  assert.equal(data.complete, false);
   assert.equal(data.pools.length, 0);
-  assert.deepEqual([...attempts.values()], [2, 2, 2]);
+  assert.equal(data.chainErrors.length, 3);
+  assert.deepEqual([...attempts.values()], [1, 1, 1]);
 });
 
 test("multiscan combines indexed pools and applies the age and liquidity filters", async () => {
