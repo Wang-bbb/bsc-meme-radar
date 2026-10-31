@@ -451,3 +451,56 @@ test("DexPaprika caches HTTP 402 quota responses and restores the original statu
     else globalThis.caches = originalCaches;
   }
 });
+
+
+test("multiscan applies provider-wide 429 cooldown across chains and refreshes", async () => {
+  const originalCaches = globalThis.caches;
+  const store = new Map();
+  globalThis.caches = {
+    default: {
+      async match(key) {
+        const hit = store.get(key.url);
+        return hit ? hit.clone() : undefined;
+      },
+      async put(key, value) {
+        store.set(key.url, value.clone());
+      }
+    }
+  };
+  const calls = { gecko: 0, dex: 0, paprika: 0 };
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      calls.gecko++;
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.hostname === "api.dexscreener.com") {
+      calls.dex++;
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.hostname === "api.dexpaprika.com") {
+      calls.paprika++;
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    throw new Error("Unexpected URL " + url.href);
+  };
+
+  try {
+    const first = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+    const firstData = await first.json();
+    assert.equal(firstData.complete, false);
+    assert.equal(firstData.chainErrors.length, 3);
+    assert.ok(firstData.chainErrors.every(error => error.error.includes("HTTP 429")));
+    assert.deepEqual(calls, { gecko: 1, dex: 1, paprika: 1 });
+
+    const second = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+    const secondData = await second.json();
+    assert.equal(secondData.complete, false);
+    assert.equal(secondData.chainErrors.length, 3);
+    assert.deepEqual(calls, { gecko: 1, dex: 1, paprika: 1 },
+      "provider-wide cooldown should suppress repeat calls across all chains");
+  } finally {
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+  }
+});
