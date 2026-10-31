@@ -123,3 +123,17 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
   assert.ok(data.pools.every(pool => pool.ageMinutes <= 15));
   assert.ok(data.pools.every(pool => pool.usdtRouteStatus === "not_verified"));
 });
+
+test("Solana security gate keeps active mint or freeze authorities in review", async () => {
+  globalThis.fetch = async () => response({
+    tokenProgram: "spl-token",
+    risks: [],
+    score_normalised: 5,
+    lpLockedPct: 100,
+    token: { mintAuthority: "CreatorAuthority", freezeAuthority: null }
+  });
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.ok(data.reasons.some(reason => reason.includes("Authority")));
+});
