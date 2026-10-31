@@ -25,6 +25,42 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+const VERIFIED_QUOTE_ASSETS = {
+  solana: new Set([
+    "so11111111111111111111111111111111111111112",
+    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
+    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb"
+  ]),
+  eth: new Set([
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "0xdac17f958d2ee523a2206206994597c13d831ec7",
+    "0x6b175474e89094c44da98b954eedeac495271d0f"
+  ]),
+  base: new Set([
+    "0x4200000000000000000000000000000000000006",
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
+  ])
+};
+function choosePoolToken(networkId, base, quote, baseId, quoteId) {
+  const canonicalQuotes = VERIFIED_QUOTE_ASSETS[networkId] || new Set();
+  const baseAddress = String(base.address || (baseId || "").split("_").slice(1).join("_"));
+  const quoteAddress = String(quote.address || (quoteId || "").split("_").slice(1).join("_"));
+  const isBaseQuote = canonicalQuotes.has(baseAddress.toLowerCase());
+  const isQuoteQuote = canonicalQuotes.has(quoteAddress.toLowerCase());
+  if (isBaseQuote && isQuoteQuote) return { skip: true, reason: "交易池两侧均为已知主流报价资产" };
+  if (isBaseQuote !== isQuoteQuote) {
+    return {
+      address: isBaseQuote ? quoteAddress : baseAddress,
+      symbol: isBaseQuote ? quote.symbol : base.symbol,
+      name: isBaseQuote ? quote.name : base.name,
+      verified: true,
+      side: isBaseQuote ? "quote" : "base"
+    };
+  }
+  return { address: baseAddress, symbol: base.symbol, name: base.name, verified: false, side: "base-ambiguous" };
+}
 
 async function rpc(method, params, rpcUrl) {
   let lastError;
@@ -166,8 +202,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const rpcUrl = env.NODEREAL_RPC_URL;
-    if (!rpcUrl) return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
+    if (!rpcUrl && ["/scan", "/history"].includes(url.pathname)) {
+      return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
+    }
     if (url.pathname === "/" || url.pathname === "/health") {
       return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + multiple BSC DEX factories", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
     }
@@ -270,6 +308,176 @@ export default {
           hint: "历史验证失败不代表没有 USDT 池；请检查 RPC 限流或日志查询范围。"
         }, 502);
       }
+    }
+    if (url.pathname === "/security-check") {
+      const chain = String(url.searchParams.get("chain") || "").toLowerCase();
+      const address = String(url.searchParams.get("address") || "").trim();
+      const pair = String(url.searchParams.get("pair") || "").trim();
+      if (!address) return json({ ok: false, status: "unverified", error: "missing token address" }, 400);
+      try {
+        if (chain === "solana") {
+          const response = await fetch("https://api.rugcheck.xyz/v1/tokens/" + encodeURIComponent(address) + "/report", { headers: { "accept": "application/json" } });
+          if (!response.ok) throw new Error("RugCheck HTTP " + response.status);
+          const report = await response.json();
+          const risks = Array.isArray(report.risks) ? report.risks : [];
+          const critical = risks.filter((risk) => ["danger", "critical"].includes(String(risk.level || "").toLowerCase()));
+          const warnings = risks.filter((risk) => ["high", "medium", "caution", "warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
+          const hasUsableReport = !!report.tokenProgram || risks.length > 0 || report.score_normalised != null || report.lpLockedPct != null;
+          const weakLiquidityLock = report.lpLockedPct == null || Number(report.lpLockedPct) < 80;
+          const rugged = report.rugged === true;
+          const mintAuthority = report.mintAuthority ?? report.token?.mintAuthority ?? null;
+          const freezeAuthority = report.freezeAuthority ?? report.token?.freezeAuthority ?? null;
+          const authorityFieldsPresent = Object.prototype.hasOwnProperty.call(report, "mintAuthority") ||
+            Object.prototype.hasOwnProperty.call(report, "freezeAuthority") ||
+            Object.prototype.hasOwnProperty.call(report.token || {}, "mintAuthority") ||
+            Object.prototype.hasOwnProperty.call(report.token || {}, "freezeAuthority");
+          const activeAuthorities = mintAuthority != null || freezeAuthority != null;
+          const unknownAuthorities = !authorityFieldsPresent;
+          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || activeAuthorities || unknownAuthorities) ? "review" : "pass";
+          return json({
+            ok: true, chain, tokenAddress: address, provider: "RugCheck",
+            status, riskScore: report.score_normalised ?? null, lpLockedPct: report.lpLockedPct ?? null,
+            risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
+            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : [])],
+            note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
+          });
+        }
+        const chainIds = { ethereum: 1, eth: 1, bsc: 56, base: 8453 };
+        const chainID = chainIds[chain];
+        if (!chainID) return json({ ok: false, status: "unverified", error: "unsupported chain" }, 400);
+        const params = new URLSearchParams({ address, chainID: String(chainID) });
+        if (pair) params.set("pair", pair);
+        const response = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
+        if (!response.ok) throw new Error("Honeypot.is HTTP " + response.status);
+        const report = await response.json();
+        const simulation = report.simulationResult || {};
+        const flags = Array.isArray(report.summary?.flags) ? report.summary.flags : [];
+        const criticalFlags = flags.filter((x) => ["critical", "danger"].includes(String(x.severity || "").toLowerCase()));
+        const highFlags = flags.filter((x) => ["high", "medium", "warning", "warn"].includes(String(x.severity || "").toLowerCase()));
+        const isHoneypot = report.honeypotResult?.isHoneypot === true;
+        const riskLevel = report.summary?.riskLevel != null && Number.isFinite(Number(report.summary.riskLevel)) ? Number(report.summary.riskLevel) : null;
+        const buyTax = simulation.buyTax != null && Number.isFinite(Number(simulation.buyTax)) ? Number(simulation.buyTax) : null;
+        const sellTax = simulation.sellTax != null && Number.isFinite(Number(simulation.sellTax)) ? Number(simulation.sellTax) : null;
+        const simOK = report.simulationSuccess === true && report.honeypotResult && typeof report.honeypotResult.isHoneypot === "boolean";
+        const hardRisk = isHoneypot || (riskLevel !== null && riskLevel >= 80) ||
+          (sellTax !== null && sellTax >= 20) || (buyTax !== null && buyTax >= 30) || criticalFlags.length > 0;
+        const reviewRisk = !simOK || riskLevel === null || riskLevel >= 60 ||
+          buyTax === null || sellTax === null || buyTax > 10 || sellTax > 10 ||
+          highFlags.length > 0 || report.contractCode?.rootOpenSource !== true;
+        const status = hardRisk ? "blocked" : reviewRisk ? "review" : "pass";
+        return json({
+          ok: true, chain, tokenAddress: address, provider: "Honeypot.is",
+          status, simulationSuccess: report.simulationSuccess === true,
+          isHoneypot: report.honeypotResult?.isHoneypot ?? null,
+          risk: report.summary?.risk || "unknown", riskLevel,
+          buyTax, sellTax, openSource: report.contractCode?.rootOpenSource ?? null,
+          pairAddress: report.pairAddress || report.pair?.pair?.address || null,
+          reasons: [
+            ...(isHoneypot ? ["检测到貔貅/无法正常卖出"] : []),
+            ...(riskLevel !== null && riskLevel >= 60 ? ["Honeypot 风险等级偏高"] : []),
+            ...(sellTax !== null && sellTax > 10 ? ["卖出税超过10%"] : []),
+            ...(!simOK ? ["买卖模拟未成功或结果不完整"] : []),
+            ...(!report.contractCode?.rootOpenSource ? ["合约源码未确认开源"] : []),
+            ...criticalFlags.map((x) => x.description || x.flag),
+            ...highFlags.map((x) => x.description || x.flag)
+          ],
+          note: "模拟结果只代表本次检测时点和检测路径；代币权限或流动性变化后风险可能改变。"
+        });
+      } catch (error) {
+        return json({ ok: true, chain, tokenAddress: address, provider: chain === "solana" ? "RugCheck" : "Honeypot.is", status: "unverified", error: String(error), note: "安全数据不可用，按未验证处理，不进入通过安全检查的观察名单。" });
+      }
+    }
+    if (url.pathname === "/multiscan") {
+      const minutes = Number(url.searchParams.get("minutes") || 15);
+      const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
+      if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
+      const networks = [
+        { id: "solana", name: "Solana", dexChain: "solana" },
+        { id: "eth", name: "Ethereum", dexChain: "ethereum" },
+        { id: "base", name: "Base", dexChain: "base" }
+      ];
+      const results = [];
+      const errors = [];
+      for (const network of networks) {
+        try {
+          const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
+          const response = await fetch(endpoint, { headers: { "accept": "application/json;version=20230203" } });
+          if (!response.ok) throw new Error("GeckoTerminal HTTP " + response.status);
+          const body = await response.json();
+          const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
+          for (const item of body.data || []) {
+            const a = item.attributes || {};
+            const rel = item.relationships || {};
+            const baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+            const quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+            const base = included.get(baseId) || {};
+            const quote = included.get(quoteId) || {};
+            const dexId = rel.dex && rel.dex.data && rel.dex.data.id;
+            const dex = included.get(dexId) || {};
+            const created = Date.parse(a.pool_created_at || "");
+            const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
+            const liquidity = Number(a.reserve_in_usd || 0);
+            if (ageMinutes == null || ageMinutes < 0 || ageMinutes > minutes || liquidity < minLiquidity) continue;
+            const tx1h = a.transactions && a.transactions.h1 || {};
+            const volume1h = Number(a.volume_usd && a.volume_usd.h1 || 0);
+            const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
+              ? Number(a.price_change_percentage.h1) : null;
+            const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
+            const baseAddress = (base.address || (baseId || "").split("_").slice(1).join("_"));
+            const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
+            const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
+            if (candidate.skip) continue;
+            results.push({
+              chain: network.name,
+              chainId: network.dexChain,
+              dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
+              symbol: candidate.symbol || "Unknown",
+              name: candidate.name || "Unknown token",
+              tokenAddress: candidate.address,
+              tokenSelectionVerified: candidate.verified,
+              tokenSelectionNote: candidate.verified ? "" : "交易池两侧均未匹配已知主流报价资产，暂按 base token 显示，代币方向未确认。",
+              quoteSymbol: quote.symbol || "Unknown",
+              quoteAddress,
+              pairAddress: poolAddress,
+              poolUrl: "https://www.geckoterminal.com/" + network.id + "/pools/" + poolAddress,
+              dexScreenerUrl: "https://dexscreener.com/" + network.dexChain + "/" + poolAddress,
+              createdAt: new Date(created).toISOString(),
+              ageMinutes: Math.round(ageMinutes * 10) / 10,
+              liquidityUSDApprox: liquidity,
+              volume1hUSD: volume1h,
+              buys1h: Number(tx1h.buys || 0),
+              sells1h: Number(tx1h.sells || 0),
+              priceChange1h,
+              usdtRouteStatus: "not_verified",
+              riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
+            });
+          }
+        } catch (error) {
+          errors.push({ chain: network.name, error: String(error) });
+        }
+      }
+      results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
+      return json({
+        ok: true,
+        complete: errors.length === 0,
+        mode: "multichain-new-pools",
+        chains: networks.map((x) => x.name),
+        minutes,
+        minLiquidityUSD: minLiquidity,
+        dataSource: "GeckoTerminal public API",
+        count: results.length,
+        pools: results,
+        chainErrors: errors,
+        limitations: [
+          "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
+          "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
+          "GeckoTerminal 公共 API 有约每分钟10次调用的限额，且数据约每分钟缓存更新；频繁刷新可能触发限流。",
+          "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
+          "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
+          "本接口只读，不执行兑换或交易。"
+        ],
+        generatedAt: new Date().toISOString()
+      });
     }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 

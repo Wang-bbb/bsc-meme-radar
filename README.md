@@ -1,31 +1,41 @@
-# BSC Meme 雷达（PWA MVP）
+# 多链 Meme Radar（PWA）
 
-只读观察工具，不会自动交易，不需要钱包私钥、助记词或币安 API Key。
+只读观察工具，用于发现 BSC、Solana、Ethereum、Base 的早期新池线索。不会自动交易，不需要钱包私钥、助记词或交易所 API Key。
 
-## 文件
-- `index.html`、`manifest.json`、`sw.js`：手机 PWA 网页
-- `worker.js`：Cloudflare Worker 行情代理与筛选 API
+## 当前功能
+- 覆盖链：BSC、Solana、Ethereum、Base。
+- 默认观察窗口：最近 15 分钟，可切换 30 / 60 分钟。
+- 默认最低流动性：约 5,000 USD。
+- 排序：优先池龄最新；同等池龄参考成交量。
+- BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
+- Solana / Ethereum / Base：使用 GeckoTerminal public API 的 new_pools 索引；显示索引提供的报价资产符号，但**不判断 USDT 直连，也不验证钱包兑换路径**。
+- 前端合并 BSC 与其他三链结果，并按池龄排序。
+- 每条链每轮最多对最早的 5 个候选执行安全检查；通过的进入候选列表，明确高危的进入拦截区，检测失败或信息不完整的进入待复核区。未检查的候选不会进入通过筛查列表。
 
-## 1. 配置网页 API 地址
-部署 Worker 后，复制它的 HTTPS 地址。打开 `index.html`，找到：
-`const API_BASE=localStorage.getItem("radar_api_base")||"";`
-将空字符串改为 Worker 地址，例如：
-`const API_BASE=localStorage.getItem("radar_api_base")||"https://你的worker地址.workers.dev";`
-保存后再提交。
+## 安全筛查范围与限制
+- EVM 使用 Honeypot.is 买卖模拟及风险信号，覆盖范围受其支持的链、DEX 和交易路由限制。
+- Solana 使用 RugCheck 风险摘要、权限和 LP 锁定信号。
+- 通过筛查不代表绝对安全，也不是完整合约审计。
+- 尚未完整实现：创建者及关联钱包历史、EVM 全量持币集中度、LP 锁仓合约可信度验证、持续监控流动性撤出。
+- 安全数据不可用、模拟失败或信息不完整时，按待复核处理，不进入通过筛查列表。
 
-## 2. 部署 Cloudflare Worker
-在 Cloudflare Dashboard → Workers & Pages → Create Worker，粘贴 `worker.js` 全部内容并 Deploy。复制 Worker URL。Worker 会请求 DexScreener 公共 API；外部 API 的可用性和速率限制可能变化。
+## 数据覆盖限制
+- GeckoTerminal 每条链当前只取 new_pools 第一页（最多 20 个池），不保证覆盖所有新池。
+- 公共 API 可能限流；数据约每分钟缓存更新，频繁刷新可能触发 429。
+- 多链流动性、成交量、买卖次数和价格变化来自第三方索引，可能延迟、缺失或存在统计口径差异。
+- BSC 仅覆盖代码中配置的 DEX 工厂，不等于全 BSC DEX；流动性为估算值，V3 成交统计尚未接入。
+- BSC USDT 直连池与其他链的钱包兑换路径是两回事；其他三链目前不提供 USDT 直连或可成交保证。
 
-## 3. 开启 GitHub Pages
-仓库 Settings → Pages → Build and deployment → Source 选 Deploy from a branch；Branch 选 `main`，目录选 `/(root)`，点击 Save。GitHub Pages 会从仓库根目录的 `index.html` 发布网页。等待部署完成后打开页面。
+## 部署说明
+1. Cloudflare Worker 使用仓库中的 `worker.js`，并在 Cloudflare Secret 中配置 `NODEREAL_RPC_URL`。
+2. GitHub Pages 发布仓库根目录的 `index.html`。
+3. 手机浏览器打开 Pages 地址，可添加到主屏幕。
 
-## 4. vivo 手机安装
-用手机浏览器打开 GitHub Pages 网站 → 浏览器菜单 → 添加到主屏幕/安装应用。
+Worker 和网页均可能公开访问；不得把私钥、助记词或交易密钥放入仓库、网页或 Worker 响应。
 
-## 当前限制
-- 候选来源是 DexScreener 最新 token profiles，不保证覆盖全部新池；每轮最多逐一查询 35 个候选。
-- 只接受报价代币地址严格匹配 BSC USDT（`0x55d398326f99059ff775485246999027b319795`）的直接交易池，不把 USDC/WBNB 交易池算作 USDT。
-- “有 USDT 交易对”不代表一定可以安全买卖。
-- 当前只在应用打开时手动刷新；无后台持续扫描和自动推送。
-- 未实现完整 honeypot 模拟、合约权限审计、持仓集中度或 LP 锁定检查；不能保证识别所有骗局。
-- 公开网页与 Worker URL 可能被他人访问；不要放入任何私钥、助记词或交易所密钥。
+## API
+- `/health`：服务状态
+- `/scan?minutes=15&minLiquidity=5000`：BSC USDT 直连新池扫描
+- `/multiscan?minutes=15&minLiquidity=5000`：Solana、Ethereum、Base 新池索引
+- `/security-check?chain=...&address=...`：单个代币安全预检
+- `/history?hours=24&dex=pancakeswap-v2`：BSC 单工厂历史验证

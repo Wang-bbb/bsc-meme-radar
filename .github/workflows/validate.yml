@@ -1,0 +1,38 @@
+name: Validate Meme Radar
+
+on:
+  push:
+    branches: [feature/multichain-meme-radar]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Worker JavaScript syntax
+        run: node --check worker.js
+      - name: Run Worker route tests
+        run: node --experimental-default-type=module --test tests/worker.test.mjs
+      - name: Extract and check dashboard JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          html = Path("index.html").read_text(encoding="utf-8")
+          start = html.find("<script>")
+          end = html.find("</script>", start)
+          if start < 0 or end < 0:
+              raise SystemExit("Could not locate dashboard script")
+          Path("/tmp/dashboard.js").write_text(html[start + 8:end], encoding="utf-8")
+          PY
+          node --check /tmp/dashboard.js
