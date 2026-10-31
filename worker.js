@@ -41,6 +41,27 @@ function restoreCachedResponse(cached) {
   return new Response(cached.body, { status: originalStatus, statusText, headers });
 }
 
+const PROVIDER_COOLDOWN_SECONDS = 60;
+function providerCooldownKey(provider) {
+  return new Request("https://radar-cache.invalid/provider-cooldown/" + provider);
+}
+async function readProviderCooldown(provider) {
+  if (typeof caches === "undefined" || !caches.default) return null;
+  try {
+    const cached = await caches.default.match(providerCooldownKey(provider));
+    return cached ? restoreCachedResponse(cached) : null;
+  } catch (_) { return null; }
+}
+async function writeProviderCooldown(provider, response) {
+  if (typeof caches === "undefined" || !caches.default) return;
+  const retryAfter = Number(response.headers.get("retry-after") || 0);
+  const ttl = Math.min(180, Math.max(PROVIDER_COOLDOWN_SECONDS, retryAfter || 0));
+  const headers = new Headers({ "x-radar-original-status": "429", "cache-control": "public, max-age=" + ttl });
+  try {
+    await caches.default.put(providerCooldownKey(provider), new Response("Provider rate limited", { status: 200, headers }));
+  } catch (_) {}
+}
+
 async function fetchGeckoTerminal(endpoint) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(endpoint, { method: "GET" });
@@ -50,6 +71,8 @@ async function fetchGeckoTerminal(endpoint) {
       if (cached) return restoreCachedResponse(cached);
     } catch (_) {}
   }
+  const providerCooldown = await readProviderCooldown("geckoterminal");
+  if (providerCooldown) return providerCooldown;
 
   let lastResponse;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -59,6 +82,7 @@ async function fetchGeckoTerminal(endpoint) {
     // Do not immediately retry rate-limited public APIs: cache the 429 briefly
     // so repeated mobile refreshes do not amplify provider throttling.
     if (response.status === 429) {
+      await writeProviderCooldown("geckoterminal", response);
       if (cache) {
         const headers = new Headers(response.headers);
         headers.set("x-radar-original-status", "429");
@@ -106,9 +130,12 @@ async function fetchDexPaprikaJson(endpoint) {
       if (cached) return restoreCachedResponse(cached);
     } catch (_) {}
   }
+  const providerCooldown = await readProviderCooldown("dexpaprika");
+  if (providerCooldown) return providerCooldown;
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
   // Cache provider-side quota/auth failures too: retrying HTTP 402 on every
   // refresh cannot restore access and only adds noise to an already partial scan.
+  if (response.status === 429) await writeProviderCooldown("dexpaprika", response);
   if (cache && (response.ok || [401, 402, 403, 429].includes(response.status))) {
     const headers = new Headers(response.headers);
     const shouldCacheError = !response.ok;
@@ -136,7 +163,10 @@ async function fetchDexScreenerJson(endpoint) {
       if (cached) return restoreCachedResponse(cached);
     } catch (_) {}
   }
+  const providerCooldown = await readProviderCooldown("dexscreener");
+  if (providerCooldown) return providerCooldown;
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
+  if (response.status === 429) await writeProviderCooldown("dexscreener", response);
   if (response.status === 429 && cache) {
     // Briefly cache rate-limit responses to prevent each chain fallback from
     // hammering the same shared profile/boost feeds on every refresh.
