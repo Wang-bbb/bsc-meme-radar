@@ -145,7 +145,7 @@ async function scan(){
     $("status").textContent=(failures.length?"部分链扫描失败："+failures.join("；")+"。":"四链扫描完成。")+
       " 原始池 "+all.length+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"。"+
       "仅对每条链最早的5个候选执行本轮安全检测，未检查的币不会进入通过筛查列表。"+
-      (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", "):"");
+      (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", ")+"；失败链未返回有效数据，零结果不代表没有新池。":"");
   }catch(e){
     $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试。";
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
