@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101827">
 <link rel="manifest" href="./manifest.json">
-<title>BSC Meme 雷达</title>
+<title>多链 Meme Radar</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#edf4ff;font:15px system-ui,-apple-system,sans-serif}
 header{padding:22px 16px;background:#14233a;border-bottom:1px solid #2b3b52}h1{margin:0 0 5px;font-size:23px}header p,.muted{color:#9aabc4;font-size:13px}
@@ -23,17 +23,17 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 </style>
 </head>
 <body>
-<header><h1>🛰️ BSC Meme 雷达</h1><p>只读观察 · BNB Smart Chain · 多 DEX · 直接 USDT 交易对</p></header>
+<header><h1>🛰️ 多链 Meme Radar</h1><p>只读观察 · BSC / Solana / Ethereum / Base · 早期新池优先</p></header>
 <main>
 <div class="bar">
 <button id="refresh">↻ 刷新扫描</button>
 <select id="age"><option value="15">最近 15 分钟</option><option value="30">最近 30 分钟</option><option value="60">最近 60 分钟</option></select>
 <button id="notify">开启通知权限</button>
 </div>
-<div id="status" class="status">数据源：BSC 链上多个 DEX 新池事件。点击刷新开始扫描。</div>
+<div id="status" class="status">数据源：BSC 链上扫描 + Solana / Ethereum / Base 第三方新池索引。点击刷新开始扫描。</div>
 <div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div>
 <div class="note">
-<b>数据说明：</b>新池来自已接入 DEX 的 V2 PairCreated 和 V3 PoolCreated 链上事件；只筛选与指定 BSC USDT 合约直接配对的池。流动性按 USDT 储备 × 2 粗略估算。成交量、买卖次数和价格变化按本次扫描到的 Swap 事件统计。当前覆盖 PancakeSwap、Biswap、ApeSwap、MDEX、BabySwap、Nomiswap、Uniswap；未覆盖全部 BSC DEX。V3 成交统计暂未接入，RPC 也可能限流。
+<b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 首阶段使用 GeckoTerminal 新池索引。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口主要识别 BSC USDT 直连池；其他链的 USDT 直连标记和钱包兑换路径仍需后续按各链真实合约地址及实时报价验证。
 <br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
@@ -45,36 +45,55 @@ const ageText=n=>{if(n==null||!Number.isFinite(Number(n)))return "未知";n=Numb
 const pct=n=>n==null?"—":(Number(n)>0?"+":"")+Number(n).toFixed(2)+"%";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function scan(){
-  $("status").textContent="正在读取 BSC 链上新池事件…";
+  $("status").textContent="正在扫描四条链：BSC、Solana、Ethereum、Base…";
   $("cards").innerHTML='<div class="empty">扫描中，请稍候…</div>';
   try{
     const minutes=Number($("age").value);
-    const response=await fetch(API_BASE.replace(/\/$/,"")+"/scan?minutes="+minutes);
-    const data=await response.json();
-    if(!response.ok||!data.ok)throw Error(data.error||("数据服务返回 "+response.status));
-    const pools=data.pools||[];
+    const base=API_BASE.replace(/\\/$/,"");
+    const settled=await Promise.allSettled([
+      fetch(base+"/scan?minutes="+minutes+"&minLiquidity=5000").then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||("BSC HTTP "+r.status));return d;}),
+      fetch(base+"/multiscan?minutes="+minutes+"&minLiquidity=5000").then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||("多链 HTTP "+r.status));return d;})
+    ]);
+    const failures=[];
+    const bsc=settled[0].status==="fulfilled"?settled[0].value:null;
+    const multi=settled[1].status==="fulfilled"?settled[1].value:null;
+    if(!bsc)failures.push("BSC："+(settled[0].reason?.message||"扫描失败"));
+    if(!multi)failures.push("Solana/Ethereum/Base："+(settled[1].reason?.message||"扫描失败"));
+    const pools=[];
+    if(bsc)(bsc.pools||[]).forEach(p=>pools.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl}));
+    if(multi)(multi.pools||[]).forEach(p=>pools.push(p));
+    pools.sort((a,b)=>(Number(a.ageMinutes)||0)-(Number(b.ageMinutes)||0));
     if(!pools.length){
-      $("cards").innerHTML='<div class="empty">最近 '+minutes+' 分钟内，没有找到达到流动性门槛的已接入 DEX USDT 新池。</div>';
+      $("cards").innerHTML='<div class="empty">本轮没有发现达到 $5,000 流动性门槛的候选池。若有链扫描失败，请查看上方错误信息。</div>';
     }else{
       $("cards").innerHTML=pools.map(p=>{
-        const price=pct(p.priceChange1h);
-        const priceLabel=p.priceChange1h==null?"价格变化：数据不足":"价格变化（首末可观测 Swap）："+price;
+        const quote=esc(p.quoteSymbol||"未知报价资产");
+        const usdtStatus=p.chain==="BSC"?"BSC USDT 直连池":(p.usdtDirect?"报价符号为 USDT（合约地址待校验）":"USDT 兑换路径未验证");
+        const price=p.priceChange1h==null?"—":pct(p.priceChange1h);
+        const poolLink=p.poolUrl||p.dexScreenerUrl||"#";
+        const tokenLink=p.bscScanUrl||(p.chain==="Solana"?"https://solscan.io/token/"+encodeURIComponent(p.tokenAddress):p.chain==="Base"?"https://basescan.org/token/"+encodeURIComponent(p.tokenAddress):"https://etherscan.io/token/"+encodeURIComponent(p.tokenAddress));
         return '<article class="card">'+
-          '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.tokenAddress)+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
+          '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
+          '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
           '<div class="stats">'+
           '<div class="stat"><small>估算流动性 USD</small><strong>$'+fmt(p.liquidityUSDApprox)+'</strong></div>'+
           '<div class="stat"><small>近1小时成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
-          '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?'待接入':p.buys1h+' / '+p.sells1h)+'</strong></div>'+
-          '<div class="stat"><small>价格变化</small><strong>'+esc(priceLabel)+'</strong></div>'+
-          '</div><div class="muted">USDT 储备：$'+fmt(p.usdtReserve)+' · '+esc(p.dex)+'</div>'+
-          '<div class="links"><a target="_blank" rel="noopener" href="'+esc(p.poolUrl)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(p.bscScanUrl)+'">查看合约 ↗</a></div>'+
-          '<div class="note">'+esc(p.riskNote)+'</div></article>';
+          '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
+          '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div>'+
+          '</div><div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
+          '<div class="links"><a target="_blank" rel="noopener" href="'+esc(poolLink)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(tokenLink)+'">查看合约 ↗</a><a href="#" data-copy="'+esc(p.tokenAddress||"")+'">复制合约</a></div>'+
+          '<div class="note">'+esc(p.riskNote||"早期新池风险高，请独立核实合约、持币集中度、卖出能力及流动性变化。")+'</div></article>';
       }).join("");
+      document.querySelectorAll("[data-copy]").forEach(a=>a.addEventListener("click",async e=>{
+        e.preventDefault();const value=a.getAttribute("data-copy");if(!value)return;
+        try{await navigator.clipboard.writeText(value);a.textContent="已复制";}catch(_){a.textContent="复制失败";}
+      }));
     }
-    let extra=data.swapStatsAvailable?"":"；Swap 统计暂不可用";
-    $("status").textContent="扫描完成：发现 "+data.createdPairsFound+" 个相关新池事件，筛出 "+pools.length+" 个符合流动性条件的池。区块 "+data.latestBlock+" · "+new Date(data.generatedAt).toLocaleTimeString()+extra;
+    $("status").textContent=(failures.length?"部分扫描失败："+failures.join("；")+"。":"四链扫描完成。")+
+      " 符合条件候选 "+pools.length+" 个（BSC "+(bsc?.count??"—")+"；Solana/Ethereum/Base "+(multi?.count??"—")+"）。按池龄从新到旧排序。"+
+      (multi?.chainErrors?.length?"；第三方数据源错误："+multi.chainErrors.map(x=>x.chain).join(", "):"");
   }catch(e){
-    $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试或检查 RPC 状态。";
+    $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试。";
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
   }
 }
