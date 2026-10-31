@@ -596,6 +596,10 @@ export default {
             const volume1h = Number(a.volume_usd && a.volume_usd.h1 || 0);
             const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
               ? Number(a.price_change_percentage.h1) : null;
+            const priceChange5m = a.price_change_percentage && a.price_change_percentage.m5 != null
+              ? Number(a.price_change_percentage.m5) : null;
+            const priceChange15m = a.price_change_percentage && a.price_change_percentage.m15 != null
+              ? Number(a.price_change_percentage.m15) : null;
             const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
             const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
             const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
@@ -613,7 +617,8 @@ export default {
               createdAt: new Date(created).toISOString(), ageMinutes: Math.round(ageMinutes * 10) / 10,
               liquidityUSDApprox: liquidity, volume1hUSD: volume1h,
               buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
-              priceChange1h, usdtRouteStatus: "not_verified", source: "GeckoTerminal",
+              priceChange1h, priceChange5m, priceChange15m,
+              usdtRouteStatus: "not_verified", source: "GeckoTerminal",
               riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
             });
             chainPoolCount++;
@@ -701,6 +706,8 @@ export default {
                   volume1hUSD: Number(pair.volume && pair.volume.h1 || 0),
                   buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
                   priceChange1h: pair.priceChange && pair.priceChange.h1 != null ? Number(pair.priceChange.h1) : null,
+                  priceChange5m: pair.priceChange && pair.priceChange.m5 != null ? Number(pair.priceChange.m5) : null,
+                  priceChange15m: pair.priceChange && pair.priceChange.m15 != null ? Number(pair.priceChange.m15) : null,
                   usdtRouteStatus: "not_verified",
                   source: "DexScreener profiles + boosts fallback",
                   riskNote: "备用索引合并 DexScreener 最新 Token Profile 与 Boost 名单反查交易池，覆盖范围小于完整新池索引；不代表捕获该链全部新池。"
@@ -776,6 +783,8 @@ export default {
                     volume1hUSD: Number(activity.volume_usd || 0),
                     buys1h: Number(activity.buys || 0), sells1h: Number(activity.sells || 0),
                     priceChange1h: activity.last_price_usd_change == null ? null : Number(activity.last_price_usd_change),
+                    priceChange5m: summary.price_change_percentage_5m != null ? Number(summary.price_change_percentage_5m) : null,
+                    priceChange15m: null,
                     usdtRouteStatus: "not_verified", source: "DexPaprika independent fallback",
                     riskNote: "第三方独立备用索引；只返回首批有限池并逐池补充代币信息，覆盖范围不完整；USDT 路由未验证。"
                   });

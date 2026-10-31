@@ -46,8 +46,22 @@ const pct=n=>n==null?"—":(Number(n)>0?"+":"")+Number(n).toFixed(2)+"%";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function priceRisk(p){
   const change=p.priceChange1h==null?null:Number(p.priceChange1h);
+  const short5=p.priceChange5m==null?null:Number(p.priceChange5m);
+  const short15=p.priceChange15m==null?null:Number(p.priceChange15m);
   const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
   const trades=buys+sells;
+  if(short5!==null&&Number.isFinite(short5)&&short5<=-15){
+    return {level:"blocked",reason:"近5分钟价格急跌"+Math.abs(short5).toFixed(1)+"%，触发短周期暴跌拦截（阈值15%）"};
+  }
+  if(short15!==null&&Number.isFinite(short15)&&short15<=-25){
+    return {level:"blocked",reason:"近15分钟价格急跌"+Math.abs(short15).toFixed(1)+"%，触发短周期暴跌拦截（阈值25%）"};
+  }
+  if(short5!==null&&Number.isFinite(short5)&&short5<=-8){
+    return {level:"review",reason:"近5分钟价格下跌"+Math.abs(short5).toFixed(1)+"%，触发短周期高波动复核（阈值8%）"};
+  }
+  if(short15!==null&&Number.isFinite(short15)&&short15<=-12){
+    return {level:"review",reason:"近15分钟价格下跌"+Math.abs(short15).toFixed(1)+"%，触发短周期高波动复核（阈值12%）"};
+  }
   if(change===null||!Number.isFinite(change)){
     return {level:"review",reason:"缺少近1小时价格变化数据，无法排除暴跌风险"};
   }
@@ -159,6 +173,7 @@ async function scan(){
         '<div class="stat"><small>近1小时成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
         '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
         '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
+        '<div class="muted">短周期价格变化：5分钟 '+(p.priceChange5m==null?"—":pct(p.priceChange5m))+' · 15分钟 '+(p.priceChange15m==null?"—":pct(p.priceChange15m))+'</div>'+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         (p.source?'<div class="muted">数据源：'+esc(p.source)+'</div>':'')+
