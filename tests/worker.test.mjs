@@ -72,6 +72,14 @@ test("Solana security gate keeps elevated or incomplete reports in review", asyn
   assert.equal(data.status, "review");
 });
 
+
+test("non-BSC preflight requests do not depend on the NodeReal secret", async () => {
+  const req = new Request("https://worker.test/multiscan", { method: "OPTIONS" });
+  const res = await worker.fetch(req, {});
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("access-control-allow-origin"), "*");
+});
+
 test("multiscan combines indexed pools and applies the age and liquidity filters", async () => {
   const networks = ["solana", "eth", "base"];
   globalThis.fetch = async (input) => {
@@ -106,7 +114,7 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
       ]
     });
   };
-  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), env);
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
   const data = await res.json();
   assert.equal(data.ok, true);
   assert.equal(data.complete, true);
