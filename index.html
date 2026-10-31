@@ -50,7 +50,7 @@ async function scan(){
   $("review-cards").innerHTML="";
   try{
     const minutes=Number($("age").value);
-    const base=API_BASE.replace(/\\/$/,"");
+    const base=API_BASE.replace(/\/$/,"");
     const settled=await Promise.allSettled([
       fetch(base+"/scan?minutes="+minutes+"&minLiquidity=5000").then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||("BSC HTTP "+r.status));return d;}),
       fetch(base+"/multiscan?minutes="+minutes+"&minLiquidity=5000").then(async r=>{const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||("多链 HTTP "+r.status));return d;})
