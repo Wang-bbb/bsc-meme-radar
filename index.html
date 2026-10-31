@@ -49,8 +49,22 @@ function priceRisk(p){
   const short5=p.priceChange5m==null?null:Number(p.priceChange5m);
   const short15=p.priceChange15m==null?null:Number(p.priceChange15m);
   const drawdown=p.drawdownFromHighPct==null?null:Number(p.drawdownFromHighPct);
+  const liquidity5=p.liquidityChange5mPct==null?null:Number(p.liquidityChange5mPct);
+  const liquidity15=p.liquidityChange15mPct==null?null:Number(p.liquidityChange15mPct);
   const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
   const trades=buys+sells;
+  if(liquidity5!==null&&Number.isFinite(liquidity5)&&liquidity5<=-40){
+    return {level:"blocked",reason:"近5分钟流动性减少"+Math.abs(liquidity5).toFixed(1)+"%，触发LP快速流失拦截（阈值40%）"};
+  }
+  if(liquidity15!==null&&Number.isFinite(liquidity15)&&liquidity15<=-40){
+    return {level:"blocked",reason:"近15分钟流动性减少"+Math.abs(liquidity15).toFixed(1)+"%，触发LP快速流失拦截（阈值40%）"};
+  }
+  if(liquidity5!==null&&Number.isFinite(liquidity5)&&liquidity5<=-20){
+    return {level:"review",reason:"近5分钟流动性减少"+Math.abs(liquidity5).toFixed(1)+"%，触发LP流失复核（阈值20%）"};
+  }
+  if(liquidity15!==null&&Number.isFinite(liquidity15)&&liquidity15<=-20){
+    return {level:"review",reason:"近15分钟流动性减少"+Math.abs(liquidity15).toFixed(1)+"%，触发LP流失复核（阈值20%）"};
+  }
   if(short5!==null&&Number.isFinite(short5)&&short5<=-12){
     return {level:"blocked",reason:"近5分钟价格急跌"+Math.abs(short5).toFixed(1)+"%，触发短周期暴跌拦截（阈值12%）"};
   }
@@ -83,6 +97,9 @@ function priceRisk(p){
   }
   if(sells>=buys*1.5 && sells>=3){
     return {level:"review",reason:"近1小时卖出次数达到买入次数的1.5倍或以上，存在明显卖压风险"};
+  }
+  if(p.liquiditySnapshotStatus!=="checked"){
+    return {level:"review",reason:p.liquiditySnapshotReason||"流动性历史快照尚未积累足够数据，无法判断LP是否快速流失"};
   }
   if(p.marketHistoryStatus!=="checked"){
     return {level:"review",reason:p.marketHistoryReason||"尚未取得足够的1分钟K线，无法评估高点回撤"};
@@ -135,12 +152,18 @@ async function scan(){
     }
     await Promise.all(historyTargets.map(async p=>{
       const chain=p.chain==="BSC"?"bsc":p.chain==="Solana"?"solana":p.chain==="Base"?"base":"eth";
-      const params=new URLSearchParams({chain,pool:p.pairAddress,token:p.tokenAddress});
+      const params=new URLSearchParams({chain,pool:p.pairAddress,token:p.tokenAddress,liquidity:String(p.liquidityUSDApprox||"")});
       try{
         const response=await fetch(base+"/pool-risk?"+params.toString());
         const data=await response.json();
         p.marketHistoryStatus=data.status||"unavailable";
         p.marketHistoryReason=data.error||"K线数据不足";
+        const snapshot=data.liquiditySnapshot||{};
+        p.liquiditySnapshotStatus=snapshot.status||"unavailable";
+        p.liquiditySnapshotReason=snapshot.error||"流动性历史快照尚未积累足够数据";
+        p.liquidityChange5mPct=snapshot.liquidityChange5mPct;
+        p.liquidityChange15mPct=snapshot.liquidityChange15mPct;
+        p.liquiditySnapshotCount=snapshot.snapshotCount;
         if(data.status==="checked"){
           p.marketHistoryReason="";
           p.drawdownFromHighPct=data.drawdownFromHighPct;
@@ -227,6 +250,7 @@ async function scan(){
         '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
         '<div class="muted">短周期价格变化：5分钟 '+(p.priceChange5m==null?"—":pct(p.priceChange5m))+' · 15分钟 '+(p.priceChange15m==null?"—":pct(p.priceChange15m))+'</div>'+
         '<div class="muted">观察区间高点回撤（'+esc(p.marketHistoryCandleCount==null?'—':p.marketHistoryCandleCount)+'根）：'+(p.drawdownFromHighPct==null?"—":pct(p.drawdownFromHighPct))+' · K线：'+esc(p.marketHistoryStatus||"未检查")+'</div>'+
+        '<div class="muted">流动性变化：5分钟 '+(p.liquidityChange5mPct==null?"—":pct(p.liquidityChange5mPct))+' · 15分钟 '+(p.liquidityChange15mPct==null?"—":pct(p.liquidityChange15mPct))+' · 快照：'+esc(p.liquiditySnapshotStatus||"未检查")+'（'+esc(p.liquiditySnapshotCount==null?'0':p.liquiditySnapshotCount)+'条）</div>'+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         (p.source?'<div class="muted">数据源：'+esc(p.source)+'</div>':'')+

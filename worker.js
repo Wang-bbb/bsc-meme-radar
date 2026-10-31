@@ -435,6 +435,64 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
   };
 }
 
+async function recordLiquiditySnapshot(env, network, poolAddress, liquidityUSD) {
+  const kv = env && env.RADAR_KV;
+  if (!kv || typeof kv.get !== "function" || typeof kv.put !== "function") {
+    return {
+      status: "not_configured",
+      error: "Cloudflare KV 尚未绑定（RADAR_KV），流动性历史快照暂不可用"
+    };
+  }
+  const currentLiquidity = Number(liquidityUSD);
+  if (!Number.isFinite(currentLiquidity) || currentLiquidity <= 0) {
+    return { status: "insufficient", error: "缺少有效的当前流动性数值，无法记录快照" };
+  }
+  const key = "liquidity:v1:" + network + ":" + poolAddress;
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const stored = await kv.get(key, "json");
+    const history = Array.isArray(stored && stored.snapshots) ? stored.snapshots : [];
+    const latest = history[history.length - 1];
+    if (!latest || now - Number(latest.timestamp) >= 55) {
+      history.push({ timestamp: now, liquidityUSD: currentLiquidity });
+    }
+    const recent = history.filter((item) =>
+      Number.isFinite(Number(item.timestamp)) &&
+      Number.isFinite(Number(item.liquidityUSD)) &&
+      Number(item.liquidityUSD) > 0 &&
+      Number(item.timestamp) >= now - 2 * 60 * 60
+    ).slice(-120);
+    await kv.put(key, JSON.stringify({ snapshots: recent }), { expirationTtl: 86400 });
+    const newest = recent[recent.length - 1];
+    const changeSince = (minutes) => {
+      const target = Number(newest.timestamp) - minutes * 60;
+      const reference = recent.reduce((best, item) =>
+        !best || Math.abs(Number(item.timestamp) - target) < Math.abs(Number(best.timestamp) - target) ? item : best
+      , null);
+      if (!reference || reference === newest) return null;
+      const elapsed = Number(newest.timestamp) - Number(reference.timestamp);
+      const minElapsed = minutes === 5 ? 240 : 720;
+      const maxElapsed = minutes === 5 ? 480 : 1080;
+      if (elapsed < minElapsed || elapsed > maxElapsed) return null;
+      return Math.round((Number(newest.liquidityUSD) / Number(reference.liquidityUSD) - 1) * 10000) / 100;
+    };
+    const change5m = changeSince(5);
+    const change15m = changeSince(15);
+    const checked = change5m !== null || change15m !== null;
+    return {
+      status: checked ? "checked" : "collecting",
+      snapshotCount: recent.length,
+      liquidityUSD: currentLiquidity,
+      liquidityChange5mPct: change5m,
+      liquidityChange15mPct: change15m,
+      latestSnapshotAt: new Date(Number(newest.timestamp) * 1000).toISOString(),
+      source: "Cloudflare KV liquidity snapshots"
+    };
+  } catch (error) {
+    return { status: "unavailable", error: "KV 快照读写失败：" + String(error) };
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -450,18 +508,20 @@ export default {
       const network = url.searchParams.get("chain") || "";
       const poolAddress = url.searchParams.get("pool") || "";
       const tokenAddress = url.searchParams.get("token") || "";
+      const liquidityUSD = url.searchParams.get("liquidity");
       if (!["bsc", "solana", "eth", "base"].includes(network)) {
         return json({ ok: false, status: "unavailable", error: "Unsupported GeckoTerminal network" }, 400);
       }
       if (!poolAddress || !tokenAddress || poolAddress.length > 160 || tokenAddress.length > 160) {
         return json({ ok: false, status: "unavailable", error: "pool and token are required" }, 400);
       }
+      const liquiditySnapshot = await recordLiquiditySnapshot(env, network, poolAddress, liquidityUSD);
       try {
         const history = await getPoolMarketHistory(network, poolAddress, tokenAddress);
-        return json({ ok: true, chain: network, poolAddress, tokenAddress, ...history });
+        return json({ ok: true, chain: network, poolAddress, tokenAddress, ...history, liquiditySnapshot });
       } catch (error) {
         return json({ ok: true, chain: network, poolAddress, tokenAddress,
-          status: "unavailable", error: String(error) });
+          status: "unavailable", error: String(error), liquiditySnapshot });
       }
     }
     if (url.pathname === "/history") {
