@@ -491,14 +491,15 @@ test("multiscan applies provider-wide 429 cooldown across chains and refreshes",
     assert.equal(firstData.complete, false);
     assert.equal(firstData.chainErrors.length, 3);
     assert.ok(firstData.chainErrors.every(error => error.error.includes("HTTP 429")));
-    assert.deepEqual(calls, { gecko: 1, dex: 1, paprika: 1 });
+    assert.deepEqual(calls, { gecko: 1, dex: 2, paprika: 1 },
+      "DexScreener profiles and boosts are parallel feed requests on the first scan");
 
     const second = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
     const secondData = await second.json();
     assert.equal(secondData.complete, false);
     assert.equal(secondData.chainErrors.length, 3);
-    assert.deepEqual(calls, { gecko: 1, dex: 1, paprika: 1 },
-      "provider-wide cooldown should suppress repeat calls across all chains");
+    assert.deepEqual(calls, { gecko: 1, dex: 2, paprika: 1 },
+      "provider-wide cooldown should suppress repeat calls across all chains and immediate refreshes");
   } finally {
     if (originalCaches === undefined) delete globalThis.caches;
     else globalThis.caches = originalCaches;
