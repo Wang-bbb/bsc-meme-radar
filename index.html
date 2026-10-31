@@ -51,36 +51,41 @@ function priceRisk(p){
   const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
   const trades=buys+sells;
   if(short5!==null&&Number.isFinite(short5)&&short5<=-12){
-    return {level:"blocked",reason:"近5分钟价格急跌"+Math.abs(short5).toFixed(1)+"%，触发加强版短周期暴跌拦截（阈值12%）"};
+    return {level:"blocked",reason:"近5分钟价格急跌"+Math.abs(short5).toFixed(1)+"%，触发短周期暴跌拦截（阈值12%）"};
   }
   if(short15!==null&&Number.isFinite(short15)&&short15<=-20){
-    return {level:"blocked",reason:"近15分钟价格急跌"+Math.abs(short15).toFixed(1)+"%，触发加强版短周期暴跌拦截（阈值20%）"};
+    return {level:"blocked",reason:"近15分钟价格急跌"+Math.abs(short15).toFixed(1)+"%，触发短周期暴跌拦截（阈值20%）"};
   }
   if(short5!==null&&Number.isFinite(short5)&&short5<=-6){
-    return {level:"review",reason:"近5分钟价格下跌"+Math.abs(short5).toFixed(1)+"%，触发加强版高波动复核（阈值6%）"};
+    return {level:"review",reason:"近5分钟价格下跌"+Math.abs(short5).toFixed(1)+"%，触发高波动复核（阈值6%）"};
   }
   if(short15!==null&&Number.isFinite(short15)&&short15<=-10){
-    return {level:"review",reason:"近15分钟价格下跌"+Math.abs(short15).toFixed(1)+"%，触发加强版高波动复核（阈值10%）"};
+    return {level:"review",reason:"近15分钟价格下跌"+Math.abs(short15).toFixed(1)+"%，触发高波动复核（阈值10%）"};
   }
   if(change===null||!Number.isFinite(change)){
     return {level:"review",reason:"缺少近1小时价格变化数据，无法排除暴跌风险"};
   }
   if(change<=-25){
-    return {level:"blocked",reason:"近1小时价格下跌"+Math.abs(change).toFixed(1)+"%，触发加强版暴跌拦截（阈值25%）"};
+    return {level:"blocked",reason:"近1小时价格下跌"+Math.abs(change).toFixed(1)+"%，触发暴跌拦截（阈值25%）"};
   }
   if(change<=-10){
-    return {level:"review",reason:"近1小时价格下跌"+Math.abs(change).toFixed(1)+"%，触发加强版高波动复核（阈值10%）"};
+    return {level:"review",reason:"近1小时价格下跌"+Math.abs(change).toFixed(1)+"%，触发高波动复核（阈值10%）"};
   }
   if(trades<5){
     return {level:"review",reason:"近1小时有效买卖笔数不足5笔，交易活跃度太低，暂不列为优先观察候选"};
   }
-  if(change<0&&trades>=5&&sells>=buys*1.5){
-    return {level:"review",reason:"价格下跌且卖出次数达到买入次数的1.5倍，存在明显卖压风险"};
+  // Sell pressure matters even before the hourly price turns negative.
+  if(sells>=buys*1.5 && sells>=3){
+    return {level:"review",reason:"近1小时卖出次数达到买入次数的1.5倍或以上，存在明显卖压风险"};
   }
   if(short5===null||!Number.isFinite(short5)||short15===null||!Number.isFinite(short15)){
     return {level:"review",reason:"缺少5分钟或15分钟行情，短周期急跌风险无法完整评估"};
   }
-  return {level:"clear",reason:"现有短周期及1小时行情未触发加强版风险阈值；不代表安全或不会归零"};
+  // Large gains are not a rejection signal: retain strong movers but label them volatile.
+  if(change>=100){
+    return {level:"watch",reason:"近1小时涨幅达到"+change.toFixed(1)+"%；不因涨幅拦截，列为高波动观察，继续关注回撤、卖压和流动性"};
+  }
+  return {level:"clear",reason:"现有短周期及1小时行情未触发风险阈值；不代表安全或不会归零"};
 }
 async function scan(){
   $("status").textContent="正在扫描四条链并进行安全检测…";
@@ -184,6 +189,7 @@ async function scan(){
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         (p.source?'<div class="muted">数据源：'+esc(p.source)+'</div>':'')+
         (p.tokenSelectionNote?'<div class="muted">代币识别：'+esc(p.tokenSelectionNote)+'</div>':'')+
+        (p.priceRisk?.level==="watch"?'<div class="muted">行情提示：'+esc(p.priceRisk.reason)+'</div>':'')+
         (p.pendingReason?'<div class="muted">未通过原因：'+esc(p.pendingReason)+'</div>':'')+
         '<div class="links"><a target="_blank" rel="noopener" href="'+esc(poolLink)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(tokenLink)+'">查看合约 ↗</a><a href="#" data-copy="'+esc(p.tokenAddress||"")+'">复制合约</a></div>'+
         '<div class="note">'+esc(p.riskNote||"安全筛查不能保证绝对安全，请持续观察合约权限、持币集中度和流动性变化。")+'</div></article>';

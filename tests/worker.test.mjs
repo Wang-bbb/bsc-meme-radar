@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import worker from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
@@ -505,5 +507,66 @@ test("multiscan applies provider-wide 429 cooldown across chains and refreshes",
   } finally {
     if (originalCaches === undefined) delete globalThis.caches;
     else globalThis.caches = originalCaches;
+  }
+});
+
+
+const REGRESSION_SAMPLE_MINTS = [
+  "fu7JWsUtgQyJ84VaStM5yypTk6rtLPitpJrQKxvpump",
+  "Atra2xApQEEoLaEZ188Cqcywo9XGtNnnGgGQDveZpump",
+  "8DKHFW32ApiG6xLYrTDTxkWMGxdDyASfNnSaWwCbpump",
+  "4R9jUfYAifDyiLz9Tx6bHpPqkvh3GRom71YEapkUpump"
+];
+
+function loadDashboardPriceRisk() {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const match = html.match(/function priceRisk\(p\)\{[\s\S]*?\n\}/);
+  assert.ok(match, "dashboard priceRisk function should exist");
+  return vm.runInNewContext("(" + match[0] + ")");
+}
+
+test("price risk does not reject large positive moves solely because of their gain", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    priceChange1h: 180,
+    priceChange5m: 12,
+    priceChange15m: 42,
+    buys1h: 40,
+    sells1h: 15
+  });
+  assert.equal(result.level, "watch");
+  assert.match(result.reason, /不因涨幅拦截/);
+});
+
+test("price risk sends sustained sell pressure to review even before hourly price turns negative", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    priceChange1h: 35,
+    priceChange5m: 2,
+    priceChange15m: 8,
+    buys1h: 10,
+    sells1h: 18
+  });
+  assert.equal(result.level, "review");
+  assert.match(result.reason, /卖出次数/);
+});
+
+test("price risk still blocks a severe short-window dump", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    priceChange1h: 45,
+    priceChange5m: -14,
+    priceChange15m: 8,
+    buys1h: 20,
+    sells1h: 8
+  });
+  assert.equal(result.level, "blocked");
+});
+
+test("four user-reported Solana dump cases are retained as regression sample identifiers", () => {
+  assert.equal(REGRESSION_SAMPLE_MINTS.length, 4);
+  assert.equal(new Set(REGRESSION_SAMPLE_MINTS).size, 4);
+  for (const mint of REGRESSION_SAMPLE_MINTS) {
+    assert.match(mint, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
   }
 });
