@@ -284,8 +284,8 @@ export default {
       const errors = [];
       for (const network of networks) {
         try {
-          const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token";
-          const response = await fetch(endpoint, { headers: { "accept": "application/json;version=20230302" } });
+          const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
+          const response = await fetch(endpoint, { headers: { "accept": "application/json;version=20230203" } });
           if (!response.ok) throw new Error("GeckoTerminal HTTP " + response.status);
           const body = await response.json();
           const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
@@ -296,6 +296,8 @@ export default {
             const quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
             const base = included.get(baseId) || {};
             const quote = included.get(quoteId) || {};
+            const dexId = rel.dex && rel.dex.data && rel.dex.data.id;
+            const dex = included.get(dexId) || {};
             const created = Date.parse(a.pool_created_at || "");
             const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
             const liquidity = Number(a.reserve_in_usd || 0);
@@ -310,7 +312,7 @@ export default {
             results.push({
               chain: network.name,
               chainId: network.dexChain,
-              dex: a.dex_id || "GeckoTerminal indexed DEX",
+              dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
               symbol: base.symbol || "Unknown",
               name: base.name || "Unknown token",
               tokenAddress: baseAddress,
@@ -349,7 +351,8 @@ export default {
         chainErrors: errors,
         limitations: [
           "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
-          "GeckoTerminal new_pools 为第三方索引的有限分页结果，不保证覆盖全部新池。",
+          "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
+          "GeckoTerminal 公共 API 有约每分钟10次调用的限额，且数据约每分钟缓存更新；频繁刷新可能触发限流。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "USDT 直连暂按报价代币 symbol 标记，尚未完成各链 USDT 合约地址白名单校验；USDT 路由状态暂未验证。",
           "本接口只读，不执行兑换或交易。"
