@@ -58,6 +58,39 @@ test("Solana security gate blocks a RugCheck report marked rugged", async () => 
   assert.equal(data.status, "blocked");
 });
 
+test("Solana security gate distinguishes unknown LP lock data from confirmed low lock percentage", async () => {
+  globalThis.fetch = async () => response({
+    tokenProgram: "spl-token",
+    risks: [],
+    score_normalised: 1,
+    mintAuthority: null,
+    freezeAuthority: null
+  });
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.equal(data.lpLockedPct, null);
+  assert.equal(data.liquidityLockStatus, "unknown");
+  assert.ok(data.reasons.some(reason => reason.includes("数据缺失，无法确认")));
+  assert.ok(!data.reasons.some(reason => reason.includes("低于80%")));
+});
+
+test("Solana security gate reports a numeric LP lock percentage below threshold separately", async () => {
+  globalThis.fetch = async () => response({
+    tokenProgram: "spl-token",
+    risks: [],
+    score_normalised: 1,
+    lpLockedPct: 55,
+    mintAuthority: null,
+    freezeAuthority: null
+  });
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.equal(data.liquidityLockStatus, "below_threshold");
+  assert.ok(data.reasons.some(reason => reason.includes("已报告的流动性锁定比例低于80%")));
+});
+
 test("Solana security gate keeps elevated or incomplete reports in review", async () => {
   globalThis.fetch = async () => response({
     tokenProgram: "spl-token",
