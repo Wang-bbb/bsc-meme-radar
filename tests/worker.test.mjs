@@ -88,6 +88,11 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
     assert.ok(networks.includes(network));
     const tokenId = network + "_token";
     const quoteId = network + "_quote";
+    const verifiedUsdc = {
+      solana: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      eth: "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    }[network];
     const dexId = network + "_dex";
     const poolAddress = "PoolAddress" + network;
     return response({
@@ -109,7 +114,7 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
       }],
       included: [
         { id: tokenId, attributes: { address: "Token" + network, symbol: "MEME", name: "Meme Token" } },
-        { id: quoteId, attributes: { address: "Quote" + network, symbol: "USDC", name: "USD Coin" } },
+        { id: quoteId, attributes: { address: verifiedUsdc, symbol: "USDC", name: "USD Coin" } },
         { id: dexId, attributes: { name: "Test DEX" } }
       ]
     });
@@ -122,6 +127,8 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
   assert.ok(data.pools.every(pool => pool.liquidityUSDApprox >= 5000));
   assert.ok(data.pools.every(pool => pool.ageMinutes <= 15));
   assert.ok(data.pools.every(pool => pool.usdtRouteStatus === "not_verified"));
+  assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
+  assert.ok(data.pools.every(pool => pool.tokenAddress === "Token" + pool.chainId));
 });
 
 test("Solana security gate keeps active mint or freeze authorities in review", async () => {
