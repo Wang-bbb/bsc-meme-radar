@@ -137,3 +137,20 @@ test("Solana security gate keeps active mint or freeze authorities in review", a
   assert.equal(data.status, "review");
   assert.ok(data.reasons.some(reason => reason.includes("Authority")));
 });
+
+test("Solana security gate keeps missing authority fields in review", async () => {
+  globalThis.fetch = async (input) => {
+    assert.match(String(input), /\/report$/);
+    return response({
+      tokenProgram: "spl-token",
+      risks: [],
+      score_normalised: 5,
+      lpLockedPct: 100,
+      token: { supply: "1000000", decimals: 6 }
+    });
+  };
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.ok(data.reasons.some(reason => reason.includes("状态缺失")));
+});
