@@ -202,6 +202,9 @@ test("multiscan falls back to DexScreener profiles when GeckoTerminal is rate li
         chainId, tokenAddress: item.token
       })));
     }
+    if (url.pathname === "/token-boosts/latest/v1") {
+      return response([]);
+    }
     if (url.pathname.startsWith("/tokens/v1/")) {
       const chainId = url.pathname.split("/")[3];
       const item = networks[chainId];
@@ -229,7 +232,48 @@ test("multiscan falls back to DexScreener profiles when GeckoTerminal is rate li
   assert.deepEqual(data.fallbackChains.sort(), ["Base", "Ethereum", "Solana"]);
   assert.equal(data.chainErrors.length, 0);
   assert.equal(data.pools.length, 3);
-  assert.ok(data.pools.every(pool => pool.source === "DexScreener latest token profiles fallback"));
+  assert.ok(data.pools.every(pool => pool.source === "DexScreener profiles + boosts fallback"));
   assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
   assert.ok(data.chainSources.every(source => source.status === "fallback" && source.coverage === "partial"));
+});
+
+
+test("multiscan uses the latest boost feed when token profiles omit a chain", async () => {
+  const token = "0x3333333333333333333333333333333333333333";
+  const quote = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.pathname === "/token-profiles/latest/v1") return response([]);
+    if (url.pathname === "/token-boosts/latest/v1") {
+      return response([{ chainId: "base", tokenAddress: token }]);
+    }
+    if (url.pathname === "/tokens/v1/base/" + token) {
+      return response([{
+        chainId: "base",
+        dexId: "test-dex",
+        pairAddress: "PairBaseBoost",
+        url: "https://dexscreener.com/base/PairBaseBoost",
+        baseToken: { address: token, name: "Boost Meme", symbol: "BOOST" },
+        quoteToken: { address: quote, name: "USD Coin", symbol: "USDC" },
+        pairCreatedAt: Date.now() - 4 * 60_000,
+        liquidity: { usd: 18000 },
+        volume: { h1: 4100 },
+        txns: { h1: { buys: 9, sells: 2 } },
+        priceChange: { h1: 3.1 }
+      }]);
+    }
+    if (url.pathname.startsWith("/tokens/v1/")) return response([]);
+    throw new Error("Unexpected URL " + url.href);
+  };
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.equal(data.chainErrors.some(error => error.chain === "Base"), false);
+  const basePool = data.pools.find(pool => pool.chain === "Base");
+  assert.ok(basePool, "Base pool should be found from the boost feed");
+  assert.equal(basePool.source, "DexScreener profiles + boosts fallback");
+  assert.equal(basePool.tokenSelectionVerified, true);
+  assert.equal(data.chainSources.find(source => source.chain === "Base").coverage, "partial");
 });
