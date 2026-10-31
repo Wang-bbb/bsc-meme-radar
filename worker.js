@@ -657,7 +657,7 @@ export default {
               // providers above fail. Its free endpoint returns one page without a key.
               try {
                 const query = new URLSearchParams({
-                  created_after: String(Math.floor((Date.now() - minutes * 60000) / 60000) * 60),
+                  created_after: "-" + String(minutes) + "m",
                   liquidity_usd_min: String(minLiquidity),
                   order_by: "created_at",
                   sort: "desc",
