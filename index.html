@@ -60,17 +60,21 @@ async function scan(){
     const multi=settled[1].status==="fulfilled"?settled[1].value:null;
     if(!bsc)failures.push("BSC："+(settled[0].reason?.message||"扫描失败"));
     if(!multi)failures.push("Solana/Ethereum/Base："+(settled[1].reason?.message||"扫描失败"));
+    else if(multi.complete===false){
+      (multi.chainErrors||[]).forEach(x=>failures.push((x.chain||"多链")+"："+(x.error||"索引请求失败")));
+      if(!(multi.chainErrors||[]).length)failures.push("Solana/Ethereum/Base：返回了不完整数据");
+    }
     const all=[];
     if(bsc)(bsc.pools||[]).forEach(p=>all.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl}));
     if(multi)(multi.pools||[]).forEach(p=>all.push(p));
-    all.sort((a,b)=>(Number(a.ageMinutes)||0)-(Number(b.ageMinutes)||0));
+    const ageValue=p=>p.ageMinutes==null||!Number.isFinite(Number(p.ageMinutes))?Number.POSITIVE_INFINITY:Number(p.ageMinutes);
+    all.sort((a,b)=>ageValue(a)-ageValue(b));
     const checked=[], pending=[];
-    const perChain={};
-    all.forEach(p=>{perChain[p.chain]=(perChain[p.chain]||0)+1;});
+    const chainCounts={};
     const selected=all.filter(p=>{
-      const key=p.chain;
-      const n=all.filter(x=>x.chain===key).indexOf(p);
-      return n<5;
+      const key=p.chain||"未知链";
+      chainCounts[key]=(chainCounts[key]||0)+1;
+      return chainCounts[key]<=5;
     });
     let cursor=0;
     const workers=Array.from({length:3},async()=>{
