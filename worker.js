@@ -271,6 +271,71 @@ export default {
         }, 502);
       }
     }
+    if (url.pathname === "/security-check") {
+      const chain = String(url.searchParams.get("chain") || "").toLowerCase();
+      const address = String(url.searchParams.get("address") || "").trim();
+      const pair = String(url.searchParams.get("pair") || "").trim();
+      if (!address) return json({ ok: false, status: "unverified", error: "missing token address" }, 400);
+      try {
+        if (chain === "solana") {
+          const response = await fetch("https://api.rugcheck.xyz/v1/tokens/" + encodeURIComponent(address) + "/report/summary", { headers: { "accept": "application/json" } });
+          if (!response.ok) throw new Error("RugCheck HTTP " + response.status);
+          const report = await response.json();
+          const risks = Array.isArray(report.risks) ? report.risks : [];
+          const critical = risks.filter((risk) => ["danger", "critical"].includes(String(risk.level || "").toLowerCase()));
+          const warnings = risks.filter((risk) => ["warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
+          const status = critical.length ? "blocked" : warnings.length ? "review" : "pass";
+          return json({
+            ok: true, chain, tokenAddress: address, provider: "RugCheck",
+            status, riskScore: report.score_normalised ?? null, lpLockedPct: report.lpLockedPct ?? null,
+            risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
+            reasons: critical.length ? critical.map((x) => x.name) : warnings.map((x) => x.name),
+            note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
+          });
+        }
+        const chainIds = { ethereum: 1, eth: 1, bsc: 56, base: 8453 };
+        const chainID = chainIds[chain];
+        if (!chainID) return json({ ok: false, status: "unverified", error: "unsupported chain" }, 400);
+        const params = new URLSearchParams({ address, chainID: String(chainID) });
+        if (pair) params.set("pair", pair);
+        const response = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
+        if (!response.ok) throw new Error("Honeypot.is HTTP " + response.status);
+        const report = await response.json();
+        const simulation = report.simulationResult || {};
+        const flags = Array.isArray(report.summary?.flags) ? report.summary.flags : [];
+        const criticalFlags = flags.filter((x) => String(x.severity || "").toLowerCase() === "critical");
+        const isHoneypot = report.honeypotResult?.isHoneypot === true;
+        const riskLevel = Number.isFinite(Number(report.summary?.riskLevel)) ? Number(report.summary.riskLevel) : null;
+        const buyTax = Number.isFinite(Number(simulation.buyTax)) ? Number(simulation.buyTax) : null;
+        const sellTax = Number.isFinite(Number(simulation.sellTax)) ? Number(simulation.sellTax) : null;
+        const simOK = report.simulationSuccess === true && report.honeypotResult && typeof report.honeypotResult.isHoneypot === "boolean";
+        const hardRisk = isHoneypot || (riskLevel !== null && riskLevel >= 80) ||
+          (sellTax !== null && sellTax >= 20) || (buyTax !== null && buyTax >= 30) || criticalFlags.length > 0;
+        const reviewRisk = !simOK || riskLevel === null || riskLevel >= 60 ||
+          buyTax === null || sellTax === null || buyTax > 10 || sellTax > 10 ||
+          report.contractCode?.rootOpenSource === false;
+        const status = hardRisk ? "blocked" : reviewRisk ? "review" : "pass";
+        return json({
+          ok: true, chain, tokenAddress: address, provider: "Honeypot.is",
+          status, simulationSuccess: report.simulationSuccess === true,
+          isHoneypot: report.honeypotResult?.isHoneypot ?? null,
+          risk: report.summary?.risk || "unknown", riskLevel,
+          buyTax, sellTax, openSource: report.contractCode?.rootOpenSource ?? null,
+          pairAddress: report.pairAddress || report.pair?.pair?.address || null,
+          reasons: [
+            ...(isHoneypot ? ["检测到貔貅/无法正常卖出"] : []),
+            ...(riskLevel !== null && riskLevel >= 60 ? ["Honeypot 风险等级偏高"] : []),
+            ...(sellTax !== null && sellTax > 10 ? ["卖出税超过10%"] : []),
+            ...(!simOK ? ["买卖模拟未成功或结果不完整"] : []),
+            ...(!report.contractCode?.rootOpenSource ? ["合约源码未确认开源"] : []),
+            ...criticalFlags.map((x) => x.description || x.flag)
+          ],
+          note: "模拟结果只代表本次检测时点和检测路径；代币权限或流动性变化后风险可能改变。"
+        });
+      } catch (error) {
+        return json({ ok: true, chain, tokenAddress: address, provider: chain === "solana" ? "RugCheck" : "Honeypot.is", status: "unverified", error: String(error), note: "安全数据不可用，按未验证处理，不进入通过安全检查的观察名单。" });
+      }
+    }
     if (url.pathname === "/multiscan") {
       const minutes = Number(url.searchParams.get("minutes") || 15);
       const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
