@@ -77,16 +77,17 @@ async function readPair(log) {
   const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
   const usdtIs0 = token0 === USDT.toLowerCase();
   const token = usdtIs0 ? token1 : token0;
+  const safeCall = (data) => rpc("eth_call", [{ to: token, data: data }, "latest"]).catch(() => "0x");
   const calls = await Promise.all([
     rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"]),
-    rpc("eth_call", [{ to: token, data: "0x95d89b41" }, "latest"]),
-    rpc("eth_call", [{ to: token, data: "0x06fdde03" }, "latest"]),
-    rpc("eth_call", [{ to: token, data: "0x313ce567" }, "latest"])
+    safeCall("0x95d89b41"),
+    safeCall("0x06fdde03"),
+    safeCall("0x313ce567")
   ]);
   const reserve0 = BigInt("0x" + word(calls[0], 0));
   const reserve1 = BigInt("0x" + word(calls[0], 1));
   const usdtReserve = toFloat(usdtIs0 ? reserve0 : reserve1, 18);
-  const decimals = Math.min(36, Math.max(0, asNumber(calls[3])));
+  const decimals = calls[3] && calls[3] !== "0x" ? Math.min(36, Math.max(0, asNumber(calls[3]))) : 18;
   return {
     pair: pair,
     token0: token0,
@@ -224,7 +225,7 @@ export default {
           swapCount1h: buys1h + sells1h,
           riskNote: "新池风险高；链上新池事件不代表代币安全。请另行核实合约权限、持币集中度、卖出限制及流动性变化。"
         };
-      }).sort((a, b) => b.ageMinutes - a.ageMinutes);
+      }).sort((a, b) => a.ageMinutes - b.ageMinutes);
 
       const pairs = pools.map((p) => ({
         chainId: "bsc",
