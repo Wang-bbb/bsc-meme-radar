@@ -34,11 +34,11 @@ function restoreCachedResponse(cached) {
   const headers = new Headers(cached.headers);
   headers.delete("x-radar-original-status");
   headers.delete("cache-control");
-  return new Response(cached.body, {
-    status: originalStatus,
-    statusText: originalStatus === 429 ? "Too Many Requests" : cached.statusText,
-    headers
-  });
+  const statusText = originalStatus === 402 ? "Payment Required"
+    : originalStatus === 429 ? "Too Many Requests"
+    : originalStatus === 403 ? "Forbidden"
+    : originalStatus === 401 ? "Unauthorized" : cached.statusText;
+  return new Response(cached.body, { status: originalStatus, statusText, headers });
 }
 
 async function fetchGeckoTerminal(endpoint) {
@@ -107,15 +107,19 @@ async function fetchDexPaprikaJson(endpoint) {
     } catch (_) {}
   }
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
-  if (cache && (response.ok || response.status === 429)) {
+  // Cache provider-side quota/auth failures too: retrying HTTP 402 on every
+  // refresh cannot restore access and only adds noise to an already partial scan.
+  if (cache && (response.ok || [401, 402, 403, 429].includes(response.status))) {
     const headers = new Headers(response.headers);
-    const wasRateLimited = response.status === 429;
-    if (wasRateLimited) headers.set("x-radar-original-status", "429");
-    headers.set("cache-control", "public, max-age=" + (wasRateLimited ? 15 : 60));
+    const shouldCacheError = !response.ok;
+    if (shouldCacheError) headers.set("x-radar-original-status", String(response.status));
+    const ttl = response.status === 429 ? 30
+      : [401, 402, 403].includes(response.status) ? 600 : 60;
+    headers.set("cache-control", "public, max-age=" + ttl);
     try {
       await cache.put(cacheKey, new Response(response.clone().body, {
-        status: wasRateLimited ? 200 : response.status,
-        statusText: wasRateLimited ? "OK" : response.statusText,
+        status: shouldCacheError ? 200 : response.status,
+        statusText: shouldCacheError ? "OK" : response.statusText,
         headers
       }));
     } catch (_) {}
@@ -695,7 +699,7 @@ export default {
                 });
                 const searchUrl = "https://api.dexpaprika.com/networks/" + network.dexChain + "/pools/search?" + query.toString();
                 const searchResponse = await fetchDexPaprikaJson(searchUrl);
-                if (!searchResponse.ok) throw new Error("DexPaprika pool search HTTP " + searchResponse.status);
+                if (!searchResponse.ok) throw new Error("DexPaprika pool search HTTP " + searchResponse.status + (searchResponse.status === 402 ? "（额度/套餐限制，备用源暂不可用）" : ""));
                 const searchBody = await searchResponse.json();
                 if (!Array.isArray(searchBody.results)) throw new Error("DexPaprika returned an unexpected response");
                 let chainPoolCount = 0;
@@ -708,7 +712,7 @@ export default {
                   // A rate limit or provider outage means this chain's fallback is
                   // incomplete; don't silently report a successful empty result.
                   if (detailResponse.status === 429 || detailResponse.status >= 500) {
-                    throw new Error("DexPaprika pool detail HTTP " + detailResponse.status);
+                    throw new Error("DexPaprika pool detail HTTP " + detailResponse.status + (detailResponse.status === 402 ? "（额度/套餐限制，备用源暂不可用）" : ""));
                   }
                   if (!detailResponse.ok) continue;
                   const detail = await detailResponse.json();
