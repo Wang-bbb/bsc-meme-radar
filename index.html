@@ -81,6 +81,12 @@ async function scan(){
     const workers=Array.from({length:3},async()=>{
       while(cursor<selected.length){
         const p=selected[cursor++];
+        if(p.tokenSelectionVerified===false){
+          p.security={status:"unverified",provider:"GeckoTerminal"};
+          p.pendingReason=p.tokenSelectionNote||"交易池代币方向未确认";
+          pending.push(p);
+          continue;
+        }
         try{
           const chain=p.chain==="BSC"?"bsc":p.chain==="Solana"?"solana":p.chain==="Base"?"base":"ethereum";
           const params=new URLSearchParams({chain,address:p.tokenAddress||""});
@@ -121,6 +127,7 @@ async function scan(){
         '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
+        (p.tokenSelectionNote?'<div class="muted">代币识别：'+esc(p.tokenSelectionNote)+'</div>':'')+
         (p.pendingReason?'<div class="muted">未通过原因：'+esc(p.pendingReason)+'</div>':'')+
         '<div class="links"><a target="_blank" rel="noopener" href="'+esc(poolLink)+'">查看交易池 ↗</a><a target="_blank" rel="noopener" href="'+esc(tokenLink)+'">查看合约 ↗</a><a href="#" data-copy="'+esc(p.tokenAddress||"")+'">复制合约</a></div>'+
         '<div class="note">'+esc(p.riskNote||"安全筛查不能保证绝对安全，请持续观察合约权限、持币集中度和流动性变化。")+'</div></article>';
