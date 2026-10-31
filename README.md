@@ -1,31 +1,36 @@
-# BSC Meme 雷达（PWA MVP）
+# 多链 Meme Radar（PWA）
 
-只读观察工具，不会自动交易，不需要钱包私钥、助记词或币安 API Key。
+只读观察工具，不会自动交易，不需要钱包私钥、助记词或交易所 API Key。
 
-## 文件
-- `index.html`、`manifest.json`、`sw.js`：手机 PWA 网页
-- `worker.js`：Cloudflare Worker 行情代理与筛选 API
+## 当前升级目标
+- 链：BSC、Solana、Ethereum、Base
+- 排序：优先池龄最新的候选；同等池龄下参考成交量
+- 最低流动性：默认约 5,000 USD
+- 资金偏好：USDT 直接交易优先，也计划支持通过钱包路由兑换
+- 观察窗口：15 / 30 / 60 分钟
 
-## 1. 配置网页 API 地址
-部署 Worker 后，复制它的 HTTPS 地址。打开 `index.html`，找到：
-`const API_BASE=localStorage.getItem("radar_api_base")||"";`
-将空字符串改为 Worker 地址，例如：
-`const API_BASE=localStorage.getItem("radar_api_base")||"https://你的worker地址.workers.dev";`
-保存后再提交。
+## 当前实现状态（首阶段）
+- BSC：保留原有 NodeReal RPC + 已配置 V2/V3 DEX 工厂扫描。
+- Solana / Ethereum / Base：新增 `/multiscan`，使用 GeckoTerminal public API 的 new_pools 数据。
+- 前端：同时请求 BSC `/scan` 和其他三链 `/multiscan`，按池龄从新到旧排序。
+- 其他三链的 USDT 路由：目前**尚未实时报价验证**；报价代币 symbol 显示 USDT 也不代表已通过合约地址核验或可成功成交。后续必须接入各链官方/可信 USDT 合约白名单和实际路由报价。
+- 新池索引存在分页、速率限制和覆盖范围限制；不保证捕获所有新池。
 
-## 2. 部署 Cloudflare Worker
-在 Cloudflare Dashboard → Workers & Pages → Create Worker，粘贴 `worker.js` 全部内容并 Deploy。复制 Worker URL。Worker 会请求 DexScreener 公共 API；外部 API 的可用性和速率限制可能变化。
+## 部署
+1. Cloudflare Worker 使用仓库中的 `worker.js`，保留已配置的 `NODEREAL_RPC_URL` Secret。
+2. GitHub Pages 发布仓库根目录的 `index.html`。
+3. 手机浏览器打开 Pages 地址，可添加到主屏幕。
 
-## 3. 开启 GitHub Pages
-仓库 Settings → Pages → Build and deployment → Source 选 Deploy from a branch；Branch 选 `main`，目录选 `/(root)`，点击 Save。GitHub Pages 会从仓库根目录的 `index.html` 发布网页。等待部署完成后打开页面。
+## 重要限制
+- 当前 `/multiscan` 首阶段只覆盖 Solana、Ethereum、Base 的 GeckoTerminal new_pools 索引，不等于完整链上监听。
+- 流动性、成交量、买卖次数和价格变化来自第三方索引，可能延迟、缺失或口径不同。
+- BSC 现有接口仍有已接入 DEX 范围限制，V3 成交统计尚未完整接入。
+- 未实现完整 honeypot 模拟、合约权限审计、持币集中度或 LP 锁定检查。
+- USDT 兑换路径必须逐条验证网络、代币合约、可执行报价、滑点和手续费；跨链兑换不等于每个代币都可买入。
+- Worker 和网页公开可访问；不得放入私钥、助记词或交易密钥。
 
-## 4. vivo 手机安装
-用手机浏览器打开 GitHub Pages 网站 → 浏览器菜单 → 添加到主屏幕/安装应用。
-
-## 当前限制
-- 候选来源是 DexScreener 最新 token profiles，不保证覆盖全部新池；每轮最多逐一查询 35 个候选。
-- 只接受报价代币地址严格匹配 BSC USDT（`0x55d398326f99059ff775485246999027b319795`）的直接交易池，不把 USDC/WBNB 交易池算作 USDT。
-- “有 USDT 交易对”不代表一定可以安全买卖。
-- 当前只在应用打开时手动刷新；无后台持续扫描和自动推送。
-- 未实现完整 honeypot 模拟、合约权限审计、持仓集中度或 LP 锁定检查；不能保证识别所有骗局。
-- 公开网页与 Worker URL 可能被他人访问；不要放入任何私钥、助记词或交易所密钥。
+## API
+- `/health`：服务状态
+- `/scan?minutes=15&minLiquidity=5000`：BSC 原有扫描
+- `/multiscan?minutes=15&minLiquidity=5000`：Solana、Ethereum、Base 首阶段新池扫描
+- `/history?hours=24&dex=pancakeswap-v2`：BSC 单工厂历史验证
