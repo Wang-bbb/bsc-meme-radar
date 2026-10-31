@@ -18,7 +18,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 .stat{background:#0d1727;padding:9px;border-radius:9px}.stat small{display:block;color:#9aabc4;font-size:11px}.stat strong{font-size:14px}
 .links{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}.links a{color:#91c7ff;text-decoration:none;font-size:13px}
 .status{border:1px solid #26344b;border-radius:12px;padding:10px 12px;color:#9aabc4;font-size:13px;margin-bottom:12px}
-.empty{padding:26px;text-align:center;color:#9aabc4}.section-title{font-size:15px;margin:18px 2px 8px;color:#dce8f8}.review-card{border-color:#806b37}.note{font-size:12px;line-height:1.65;color:#9aabc4;margin:14px 2px}
+.empty{padding:26px;text-align:center;color:#9aabc4}.section-title{font-size:15px;margin:18px 2px 8px;color:#dce8f8}.review-card{border-color:#806b37}.blocked-card{border-color:#8b414b;background:#241923}.note{font-size:12px;line-height:1.65;color:#9aabc4;margin:14px 2px}
 @media(min-width:650px){.cards{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(3,1fr)}}
 </style>
 </head>
@@ -31,7 +31,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <button id="notify">开启通知权限</button>
 </div>
 <div id="status" class="status">数据源：BSC 链上扫描 + Solana / Ethereum / Base 第三方新池索引。点击刷新开始扫描。</div>
-<h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div>
+<h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
 <b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 首阶段使用 GeckoTerminal 新池索引。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口主要识别 BSC USDT 直连池；其他链的 USDT 直连标记和钱包兑换路径仍需后续按各链真实合约地址及实时报价验证。
 <br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
@@ -48,6 +48,7 @@ async function scan(){
   $("status").textContent="正在扫描四条链并进行安全检测…";
   $("cards").innerHTML='<div class="empty">扫描中…</div>';
   $("review-cards").innerHTML="";
+  $("blocked-cards").innerHTML="";
   try{
     const minutes=Number($("age").value);
     const base=API_BASE.replace(/\/$/,"");
@@ -110,7 +111,7 @@ async function scan(){
       const secInfo=sec.provider==="Honeypot.is"
         ?"卖出税："+(sec.sellTax==null?"未知":Number(sec.sellTax).toFixed(2)+"%")+" · 模拟："+(sec.simulationSuccess?"成功":"未成功")
         :"RugCheck 风险分："+(sec.riskScore==null?"未知":sec.riskScore)+" · LP锁定："+(sec.lpLockedPct==null?"未知":sec.lpLockedPct+"%");
-      return '<article class="card '+(p.blocked?"review-card":"")+'">'+
+      return '<article class="card '+(p.blocked?"blocked-card":p.pendingReason?"review-card":"")+'">'+
         '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
         '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
         '<div class="stats">'+
@@ -128,6 +129,7 @@ async function scan(){
     const review=pending.filter(p=>!p.blocked);
     const blocked=pending.filter(p=>p.blocked);
     $("review-cards").innerHTML=review.length?review.map(renderCard).join(""):'<div class="empty">没有待复核代币。</div>';
+    $("blocked-cards").innerHTML=blocked.length?blocked.map(renderCard).join(""):'<div class="empty">本轮没有检测到明确高危代币。</div>';
     document.querySelectorAll("[data-copy]").forEach(a=>a.addEventListener("click",async e=>{
       e.preventDefault();const value=a.getAttribute("data-copy");if(!value)return;
       try{await navigator.clipboard.writeText(value);a.textContent="已复制";}catch(_){a.textContent="复制失败";}
@@ -141,6 +143,7 @@ async function scan(){
     $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试。";
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
     $("review-cards").innerHTML="";
+    $("blocked-cards").innerHTML="";
   }
 }
 $("refresh").onclick=scan;
