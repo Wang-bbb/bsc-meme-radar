@@ -563,7 +563,13 @@ export default {
             });
             chainPoolCount++;
           }
-          chainSources.push({ chain: network.name, provider: "GeckoTerminal", status: "ok", pools: chainPoolCount });
+          if (chainPoolCount === 0) {
+            // A successful HTTP response with zero qualifying pools is not proof
+            // that the index covered this chain. Try the independent fallback.
+            failedNetworks.push({ network, error: "GeckoTerminal returned no pools meeting age/liquidity/token filters" });
+          } else {
+            chainSources.push({ chain: network.name, provider: "GeckoTerminal", status: "ok", pools: chainPoolCount });
+          }
         } catch (error) {
           failedNetworks.push({ network, error: String(error) });
         }
@@ -645,6 +651,9 @@ export default {
                   riskNote: "备用索引合并 DexScreener 最新 Token Profile 与 Boost 名单反查交易池，覆盖范围小于完整新池索引；不代表捕获该链全部新池。"
                 });
                 chainPoolCount++;
+              }
+              if (chainPoolCount === 0) {
+                throw new Error("DexScreener returned no pools meeting age/liquidity/token filters");
               }
               chainSources.push({
                 chain: network.name, provider: "DexScreener profiles + boosts",
