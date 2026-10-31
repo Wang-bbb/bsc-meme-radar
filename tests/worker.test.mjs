@@ -400,3 +400,54 @@ test("multiscan marks DexPaprika fallback incomplete when pool detail requests a
   assert.ok(data.chainSources.every(source => source.status === "error"));
   assert.ok(data.chainErrors.every(error => error.error.includes("DexPaprika pool detail HTTP 429")));
 });
+
+
+test("DexPaprika caches HTTP 402 quota responses and restores the original status during cooldown", async () => {
+  const originalCaches = globalThis.caches;
+  const store = new Map();
+  globalThis.caches = {
+    default: {
+      async match(key) {
+        const hit = store.get(key.url);
+        return hit ? hit.clone() : undefined;
+      },
+      async put(key, value) {
+        store.set(key.url, value.clone());
+      }
+    }
+  };
+  let paprikaCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return new Response("rate limited", { status: 429 });
+    }
+    if (url.hostname === "api.dexscreener.com") {
+      return new Response("rate limited", { status: 429 });
+    }
+    if (url.hostname === "api.dexpaprika.com") {
+      paprikaCalls++;
+      return new Response("quota exceeded", { status: 402 });
+    }
+    throw new Error("Unexpected URL " + url.href);
+  };
+
+  try {
+    const first = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+    const firstData = await first.json();
+    assert.equal(firstData.complete, false);
+    assert.equal(firstData.chainErrors.length, 3);
+    assert.ok(firstData.chainErrors.every(error => error.error.includes("HTTP 402")));
+    assert.ok(firstData.chainErrors.every(error => error.error.includes("额度/套餐限制")));
+    assert.equal(paprikaCalls, 3);
+
+    const second = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+    const secondData = await second.json();
+    assert.equal(secondData.complete, false);
+    assert.ok(secondData.chainErrors.every(error => error.error.includes("HTTP 402")));
+    assert.equal(paprikaCalls, 3, "cached 402 responses should suppress repeated provider requests");
+  } finally {
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+  }
+});
