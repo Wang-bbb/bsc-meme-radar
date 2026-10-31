@@ -313,3 +313,90 @@ test("multiscan uses the latest boost feed when token profiles omit a chain", as
   assert.equal(basePool.tokenSelectionVerified, true);
   assert.equal(data.chainSources.find(source => source.chain === "Base").coverage, "partial");
 });
+
+
+test("multiscan uses DexPaprika as an independent fallback when GeckoTerminal and DexScreener are rate limited", async () => {
+  const quotes = {
+    solana: { address: "So11111111111111111111111111111111111111112", symbol: "SOL", name: "Wrapped SOL" },
+    ethereum: { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC", name: "USD Coin" },
+    base: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", symbol: "USDC", name: "USD Coin" }
+  };
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.hostname === "api.dexscreener.com") {
+      return new Response("rate limited", { status: 429 });
+    }
+    if (url.hostname === "api.dexpaprika.com" && url.pathname.endsWith("/pools/search")) {
+      const network = url.pathname.split("/")[2];
+      return response({ results: [{
+        id: "Pool" + network,
+        created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        liquidity_usd: 15000,
+        dex_name: "Test DEX"
+      }] });
+    }
+    if (url.hostname === "api.dexpaprika.com" && /\/pools\//.test(url.pathname)) {
+      const network = url.pathname.split("/")[2];
+      const quote = quotes[network];
+      return response({
+        created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        liquidity_usd: 15000,
+        dex_name: "Test DEX",
+        base_token_id: "Meme" + network,
+        quote_token_id: quote.address,
+        tokens: [
+          { id: "Meme" + network, symbol: "MEME", name: "Test Meme" },
+          { id: quote.address, symbol: quote.symbol, name: quote.name }
+        ],
+        "1h": { volume_usd: 3200, buys: 8, sells: 3, last_price_usd_change: 2.5 }
+      });
+    }
+    throw new Error("Unexpected URL " + url.href);
+  };
+
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.equal(data.complete, true);
+  assert.equal(data.chainErrors.length, 0);
+  assert.equal(data.pools.length, 3);
+  assert.ok(data.pools.every(pool => pool.source === "DexPaprika independent fallback"));
+  assert.ok(data.chainSources.every(source => source.provider === "DexPaprika" && source.coverage === "partial"));
+  assert.ok(data.pools.every(pool => pool.tokenSelectionVerified === true));
+});
+
+
+test("multiscan marks DexPaprika fallback incomplete when pool detail requests are rate limited", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.hostname === "api.dexscreener.com") {
+      return new Response("rate limited", { status: 429 });
+    }
+    if (url.hostname === "api.dexpaprika.com" && url.pathname.endsWith("/pools/search")) {
+      const network = url.pathname.split("/")[2];
+      return response({ results: [{
+        id: "Pool" + network,
+        created_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        liquidity_usd: 15000,
+        dex_name: "Test DEX"
+      }] });
+    }
+    if (url.hostname === "api.dexpaprika.com" && /\/pools\//.test(url.pathname)) {
+      return new Response("rate limited", { status: 429 });
+    }
+    throw new Error("Unexpected URL " + url.href);
+  };
+
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.equal(data.complete, false);
+  assert.equal(data.pools.length, 0);
+  assert.equal(data.chainErrors.length, 3);
+  assert.ok(data.chainSources.every(source => source.status === "error"));
+  assert.ok(data.chainErrors.every(error => error.error.includes("DexPaprika pool detail HTTP 429")));
+});
