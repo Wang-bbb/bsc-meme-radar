@@ -81,6 +81,28 @@ async function fetchGeckoTerminal(endpoint) {
   return lastResponse || new Response("GeckoTerminal request failed", { status: 502 });
 }
 
+async function fetchDexPaprikaJson(endpoint) {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = new Request(endpoint, { method: "GET" });
+  if (cache) {
+    try {
+      const cached = await cache.match(cacheKey);
+      if (cached) return cached;
+    } catch (_) {}
+  }
+  const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
+  if (cache && (response.ok || response.status === 429)) {
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "public, max-age=" + (response.status === 429 ? 15 : 60));
+    try {
+      await cache.put(cacheKey, new Response(response.clone().body, {
+        status: response.status, statusText: response.statusText, headers
+      }));
+    } catch (_) {}
+  }
+  return response;
+}
+
 async function fetchDexScreenerJson(endpoint) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(endpoint, { method: "GET" });
@@ -635,19 +657,19 @@ export default {
               // providers above fail. Its free endpoint returns one page without a key.
               try {
                 const query = new URLSearchParams({
-                  created_after: "-" + minutes + "m",
+                  created_after: "-24h",
                   liquidity_usd_min: String(minLiquidity),
                   order_by: "created_at",
                   sort: "desc",
                   limit: "50"
                 });
                 const searchUrl = "https://api.dexpaprika.com/networks/" + network.dexChain + "/pools/search?" + query.toString();
-                const searchResponse = await fetch(searchUrl, { headers: { "accept": "application/json" } });
+                const searchResponse = await fetchDexPaprikaJson(searchUrl);
                 if (!searchResponse.ok) throw new Error("DexPaprika pool search HTTP " + searchResponse.status);
                 const searchBody = await searchResponse.json();
                 if (!Array.isArray(searchBody.results)) throw new Error("DexPaprika returned an unexpected response");
                 let chainPoolCount = 0;
-                const detailCandidates = searchBody.results.slice(0, 12);
+                const detailCandidates = searchBody.results.slice(0, 3);
                 for (const summary of detailCandidates) {
                   const poolAddress = String(summary.id || "");
                   if (!poolAddress) continue;
