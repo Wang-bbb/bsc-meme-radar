@@ -166,8 +166,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const rpcUrl = env.NODEREAL_RPC_URL;
-    if (!rpcUrl) return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
+    if (!rpcUrl && ["/scan", "/history"].includes(url.pathname)) {
+      return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
+    }
     if (url.pathname === "/" || url.pathname === "/health") {
       return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + multiple BSC DEX factories", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
     }
