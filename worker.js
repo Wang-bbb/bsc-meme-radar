@@ -387,7 +387,10 @@ export default {
           const critical = risks.filter((risk) => ["danger", "critical"].includes(String(risk.level || "").toLowerCase()));
           const warnings = risks.filter((risk) => ["high", "medium", "caution", "warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
           const hasUsableReport = !!report.tokenProgram || risks.length > 0 || report.score_normalised != null || report.lpLockedPct != null;
-          const weakLiquidityLock = report.lpLockedPct == null || Number(report.lpLockedPct) < 80;
+          const lpLockedPct = report.lpLockedPct == null || !Number.isFinite(Number(report.lpLockedPct))
+            ? null : Number(report.lpLockedPct);
+          const weakLiquidityLock = lpLockedPct !== null && lpLockedPct < 80;
+          const unknownLiquidityLock = lpLockedPct === null;
           const rugged = report.rugged === true;
           const mintAuthority = report.mintAuthority ?? report.token?.mintAuthority ?? null;
           const freezeAuthority = report.freezeAuthority ?? report.token?.freezeAuthority ?? null;
@@ -400,9 +403,10 @@ export default {
           const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || activeAuthorities || unknownAuthorities) ? "review" : "pass";
           return json({
             ok: true, chain, tokenAddress: address, provider: "RugCheck",
-            status, riskScore: report.score_normalised ?? null, lpLockedPct: report.lpLockedPct ?? null,
+            status, riskScore: report.score_normalised ?? null, lpLockedPct,
+            liquidityLockStatus: unknownLiquidityLock ? "unknown" : weakLiquidityLock ? "below_threshold" : "meets_threshold",
             risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
-            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["流动性锁定比例不足80%或数据缺失"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : [])],
+            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["已报告的流动性锁定比例低于80%"] : []), ...(unknownLiquidityLock ? ["流动性锁定数据缺失，无法确认；不代表已确认未锁定"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : [])],
             note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
           });
         }
