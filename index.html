@@ -23,17 +23,17 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 </style>
 </head>
 <body>
-<header><h1>🛰️ BSC Meme 雷达</h1><p>只读观察 · BNB Smart Chain · PancakeSwap V2 + V3 · 直接 USDT 交易对</p></header>
+<header><h1>🛰️ BSC Meme 雷达</h1><p>只读观察 · BNB Smart Chain · 多 DEX · 直接 USDT 交易对</p></header>
 <main>
 <div class="bar">
 <button id="refresh">↻ 刷新扫描</button>
 <select id="age"><option value="15">最近 15 分钟</option><option value="30">最近 30 分钟</option><option value="60">最近 60 分钟</option></select>
 <button id="notify">开启通知权限</button>
 </div>
-<div id="status" class="status">数据源：BSC 链上 PancakeSwap V2/V3 新池事件。点击刷新开始扫描。</div>
+<div id="status" class="status">数据源：BSC 链上多个 DEX 新池事件。点击刷新开始扫描。</div>
 <div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div>
 <div class="note">
-<b>数据说明：</b>新池来自 PancakeSwap V2 Factory 的 PairCreated 和 V3 Factory 的 PoolCreated 链上事件；只筛选与指定 BSC USDT 合约直接配对的池。流动性按 USDT 储备 × 2 粗略估算。成交量、买卖次数和价格变化按本次扫描到的 Swap 事件统计。当前覆盖 PancakeSwap V2/V3，不覆盖其他 DEX；V3 成交统计暂未接入，RPC 也可能限流。
+<b>数据说明：</b>新池来自已接入 DEX 的 V2 PairCreated 和 V3 PoolCreated 链上事件；只筛选与指定 BSC USDT 合约直接配对的池。流动性按 USDT 储备 × 2 粗略估算。成交量、买卖次数和价格变化按本次扫描到的 Swap 事件统计。当前覆盖 PancakeSwap、Biswap、ApeSwap、MDEX、BabySwap、Nomiswap、Uniswap；未覆盖全部 BSC DEX。V3 成交统计暂未接入，RPC 也可能限流。
 <br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
@@ -54,7 +54,7 @@ async function scan(){
     if(!response.ok||!data.ok)throw Error(data.error||("数据服务返回 "+response.status));
     const pools=data.pools||[];
     if(!pools.length){
-      $("cards").innerHTML='<div class="empty">最近 '+minutes+' 分钟内，没有找到达到流动性门槛的 PancakeSwap V2/V3 USDT 新池。</div>';
+      $("cards").innerHTML='<div class="empty">最近 '+minutes+' 分钟内，没有找到达到流动性门槛的已接入 DEX USDT 新池。</div>';
     }else{
       $("cards").innerHTML=pools.map(p=>{
         const price=pct(p.priceChange1h);
