@@ -29,7 +29,7 @@ const VERIFIED_QUOTE_ASSETS = {
   solana: new Set([
     "so11111111111111111111111111111111111111112",
     "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
-    "es9vmfrzacer mjfrf4h2fyd4kconky11mcce8benwnyb".replace(/ /g, "")
+    "es9vmfrzacer mjfrf4h2fyd4kconky11mcce8benwnyb"
   ]),
   eth: new Set([
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
@@ -42,12 +42,6 @@ const VERIFIED_QUOTE_ASSETS = {
     "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
   ])
-};
-const VERIFIED_USDT_ASSETS = {
-  solana: new Set(["Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"]),
-  eth: new Set(["0xdac17f958d2ee523a2206206994597c13d831ec7"]),
-  // Base uses a bridged USDT representation; it is not listed as a native Tether deployment.
-  base: new Set(["0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"])
 };
 function choosePoolToken(networkId, base, quote, baseId, quoteId) {
   const canonicalQuotes = VERIFIED_QUOTE_ASSETS[networkId] || new Set();
@@ -454,7 +448,6 @@ export default {
               buys1h: Number(tx1h.buys || 0),
               sells1h: Number(tx1h.sells || 0),
               priceChange1h,
-              usdtDirect: (VERIFIED_USDT_ASSETS[network.id] || new Set()).has(network.id === "solana" ? quoteAddress : quoteAddress.toLowerCase()),
               usdtRouteStatus: "not_verified",
               riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
             });
@@ -480,7 +473,7 @@ export default {
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
           "GeckoTerminal 公共 API 有约每分钟10次调用的限额，且数据约每分钟缓存更新；频繁刷新可能触发限流。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
-          "USDT 直连仅在报价代币合约地址命中链级白名单时标记；Base 使用桥接版 USDT。USDT 路由仍未通过实时实时报价验证。",
+          "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
           "本接口只读，不执行兑换或交易。"
         ],
         generatedAt: new Date().toISOString()
