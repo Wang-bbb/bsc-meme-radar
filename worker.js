@@ -400,7 +400,7 @@ export default {
             Object.prototype.hasOwnProperty.call(report.token || {}, "freezeAuthority");
           const activeAuthorities = mintAuthority != null || freezeAuthority != null;
           const unknownAuthorities = !authorityFieldsPresent;
-          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || activeAuthorities || unknownAuthorities) ? "review" : "pass";
+          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || unknownLiquidityLock || activeAuthorities || unknownAuthorities) ? "review" : "pass";
           return json({
             ok: true, chain, tokenAddress: address, provider: "RugCheck",
             status, riskScore: report.score_normalised ?? null, lpLockedPct,
