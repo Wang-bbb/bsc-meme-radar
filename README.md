@@ -8,6 +8,7 @@
 - 默认最低流动性：约 5,000 USD。
 - 排序：优先池龄最新；同等池龄参考成交量。
 - BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
+- BSC V2 成交统计直接使用候选池创建区块之后的 Swap 日志，不再逐个区块请求时间戳以避免 Worker 子请求耗尽；若 Swap 日志查询失败，成交量/买卖笔数/价格变化返回 `null`（未知），不会伪装成 0 成交。
 - Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源；当索引源失败或没有合格池时，使用 Solana JSON-RPC 做独立交叉检查。当前对 PumpSwap create_pool 和 Raydium CPMM initialize 指令实现协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；其他已知协议仍只输出活动线索，不生成候选。
 - Ethereum / Base：优先使用 GeckoTerminal 索引；索引源无合格池或失败时，可选使用独立 RPC 扫描配置的 Uniswap V2 工厂稳定币直连池（Ethereum: USDT/USDC/DAI；Base: USDC/USDbC/USDT）。该 RPC 兜底仅覆盖一个 V2 工厂，不是全链新池索引。
 - 其他链索引结果显示报价资产符号，但**不代表钱包兑换路径已验证**。
