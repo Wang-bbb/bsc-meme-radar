@@ -719,6 +719,49 @@ test("pool-risk computes high-water drawdown and short-window changes from Gecko
   assert.ok(Math.abs(data.priceChange1h - 40) < 0.01);
 });
 
+test("pool-risk identifies a strong early rise followed by a sharp dump", async () => {
+  globalThis.fetch = async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const closes = [1, 1.2, 1.4, 1.6, 1.8, 1.9, 1.2, 1.0];
+    const rows = closes.map((close, index) => [
+      now - (closes.length - index - 1) * 60,
+      index ? closes[index - 1] : close,
+      index === 5 ? 2.0 : close * 1.03,
+      close * 0.97,
+      close,
+      100
+    ]);
+    return response({ data: { attributes: { ohlcv_list: rows } } });
+  };
+  const res = await worker.fetch(request("/pool-risk?chain=bsc&pool=TestPool&token=TestToken"), {});
+  const data = await res.json();
+  assert.equal(data.status, "checked");
+  assert.equal(data.trendSignals.pumpThenDump, true);
+  assert.ok(data.trendSignals.peakToCurrentDrawdownPct <= -40);
+});
+
+test("pool-risk identifies a persistent gradual decline without a single crash candle", async () => {
+  globalThis.fetch = async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const closes = [1, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76];
+    const rows = closes.map((close, index) => [
+      now - (closes.length - index - 1) * 60,
+      index ? closes[index - 1] : close,
+      close * 1.01,
+      close * 0.99,
+      close,
+      100
+    ]);
+    return response({ data: { attributes: { ohlcv_list: rows } } });
+  };
+  const res = await worker.fetch(request("/pool-risk?chain=bsc&pool=TestPool&token=TestToken"), {});
+  const data = await res.json();
+  assert.equal(data.status, "checked");
+  assert.equal(data.trendSignals.gradualDecline, true);
+  assert.ok(data.trendSignals.trendNetChangePct <= -20);
+  assert.equal(data.trendSignals.downMoveRatio, 1);
+});
+
 test("pool-risk marks insufficient candle history as unverified instead of clear", async () => {
   globalThis.fetch = async () => response({
     data: { attributes: { ohlcv_list: [
