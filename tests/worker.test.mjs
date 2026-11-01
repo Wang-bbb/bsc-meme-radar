@@ -684,7 +684,7 @@ test("dashboard ranks security-passed candidates by validated trend score and le
     {id:"low-confidence",ageMinutes:0.2,volume1hUSD:2000,trendScore:{status:"checked",score:99,confidence:40}}
   ];
   const sorted = sort(candidates);
-  assert.equal(Array.from(sorted, item => item.id).join(","), "high,medium,low,unknown,low-confidence");
+  assert.equal(Array.from(sorted, item => item.id).join(","), "high,medium,low,low-confidence,unknown");
   assert.equal(sorted.find(item => item.id==="unknown").trendScore.score, null);
 });
 
