@@ -1713,6 +1713,15 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("buySellVolumeRatio: swapError ? null : buySellVolumeRatio"));
   assert.ok(source.includes('swapStatsPeriod: "since_pool_creation"'));
   assert.ok(source.includes("swapStatsWindowMinutes"));
+  assert.ok(source.includes("volumeSincePoolCreationUSD: swapError ? null : volume1hUSD"));
+  assert.ok(source.includes("buyVolumeSincePoolCreationUSD: swapError ? null : buyVolume1hUSD"));
+  assert.ok(source.includes("sellVolumeSincePoolCreationUSD: swapError ? null : sellVolume1hUSD"));
+  assert.ok(source.includes("swapCountSincePoolCreation: swapError ? null : buys1h + sells1h"));
+  assert.ok(source.includes("tradePriceChangeSincePoolCreationPct: swapError ? null : priceChangeSincePoolCreationPct"));
+  assert.ok(source.includes("const priceChangeSincePoolCreationPct = tradePrices.length > 1"));
+  assert.ok(source.includes("tradePrices.push(usdtInUSD / tokenOutAmount)"));
+  assert.ok(source.includes("tradePrices.push(usdtOutUSD / tokenInAmount)"));
+  assert.ok(source.includes("旧 *1h 字段仅为兼容保留"));
   assert.ok(source.includes("buy_only_no_sell_confirmation"));
   assert.ok(source.includes("strong_buy_sell_imbalance"));
   assert.ok(source.includes("swapStatsStatus: swapError ? \"unavailable\" : \"available\""));

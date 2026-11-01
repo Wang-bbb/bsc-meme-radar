@@ -2708,7 +2708,7 @@ export default {
         });
         let volume1hUSD = 0, buyVolume1hUSD = 0, sellVolume1hUSD = 0;
         let buys1h = 0, sells1h = 0;
-        const prices = [];
+        const tradePrices = [];
         for (const s of swaps) {
           if (asNumber(s.blockNumber) < p.createdBlock) continue;
           const a0i = BigInt("0x" + word(s.data, 0));
@@ -2722,16 +2722,27 @@ export default {
           const usdtInUSD = toFloat(usdtIn, 18);
           const usdtOutUSD = toFloat(usdtOut, 18);
           const usdtAmount = usdtInUSD + usdtOutUSD;
-          const tokenAmount = toFloat(tokenIn + tokenOut, p.decimals);
           volume1hUSD += usdtAmount;
-          if (usdtIn > 0n && tokenOut > 0n) { buys1h++; buyVolume1hUSD += usdtInUSD; }
-          if (usdtOut > 0n && tokenIn > 0n) { sells1h++; sellVolume1hUSD += usdtOutUSD; }
-          if (usdtAmount > 0 && tokenAmount > 0) prices.push(usdtAmount / tokenAmount);
+          if (usdtIn > 0n && tokenOut > 0n) {
+            buys1h++;
+            buyVolume1hUSD += usdtInUSD;
+            const tokenOutAmount = toFloat(tokenOut, p.decimals);
+            if (tokenOutAmount > 0) tradePrices.push(usdtInUSD / tokenOutAmount);
+          }
+          if (usdtOut > 0n && tokenIn > 0n) {
+            sells1h++;
+            sellVolume1hUSD += usdtOutUSD;
+            const tokenInAmount = toFloat(tokenIn, p.decimals);
+            if (tokenInAmount > 0) tradePrices.push(usdtOutUSD / tokenInAmount);
+          }
         }
         const totalDirectionalVolume = buyVolume1hUSD + sellVolume1hUSD;
         const buySellVolumeRatio = sellVolume1hUSD > 0 ? buyVolume1hUSD / sellVolume1hUSD : null;
         const buyVolumeSharePct = totalDirectionalVolume > 0 ? buyVolume1hUSD / totalDirectionalVolume * 100 : null;
-        const priceChange1h = prices.length > 1 && prices[0] > 0 ? (prices[prices.length - 1] / prices[0] - 1) * 100 : null;
+        // This compares first and last observed execution prices since pool creation;
+        // it is not a rolling one-hour candle or a reliable spot-price oracle.
+        const priceChangeSincePoolCreationPct = tradePrices.length > 1 && tradePrices[0] > 0
+          ? (tradePrices[tradePrices.length - 1] / tradePrices[0] - 1) * 100 : null;
         const tradeFlowStatus = swaps.length === 0 ? "no_swaps_observed"
           : buys1h + sells1h < 8 ? "insufficient_trade_sample"
           : sells1h === 0 ? "buy_only_no_sell_confirmation"
@@ -2750,6 +2761,16 @@ export default {
           ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
           usdtReserve: p.usdtReserve,
           liquidityUSDApprox: p.liquidityUSD,
+          // Explicitly named lifetime fields are authoritative. The legacy *1h
+          // aliases remain for compatibility, but these values are since pool creation.
+          volumeSincePoolCreationUSD: swapError ? null : volume1hUSD,
+          buyVolumeSincePoolCreationUSD: swapError ? null : buyVolume1hUSD,
+          sellVolumeSincePoolCreationUSD: swapError ? null : sellVolume1hUSD,
+          buySellVolumeRatioSincePoolCreation: swapError ? null : buySellVolumeRatio,
+          buysSincePoolCreation: swapError ? null : buys1h,
+          sellsSincePoolCreation: swapError ? null : sells1h,
+          swapCountSincePoolCreation: swapError ? null : buys1h + sells1h,
+          tradePriceChangeSincePoolCreationPct: swapError ? null : priceChangeSincePoolCreationPct,
           volume1hUSD: swapError ? null : volume1hUSD,
           buyVolume1hUSD: swapError ? null : buyVolume1hUSD,
           sellVolume1hUSD: swapError ? null : sellVolume1hUSD,
@@ -2758,7 +2779,8 @@ export default {
           tradeFlowStatus: swapError ? "unavailable" : tradeFlowStatus,
           buys1h: swapError ? null : buys1h,
           sells1h: swapError ? null : sells1h,
-          priceChange1h: swapError ? null : priceChange1h,
+          // Deprecated compatibility alias; value is first-to-last trade price change since pool creation.
+          priceChange1h: swapError ? null : priceChangeSincePoolCreationPct,
           swapCount1h: swapError ? null : buys1h + sells1h,
           swapStatsPeriod: "since_pool_creation",
           swapStatsWindowMinutes: Math.max(0, Math.round((latestTime - p.createdAt) / 60000)),
@@ -2780,6 +2802,10 @@ export default {
         createdAt: new Date(p.createdAt).toISOString(),
         ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
         usdtReserve: p.usdtReserve, liquidityUSDApprox: p.liquidityUSD,
+        volumeSincePoolCreationUSD: null, buyVolumeSincePoolCreationUSD: null,
+        sellVolumeSincePoolCreationUSD: null, buySellVolumeRatioSincePoolCreation: null,
+        buysSincePoolCreation: null, sellsSincePoolCreation: null,
+        swapCountSincePoolCreation: null, tradePriceChangeSincePoolCreationPct: null,
         volume1hUSD: null, buys1h: null, sells1h: null,
         priceChange1h: null, swapCount1h: null,
         riskNote: "V3 新池；成交统计尚未接入。新池风险高，请核实合约权限、持币集中度、卖出限制及流动性变化。"
@@ -2859,7 +2885,8 @@ export default {
         limitations: [
           "当前覆盖配置中的多个 BSC V2/V3 DEX 工厂；未覆盖全部 BSC DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
-          "V2 Swap 成交统计从池创建时刻累计到本轮扫描时刻，非完整滚动 1 小时；swapStatsPeriod 标注为 since_pool_creation。",
+          "V2 Swap 成交统计从池创建时刻累计到本轮扫描时刻，非完整滚动 1 小时；优先使用明确命名的 *SincePoolCreation 字段。旧 *1h 字段仅为兼容保留，语义同样是建池以来累计。",
+          "tradePriceChangeSincePoolCreationPct 是首笔与末笔观测成交价的变化，不是滚动 1 小时价格变化，也不是可靠的现货价格预言机。",
           "当前成交量、买卖次数仅对 V2 新池统计；V3 新池仅显示创建和 USDT 余额估算，成交统计待接入。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
