@@ -1994,3 +1994,24 @@ test("pool history rejects observations that are too close together or too old",
   assert.equal(classifyPoolHistory(historyPool(), previous, 1_010_000).status, "insufficient");
   assert.equal(classifyPoolHistory(historyPool(), previous, 1_900_000).status, "insufficient");
 });
+
+test("pool history still flags a liquidity collapse when the pool falls below the candidate threshold and trade metrics are unavailable", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  };
+  const result = classifyPoolHistory(historyPool({
+    liquidityUSDApprox: 0,
+    volumeSincePoolCreationUSD: null,
+    swapCountSincePoolCreation: null,
+    buysSincePoolCreation: null,
+    sellsSincePoolCreation: null
+  }), previous, 1_060_000);
+  assert.equal(result.status, "high_risk");
+  assert.equal(result.liquidityChangePct, -100);
+  assert.ok(result.reasons.some(reason => reason.includes("骤降")));
+});
