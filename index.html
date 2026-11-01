@@ -47,7 +47,8 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const BLOCKED_TOKEN_ADDRESSES = new Set([
   "CnMPESvPAmdgZzXuYzydyXtyE1QsyN97jnjDKFtqpump",
   "4kFZbeMqpBRBbFZNuiFckcZF7mWmBJ9ZE8iTriteS3L7",
-  "C7zxdtMrPJkshQSnQBSGvtzJBNW9Mw9WALp236hApump"
+  "C7zxdtMrPJkshQSnQBSGvtzJBNW9Mw9WALp236hApump",
+  "0x5c93df4517792fce8f11e6393185ad2fc191a9c2"
 ].map(address => address.toLowerCase()));
 function isBlockedToken(p){
   return String(p.tokenAddress || "").trim().toLowerCase().length > 0 &&
