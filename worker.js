@@ -587,16 +587,11 @@ async function readV3Pool(log, createdAt, rpcUrl) {
     data: "0x70a08231" + pair.slice(2).toLowerCase().padStart(64, "0")
   }, "latest"], rpcUrl);
   const usdtReserve = toFloat(BigInt(balanceCall || "0x0"), 18);
-  const safeCall = (data) => rpc("eth_call", [{ to: token, data }, "latest"], rpcUrl).catch(() => "0x");
-  const [symbolHex, nameHex, decimalsHex] = await Promise.all([
-    safeCall("0x95d89b41"), safeCall("0x06fdde03"), safeCall("0x313ce567")
-  ]);
-  const decimals = decimalsHex && decimalsHex !== "0x" ? Math.min(36, Math.max(0, asNumber(decimalsHex))) : 18;
   return {
     pair, token0, token1, tokenAddress: token,
-    symbol: decodeAbiString(symbolHex) || token.slice(0, 6) + "…" + token.slice(-4),
-    name: decodeAbiString(nameHex) || "Unknown token",
-    decimals, usdtReserve, liquidityUSD: usdtReserve * 2,
+    symbol: token.slice(0, 6) + "…" + token.slice(-4),
+    name: "Unknown token",
+    decimals: 18, usdtReserve, liquidityUSD: usdtReserve * 2,
     createdBlock: asNumber(log.blockNumber), createdAt,
     createdTx: log.transactionHash, usdtIs0, fee
   };
@@ -608,30 +603,42 @@ async function readPair(log, rpcUrl) {
   const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
   const usdtIs0 = token0 === USDT.toLowerCase();
   const token = usdtIs0 ? token1 : token0;
-  const safeCall = (data) => rpc("eth_call", [{ to: token, data: data }, "latest"], rpcUrl).catch(() => "0x");
-  const calls = await Promise.all([
-    rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"], rpcUrl),
-    safeCall("0x95d89b41"),
-    safeCall("0x06fdde03"),
-    safeCall("0x313ce567")
-  ]);
-  const reserve0 = BigInt("0x" + word(calls[0], 0));
-  const reserve1 = BigInt("0x" + word(calls[0], 1));
+  // Read reserves first. Token metadata is deferred until after the liquidity
+  // filter, preventing three unnecessary eth_call subrequests for every rejected pool.
+  const reservesHex = await rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"], rpcUrl);
+  const reserve0 = BigInt("0x" + word(reservesHex, 0));
+  const reserve1 = BigInt("0x" + word(reservesHex, 1));
   const usdtReserve = toFloat(usdtIs0 ? reserve0 : reserve1, 18);
-  const decimals = calls[3] && calls[3] !== "0x" ? Math.min(36, Math.max(0, asNumber(calls[3]))) : 18;
   return {
     pair: pair,
     token0: token0,
     token1: token1,
     tokenAddress: token,
-    symbol: decodeAbiString(calls[1]) || token.slice(0, 6) + "…" + token.slice(-4),
-    name: decodeAbiString(calls[2]) || "Unknown token",
-    decimals: decimals,
+    symbol: token.slice(0, 6) + "…" + token.slice(-4),
+    name: "Unknown token",
+    decimals: 18,
     usdtReserve: usdtReserve,
     liquidityUSD: usdtReserve * 2,
     createdBlock: asNumber(log.blockNumber),
     createdTx: log.transactionHash,
     usdtIs0: usdtIs0
+  };
+}
+
+async function enrichTokenMetadata(pool, rpcUrl) {
+  const token = pool.tokenAddress;
+  const safeCall = (data) => rpc("eth_call", [{ to: token, data }, "latest"], rpcUrl).catch(() => "0x");
+  const [symbolHex, nameHex, decimalsHex] = await Promise.all([
+    safeCall("0x95d89b41"),
+    safeCall("0x06fdde03"),
+    safeCall("0x313ce567")
+  ]);
+  return {
+    ...pool,
+    symbol: decodeAbiString(symbolHex) || token.slice(0, 6) + "…" + token.slice(-4),
+    name: decodeAbiString(nameHex) || "Unknown token",
+    decimals: decimalsHex && decimalsHex !== "0x"
+      ? Math.min(36, Math.max(0, asNumber(decimalsHex))) : 18
   };
 }
 
@@ -2601,7 +2608,8 @@ export default {
           createdTx: log.transactionHash
         };
       });
-      const v3Valid = v3Read.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
+      const v3ValidByLiquidity = v3Read.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
+      const v3Valid = await mapLimit(v3ValidByLiquidity, 2, async (p) => enrichTokenMetadata(p, rpcUrl));
 
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
       const withTimes = await mapLimit(creationLogs, 3, async (log) => ({
@@ -2636,7 +2644,10 @@ export default {
           createdTx: log.transactionHash
         };
       });
-      const valid = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
+      const validByLiquidity = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
+      // Only enrich pools that passed liquidity screening; this is the main guard
+      // against exhausting Cloudflare's per-invocation subrequest budget.
+      const valid = await mapLimit(validByLiquidity, 2, async (p) => enrichTokenMetadata(p, rpcUrl));
       const summarizeFilterStage = (events, freshRows, inspected, eligible) => ({
         usdtPoolEvents: events,
         freshWithinWindow: freshRows.length,
