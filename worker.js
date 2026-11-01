@@ -25,6 +25,44 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+// GoPlus responses are cached per chain/token to reduce public API rate limits.
+// Successful security records live for 5 minutes; rate-limit responses cool down for 2 minutes.
+async function fetchGoPlusCached(env, endpoint, cacheKey) {
+  const kv = env && env.RADAR_KV;
+  if (kv && typeof kv.get === "function") {
+    try {
+      const cached = await kv.get(cacheKey, "json");
+      if (cached && cached.expiresAt > Date.now()) {
+        if (cached.rateLimited) {
+          return new Response(JSON.stringify({ code: 0, message: "too many requests (cached cooldown)" }), {
+            status: 200, headers: { "content-type": "application/json", "x-radar-goplus-cache": "rate-limit-cooldown" }
+          });
+        }
+        if (cached.body) {
+          return new Response(JSON.stringify(cached.body), {
+            status: 200, headers: { "content-type": "application/json", "x-radar-goplus-cache": "hit" }
+          });
+        }
+      }
+    } catch (_) {}
+  }
+  const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
+  if (response.ok && kv && typeof kv.put === "function") {
+    try {
+      const body = await response.clone().json();
+      const message = String(body && (body.message || body.msg) || "").toLowerCase();
+      const isRateLimited = body && body.code != null && String(body.code) !== "1" &&
+        (message.includes("too many requests") || message.includes("rate limit") || message.includes("频率"));
+      if (isRateLimited) {
+        await kv.put(cacheKey, JSON.stringify({ rateLimited: true, expiresAt: Date.now() + 120000 }), { expirationTtl: 120 });
+      } else if (body && (body.code == null || String(body.code) === "1") && body.result) {
+        await kv.put(cacheKey, JSON.stringify({ body, expiresAt: Date.now() + 300000 }), { expirationTtl: 300 });
+      }
+    } catch (_) {}
+  }
+  return response;
+}
+
 
 // Cache API may reject caching upstream 429 responses. Store them as synthetic
 // 200 responses with the original status in a header, then restore 429 on read.
@@ -953,11 +991,17 @@ export default {
         let report = {};
         let honeypotError = null;
         let honeypotResponseStatus = null;
+        let honeypotResponseBody = null;
         try {
           const honeypotResponse = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
           honeypotResponseStatus = honeypotResponse.status;
-          if (!honeypotResponse.ok) throw new Error("Honeypot.is HTTP " + honeypotResponse.status);
-          report = await honeypotResponse.json();
+          const honeypotText = await honeypotResponse.text();
+          if (!honeypotResponse.ok) {
+            honeypotResponseBody = honeypotText.slice(0, 1200);
+            throw new Error("Honeypot.is HTTP " + honeypotResponse.status + (honeypotResponseBody ? ": " + honeypotResponseBody : ""));
+          }
+          try { report = JSON.parse(honeypotText); }
+          catch (_) { honeypotResponseBody = honeypotText.slice(0, 1200); throw new Error("Honeypot.is returned invalid JSON"); }
         } catch (error) {
           honeypotError = String(error);
         }
@@ -982,7 +1026,10 @@ export default {
         let holderProviderMessage = null;
         let goPlusOpenSource = null;
         try {
-          const holderResponse = await fetch("https://api.gopluslabs.io/api/v1/token_security/" + chainID + "?contract_addresses=" + encodeURIComponent(address), { headers: { "accept": "application/json" } });
+          const holderCacheKey = "security:goplus:v1:" + chainID + ":" + address.toLowerCase();
+          const holderResponse = await fetchGoPlusCached(env,
+            "https://api.gopluslabs.io/api/v1/token_security/" + chainID + "?contract_addresses=" + encodeURIComponent(address),
+            holderCacheKey);
           holderProviderHttpStatus = holderResponse.status;
           if (!holderResponse.ok) {
             holderProviderStatus = "http_error";
@@ -1033,7 +1080,9 @@ export default {
           status, top10HolderConcentrationPct: holderConcentrationPct,
           holderConcentrationStatus, holderCountChecked,
           holderProviderStatus, holderProviderHttpStatus, holderProviderCode, holderProviderMessage, goPlusOpenSource,
+          goPlusCacheStatus: holderResponse.headers.get("x-radar-goplus-cache") || "miss",
           honeypotHttpStatus: honeypotResponseStatus,
+          honeypotResponseBody,
           simulationSuccess: report.simulationSuccess === true,
           isHoneypot: report.honeypotResult?.isHoneypot ?? null,
           risk: report.summary?.risk || "unknown", riskLevel,
