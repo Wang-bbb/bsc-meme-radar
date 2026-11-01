@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "worker.js"
+      - "wrangler.jsonc"
       - ".github/workflows/deploy-worker.yml"
   workflow_dispatch:
 
@@ -24,4 +25,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 18f21bcc2697986228ed890445cc7d0a
-          command: deploy worker.js --name younbsc-meme-radar --compatibility-date 2026-10-31
+          command: deploy --config wrangler.jsonc

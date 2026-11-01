@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "younbsc-meme-radar",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-31",
+  "kv_namespaces": [
+    {
+      "binding": "RADAR_KV",
+      "id": "3119afe4e8a347d194d9e9dc56e6ce7c"
+    }
+  ]
+}
