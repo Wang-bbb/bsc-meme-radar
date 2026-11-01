@@ -1708,5 +1708,12 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("volume1hUSD: swapError ? null : volume1hUSD"));
   assert.ok(source.includes("buys1h: swapError ? null : buys1h"));
   assert.ok(source.includes("sells1h: swapError ? null : sells1h"));
+  assert.ok(source.includes("buyVolume1hUSD: swapError ? null : buyVolume1hUSD"));
+  assert.ok(source.includes("sellVolume1hUSD: swapError ? null : sellVolume1hUSD"));
+  assert.ok(source.includes("buySellVolumeRatio: swapError ? null : buySellVolumeRatio"));
+  assert.ok(source.includes('swapStatsPeriod: "since_pool_creation"'));
+  assert.ok(source.includes("swapStatsWindowMinutes"));
+  assert.ok(source.includes("buy_only_no_sell_confirmation"));
+  assert.ok(source.includes("strong_buy_sell_imbalance"));
   assert.ok(source.includes("swapStatsStatus: swapError ? \"unavailable\" : \"available\""));
 });

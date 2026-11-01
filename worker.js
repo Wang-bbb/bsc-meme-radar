@@ -2627,12 +2627,10 @@ export default {
           const blockDiff = asNumber(a.blockNumber) - asNumber(b.blockNumber);
           return blockDiff || asNumber(a.logIndex) - asNumber(b.logIndex);
         });
-        let volume1hUSD = 0, buys1h = 0, sells1h = 0;
+        let volume1hUSD = 0, buyVolume1hUSD = 0, sellVolume1hUSD = 0;
+        let buys1h = 0, sells1h = 0;
         const prices = [];
         for (const s of swaps) {
-          // The address-filtered log query starts no earlier than the oldest
-          // candidate creation block. Enforce each pair's own creation block
-          // as an additional guard; no timestamp RPC is needed for this window.
           if (asNumber(s.blockNumber) < p.createdBlock) continue;
           const a0i = BigInt("0x" + word(s.data, 0));
           const a1i = BigInt("0x" + word(s.data, 1));
@@ -2642,14 +2640,24 @@ export default {
           const usdtOut = p.usdtIs0 ? a0o : a1o;
           const tokenIn = p.usdtIs0 ? a1i : a0i;
           const tokenOut = p.usdtIs0 ? a1o : a0o;
-          const usdtAmount = toFloat(usdtIn + usdtOut, 18);
+          const usdtInUSD = toFloat(usdtIn, 18);
+          const usdtOutUSD = toFloat(usdtOut, 18);
+          const usdtAmount = usdtInUSD + usdtOutUSD;
           const tokenAmount = toFloat(tokenIn + tokenOut, p.decimals);
           volume1hUSD += usdtAmount;
-          if (usdtIn > 0n && tokenOut > 0n) buys1h++;
-          if (usdtOut > 0n && tokenIn > 0n) sells1h++;
+          if (usdtIn > 0n && tokenOut > 0n) { buys1h++; buyVolume1hUSD += usdtInUSD; }
+          if (usdtOut > 0n && tokenIn > 0n) { sells1h++; sellVolume1hUSD += usdtOutUSD; }
           if (usdtAmount > 0 && tokenAmount > 0) prices.push(usdtAmount / tokenAmount);
         }
+        const totalDirectionalVolume = buyVolume1hUSD + sellVolume1hUSD;
+        const buySellVolumeRatio = sellVolume1hUSD > 0 ? buyVolume1hUSD / sellVolume1hUSD : null;
+        const buyVolumeSharePct = totalDirectionalVolume > 0 ? buyVolume1hUSD / totalDirectionalVolume * 100 : null;
         const priceChange1h = prices.length > 1 && prices[0] > 0 ? (prices[prices.length - 1] / prices[0] - 1) * 100 : null;
+        const tradeFlowStatus = swaps.length === 0 ? "no_swaps_observed"
+          : buys1h + sells1h < 8 ? "insufficient_trade_sample"
+          : sells1h === 0 ? "buy_only_no_sell_confirmation"
+          : buySellVolumeRatio >= 4 ? "strong_buy_sell_imbalance"
+          : sellVolume1hUSD > buyVolume1hUSD ? "sell_volume_dominant" : "mixed_flow";
         return {
           chain: "BSC",
           dex: p.dex || "PancakeSwap V2",
@@ -2664,12 +2672,23 @@ export default {
           usdtReserve: p.usdtReserve,
           liquidityUSDApprox: p.liquidityUSD,
           volume1hUSD: swapError ? null : volume1hUSD,
+          buyVolume1hUSD: swapError ? null : buyVolume1hUSD,
+          sellVolume1hUSD: swapError ? null : sellVolume1hUSD,
+          buySellVolumeRatio: swapError ? null : buySellVolumeRatio,
+          buyVolumeSharePct: swapError ? null : buyVolumeSharePct,
+          tradeFlowStatus: swapError ? "unavailable" : tradeFlowStatus,
           buys1h: swapError ? null : buys1h,
           sells1h: swapError ? null : sells1h,
           priceChange1h: swapError ? null : priceChange1h,
           swapCount1h: swapError ? null : buys1h + sells1h,
+          swapStatsPeriod: "since_pool_creation",
+          swapStatsWindowMinutes: Math.max(0, Math.round((latestTime - p.createdAt) / 60000)),
           riskNote: "新池风险高；链上新池事件不代表代币安全。请另行核实合约权限、持币集中度、卖出限制及流动性变化。" +
-            (swapError ? " 本轮 Swap 数据查询失败，成交指标未知，不得将其解释为零成交。" : "")
+            (swapError ? " 本轮 Swap 数据查询失败，成交指标未知，不得将其解释为零成交。" :
+              tradeFlowStatus === "buy_only_no_sell_confirmation" ? " 当前样本只有买入、没有卖出，不能据此认定买盘健康；需等待卖出验证。" :
+              tradeFlowStatus === "strong_buy_sell_imbalance" ? " 买卖成交额明显失衡，存在单边拉升或卖出验证不足风险。" :
+              tradeFlowStatus === "sell_volume_dominant" ? " 卖出成交额高于买入，需警惕抛压。" :
+              tradeFlowStatus === "insufficient_trade_sample" ? " Swap 样本不足，暂不评价资金流方向。" : "")
         };
       }).sort((a, b) => a.ageMinutes - b.ageMinutes);
 
@@ -2760,6 +2779,7 @@ export default {
         limitations: [
           "当前覆盖配置中的多个 BSC V2/V3 DEX 工厂；未覆盖全部 BSC DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
+          "V2 Swap 成交统计从池创建时刻累计到本轮扫描时刻，非完整滚动 1 小时；swapStatsPeriod 标注为 since_pool_creation。",
           "当前成交量、买卖次数仅对 V2 新池统计；V3 新池仅显示创建和 USDT 余额估算，成交统计待接入。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
