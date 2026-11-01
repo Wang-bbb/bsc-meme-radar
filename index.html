@@ -112,7 +112,21 @@ function priceRisk(p){
   }
   return {level:"clear",reason:"现有K线、回撤及交易数据未触发风险阈值；不代表安全或不会归零"};
 }
+let scanInProgress=false;
+let lastScanStartedAt=0;
+const MIN_SCAN_INTERVAL_MS=60000;
 async function scan(){
+  if(scanInProgress)return;
+  const now=Date.now();
+  const remaining=MIN_SCAN_INTERVAL_MS-(now-lastScanStartedAt);
+  if(lastScanStartedAt&&remaining>0){
+    $("status").textContent="为避免公共数据源限流，请等待约"+Math.ceil(remaining/1000)+"秒后再扫描；本轮错误结果不代表没有新池。";
+    return;
+  }
+  scanInProgress=true;
+  lastScanStartedAt=now;
+  $("refresh").disabled=true;
+  $("age").disabled=true;
   $("status").textContent="正在扫描四条链并进行安全检测…";
   $("cards").innerHTML='<div class="empty">扫描中…</div>';
   $("review-cards").innerHTML="";
@@ -280,6 +294,15 @@ async function scan(){
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
     $("review-cards").innerHTML="";
     $("blocked-cards").innerHTML="";
+  } finally {
+    scanInProgress=false;
+    const remaining=Math.max(0,MIN_SCAN_INTERVAL_MS-(Date.now()-lastScanStartedAt));
+    setTimeout(()=>{
+      if(!scanInProgress){
+        $("refresh").disabled=false;
+        $("age").disabled=false;
+      }
+    },remaining);
   }
 }
 $("refresh").onclick=scan;
