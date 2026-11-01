@@ -1208,9 +1208,11 @@ test("Solana complete legacy mint evidence can complement a complete RugCheck re
 
 
 function makeOhlcvRows() {
-  const minute = Math.floor(Date.now() / 60000) * 60;
+  // End at the final minute of a completed 5-minute bucket so all four
+  // comparison buckets have enough observations regardless of wall-clock minute.
+  const latest = Math.floor(Date.now() / 300000) * 300 - 60;
   return Array.from({ length: 60 }, (_, index) => {
-    const timestamp = minute - (59 - index) * 60;
+    const timestamp = latest - (59 - index) * 60;
     const price = 1 + index * 0.0005 + index * index * 0.000002;
     const volume = index >= 55 ? 30 : 10;
     return [timestamp, price, price * 1.002, price * 0.998, price, volume];
