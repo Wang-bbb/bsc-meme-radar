@@ -1724,7 +1724,8 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("旧 *1h 字段仅为兼容保留"));
   assert.ok(source.includes("buy_only_no_sell_confirmation"));
   assert.ok(source.includes("strong_buy_sell_imbalance"));
-  assert.ok(source.includes("swapStatsStatus: swapError ? \"unavailable\" : \"available\""));
+  assert.ok(source.includes("swapStatsStatus: swapError || v3SwapError ? \"partial_or_unavailable\" : \"available\""));
+  assert.ok(source.includes("swapStatsByDexVersion"));
   assert.ok(source.includes('earlySignalScoreVersion: "heuristic-v2"'));
   assert.ok(source.includes("earlySignalScore = Math.min(earlySignalScore, 49)"));
   assert.ok(source.includes("priceChangeSincePoolCreationPct >= 40"));
@@ -1752,4 +1753,15 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   assert.ok(source.includes("const validByLiquidity = pairData.filter"));
   assert.ok(source.includes("const v3ValidByLiquidity = v3Read.filter"));
   assert.ok(source.includes("Token metadata is deferred until after the liquidity"));
+});
+
+
+test("BSC scan includes V3 signed Swap topic and distinguishes V2/V3 swap-stat availability", async () => {
+  const source = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
+  assert.ok(source.includes('const V3_SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"'));
+  assert.ok(source.includes("const signedInt256 = (hexWord)"));
+  assert.ok(source.includes("swapStatsByDexVersion"));
+  assert.ok(source.includes('swapStatsPeriod: "since_pool_creation"'));
+  assert.ok(source.includes('tradeFlowStatus === "buy_only_no_sell_confirmation"'));
+  assert.ok(source.includes("amount0 = signedInt256(word(swap.data, 0))"));
 });
