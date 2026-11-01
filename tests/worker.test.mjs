@@ -666,6 +666,28 @@ test("dashboard history sampling covers the youngest BSC pool and highest turnov
   assert.equal(selected[2].marketHistorySelectionReason, "highest_liquidity_solana");
 });
 
+
+function loadDashboardTrendSorter() {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const match = html.match(/function sortCandidatesByTrendQuality\(candidates\)\{[\s\S]*?\n\}/);
+  assert.ok(match, "dashboard trend-score sorter should exist");
+  return vm.runInNewContext("(" + match[0] + ")");
+}
+
+test("dashboard ranks security-passed candidates by validated trend score and leaves insufficient scores unscored", () => {
+  const sort = loadDashboardTrendSorter();
+  const candidates = [
+    {id:"low",ageMinutes:1,volume1hUSD:100,trendScore:{status:"checked",score:35,confidence:85}},
+    {id:"unknown",ageMinutes:0.5,volume1hUSD:900,trendScore:{status:"insufficient",score:null,confidence:55}},
+    {id:"high",ageMinutes:8,volume1hUSD:1000,trendScore:{status:"checked",score:85,confidence:85}},
+    {id:"medium",ageMinutes:2,volume1hUSD:500,trendScore:{status:"checked",score:70,confidence:80}},
+    {id:"low-confidence",ageMinutes:0.2,volume1hUSD:2000,trendScore:{status:"checked",score:99,confidence:40}}
+  ];
+  const sorted = sort(candidates);
+  assert.equal(Array.from(sorted, item => item.id).join(","), "high,medium,low,low-confidence,unknown");
+  assert.equal(sorted.find(item => item.id==="unknown").trendScore.score, null);
+});
+
 function loadDashboardPriceRisk() {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const match = html.match(/function priceRisk\(p\)\{[\s\S]*?\n\}/);
