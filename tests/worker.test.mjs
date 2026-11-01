@@ -1741,6 +1741,14 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("尚无卖出成交验证"));
   assert.ok(source.includes("卖出成交额高于买入"));
   assert.ok(source.includes('swapError ? "insufficient_data"'));
+  assert.ok(source.includes("function classifyPriorityWatchlist(pool)"));
+  assert.ok(source.includes("priorityWatchlistEligible: eligible"));
+  assert.ok(source.includes('watchlistTier: eligible ? "priority_watchlist"'));
+  assert.ok(source.includes("首末观测成交价涨幅达到或超过40%，追高风险很高"));
+  assert.ok(source.includes("尚无卖出成交验证"));
+  assert.ok(source.includes("priorityWatchlistCount: priorityWatchlist.length"));
+  assert.ok(source.includes("priorityWatchlist: priorityWatchlist"));
+  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v1"'));
 });
 
 
