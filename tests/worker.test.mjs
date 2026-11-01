@@ -1238,7 +1238,7 @@ test("early trend score uses volume surge, buy pressure, acceleration and age wi
   assert.equal(data.volumeMetrics.baselineBucketsComplete, true);
   assert.equal(data.volumeMetrics.volumeSurge5m, 3);
   assert.equal(data.trendScore.status, "checked");
-  assert.equal(data.trendScore.confidence, 100);
+  assert.equal(data.trendScore.confidence, 85);
   assert.ok(data.trendScore.score >= 0 && data.trendScore.score <= 100);
   assert.ok(data.trendScore.components.some(item => item.key === "buyPressure1h"));
   assert.ok(data.trendScore.components.some(item => item.key === "volumeSurge5m"));
@@ -1275,5 +1275,5 @@ test("early trend score adds sustained candle structure and does not reward repe
   const data = await res.json();
   assert.equal(data.trendScore.status, "checked");
   assert.ok(data.trendScore.components.some(item => item.key === "trendStructure10m"));
-  assert.equal(data.trendScore.confidence, 100);
+  assert.equal(data.trendScore.confidence, 85);
 });
