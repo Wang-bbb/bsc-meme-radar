@@ -1725,7 +1725,10 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("buy_only_no_sell_confirmation"));
   assert.ok(source.includes("strong_buy_sell_imbalance"));
   assert.ok(source.includes("swapStatsStatus: swapError ? \"unavailable\" : \"available\""));
-  assert.ok(source.includes("earlySignalScoreVersion: \"heuristic-v1\""));
+  assert.ok(source.includes('earlySignalScoreVersion: "heuristic-v2"'));
+  assert.ok(source.includes("earlySignalScore = Math.min(earlySignalScore, 49)"));
+  assert.ok(source.includes("priceChangeSincePoolCreationPct >= 40"));
+  assert.ok(source.includes("建池以来首末成交价暴涨，追高风险很高"));
   assert.ok(source.includes("earlySignalGrade"));
   assert.ok(source.includes("尚无卖出成交验证"));
   assert.ok(source.includes("卖出成交额高于买入"));
