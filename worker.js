@@ -1365,14 +1365,30 @@ export default {
       const latest = asNumber(latestHex);
       const latestBlock = await rpc("eth_getBlockByNumber", [latestHex, false], rpcUrl);
       const latestTime = asNumber(latestBlock.timestamp) * 1000;
-      let secondsPerBlock = 0.5;
-      try {
-        const sample = await rpc("eth_getBlockByNumber", [hexNum(Math.max(0, latest - 1000)), false], rpcUrl);
-        const elapsed = latestTime - asNumber(sample.timestamp) * 1000;
-        if (elapsed > 0) secondsPerBlock = elapsed / 1000000;
-      } catch (_) {}
-      const blockWindow = Math.min(10000, Math.ceil(minutes * 60 / secondsPerBlock * 1.15) + 100);
-      const fromBlock = Math.max(0, latest - blockWindow);
+      const cutoffTime = latestTime - minutes * 60000;
+      // Locate the first block at or before the requested time boundary.
+      // Expand the lower bound if the initial estimate is too recent, then
+      // binary-search timestamps so minutes=15/30/60 maps to a real time window.
+      let span = Math.max(100, Math.ceil(minutes * 60 / 0.5) + 100);
+      let low = Math.max(0, latest - span);
+      let lowBlock = await rpc("eth_getBlockByNumber", [hexNum(low), false], rpcUrl);
+      while (low > 0 && asNumber(lowBlock.timestamp) * 1000 > cutoffTime) {
+        span = Math.min(latest, span * 2);
+        low = Math.max(0, latest - span);
+        lowBlock = await rpc("eth_getBlockByNumber", [hexNum(low), false], rpcUrl);
+      }
+      let high = latest;
+      while (low + 1 < high) {
+        const mid = Math.floor((low + high) / 2);
+        const midBlock = await rpc("eth_getBlockByNumber", [hexNum(mid), false], rpcUrl);
+        if (asNumber(midBlock.timestamp) * 1000 <= cutoffTime) low = mid;
+        else high = mid;
+      }
+      const fromBlock = low;
+      const blockWindow = latest - fromBlock;
+      const windowStartBlock = await rpc("eth_getBlockByNumber", [hexNum(fromBlock), false], rpcUrl);
+      const windowStartTime = asNumber(windowStartBlock.timestamp) * 1000;
+      const actualWindowSeconds = Math.max(0, (latestTime - windowStartTime) / 1000);
       const factoryFilterBase = { fromBlock: hexNum(fromBlock), toBlock: latestHex };
       const v2FactoryResults = await Promise.all(V2_FACTORIES.map(async (factory) => {
         const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [PAIR_CREATED] }], rpcUrl);
@@ -1398,6 +1414,23 @@ export default {
           fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
         );
         return { factory, allLogs: logs, usdtLogs };
+      }));
+      // Quote-asset counts are diagnostics only. Only USDT pools continue into
+      // the candidate pipeline; WBNB/USDC/BUSD pools are never promoted here.
+      const BSC_QUOTE_ASSETS = [
+        { symbol: "USDT", address: USDT.toLowerCase() },
+        { symbol: "USDC", address: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d" },
+        { symbol: "WBNB", address: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c" },
+        { symbol: "BUSD", address: "0xe9e7cea3dedca5984780bafc599bd69add087d56" }
+      ];
+      const quoteAssetDiagnostics = Object.fromEntries(BSC_QUOTE_ASSETS.map((asset) => {
+        const v2Count = v2FactoryResults.reduce((sum, item) => sum + item.allLogs.filter((log) =>
+          fromTopic(log.topics[1] || "") === asset.address || fromTopic(log.topics[2] || "") === asset.address
+        ).length, 0);
+        const v3Count = v3FactoryResults.reduce((sum, item) => sum + item.allLogs.filter((log) =>
+          fromTopic(log.topics[1] || "") === asset.address || fromTopic(log.topics[2] || "") === asset.address
+        ).length, 0);
+        return [asset.symbol, { v2PoolCreatedEvents: v2Count, v3PoolCreatedEvents: v3Count, total: v2Count + v3Count }];
       }));
       const factoryCodeChecks = await Promise.all(
         [...V2_FACTORIES, ...V3_FACTORIES].map(async (factory) => {
@@ -1568,7 +1601,12 @@ export default {
           v3: V3_FACTORIES.map((x) => ({ dex: x.name, address: x.address }))
         },
         latestBlock: latest,
+        windowStartBlock: fromBlock,
+        windowStartTimestamp: new Date(windowStartTime).toISOString(),
+        actualWindowSeconds: Math.round(actualWindowSeconds),
+        requestedWindowSeconds: minutes * 60,
         blockWindow: blockWindow,
+        quoteAssetDiagnostics: quoteAssetDiagnostics,
         factoryEventsFound: {
           v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.allLogs.length])),
           v3: Object.fromEntries(v3FactoryResults.map((x) => [x.factory.name, x.allLogs.length]))
