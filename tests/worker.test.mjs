@@ -1754,8 +1754,12 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   assert.ok(source.includes("inspectedPools: inspected.slice(0, 20).map"));
   assert.ok(source.includes('status: p && p._error ? "read_error"'));
   assert.ok(source.includes("missingLiquidity: inspected.filter"));
-  assert.ok(source.includes("const pairDataRaw = await mapLimit"));
-  assert.ok(source.includes("const v3ReadRaw = await mapLimit"));
+  assert.ok(source.includes("const v2ToInspect = fresh.slice(0, 40)"));
+  assert.ok(source.includes("const calls = v2ToInspect.map"));
+  assert.ok(source.includes("const results = await rpcBatch(calls, rpcUrl)"));
+  assert.ok(source.includes("const v3ToInspect = v3Fresh.slice(0, 40)"));
+  assert.ok(source.includes("const calls = v3ToInspect.map"));
+  assert.ok(source.includes("async function rpcBatch(calls, rpcUrl, networkLabel = \"BSC\")"));
   assert.ok(source.includes("async function enrichTokenMetadata(pool, rpcUrl)"));
   assert.ok(source.includes("const validByLiquidity = pairData.filter"));
   assert.ok(source.includes("const v3ValidByLiquidity = v3Read.filter"));

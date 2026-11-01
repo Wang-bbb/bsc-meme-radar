@@ -530,6 +530,29 @@ async function rpc(method, params, rpcUrl, networkLabel = "BSC") {
   throw lastError || new Error(networkLabel + " RPC request failed");
 }
 
+// Batch independent JSON-RPC calls into one Worker subrequest. Individual RPC errors
+// are preserved per item so one bad pool does not invalidate the entire batch.
+async function rpcBatch(calls, rpcUrl, networkLabel = "BSC") {
+  if (!calls.length) return [];
+  const payload = calls.map((call, index) => ({
+    jsonrpc: "2.0", id: index + 1, method: call.method, params: call.params
+  }));
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error(networkLabel + " RPC batch HTTP " + response.status);
+  const body = await response.json();
+  if (!Array.isArray(body)) throw new Error(networkLabel + " RPC batch response was not an array");
+  const byId = new Map(body.map((item) => [Number(item.id), item]));
+  return payload.map((request) => {
+    const item = byId.get(request.id);
+    if (!item) return { error: { message: "Missing batch response item" } };
+    return item.error ? { error: item.error } : { result: item.result };
+  });
+}
+
 const hexNum = (n) => "0x" + Math.max(0, n).toString(16);
 const fromTopic = (topic) => "0x" + topic.slice(-40).toLowerCase();
 const word = (data, index) => data.slice(2 + index * 64, 2 + (index + 1) * 64);
@@ -2617,12 +2640,25 @@ export default {
         log, createdAt: timeCache.get(asNumber(log.blockNumber)) || 0
       }));
       const v3Fresh = v3WithTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
-      const v3ReadRaw = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => {
-        const pool = await readV3Pool(x.log, x.createdAt, rpcUrl);
-        pool.dex = x.log._dex;
-        pool.dexId = x.log._dexId;
-        return pool;
-      });
+      const v3ToInspect = v3Fresh.slice(0, 40);
+      let v3ReadRaw;
+      try {
+        const calls = v3ToInspect.map((x) => ({
+          method: "eth_call",
+          params: [{ to: USDT, data: "0x70a08231" + ("0x" + word(x.log.data, 1).slice(-40)).slice(2).toLowerCase().padStart(64, "0") }, "latest"]
+        }));
+        const results = await rpcBatch(calls, rpcUrl);
+        v3ReadRaw = results.map((result, i) => {
+          const x = v3ToInspect[i], log = x.log;
+          const token0 = fromTopic(log.topics[1]), token1 = fromTopic(log.topics[2]);
+          const pair = "0x" + word(log.data, 1).slice(-40).toLowerCase();
+          if (result.error || !result.result) return { _error: "V3 reserve batch call failed: " + String(result.error?.message || "missing result"), pair, token0, token1, tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0, dex: log._dex, dexId: log._dexId, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash };
+          const usdtReserve = toFloat(BigInt(result.result || "0x0"), 18);
+          return { pair, token0, token1, tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0, symbol: (token0 === USDT.toLowerCase() ? token1 : token0).slice(0, 6) + "…" + (token0 === USDT.toLowerCase() ? token1 : token0).slice(-4), name: "Unknown token", decimals: 18, usdtReserve, liquidityUSD: usdtReserve * 2, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash, usdtIs0: token0 === USDT.toLowerCase(), fee: asNumber(log.topics[3]), dex: log._dex, dexId: log._dexId };
+        });
+      } catch (e) {
+        v3ReadRaw = v3ToInspect.map((x) => ({ _error: String(e), pair: "0x" + word(x.log.data, 1).slice(-40).toLowerCase(), tokenAddress: fromTopic(x.log.topics[1]) === USDT.toLowerCase() ? fromTopic(x.log.topics[2]) : fromTopic(x.log.topics[1]), dex: x.log._dex, dexId: x.log._dexId, createdBlock: asNumber(x.log.blockNumber), createdAt: x.createdAt, createdTx: x.log.transactionHash }));
+      }
       // Preserve the pool identity when an RPC read throws, so diagnostics can
       // show which newly created pool failed instead of only reporting a count.
       const v3Read = v3ReadRaw.map((p, i) => {
@@ -2655,13 +2691,25 @@ export default {
         createdAt: timeCache.get(asNumber(log.blockNumber)) || 0
       }));
       const fresh = withTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
-      const pairDataRaw = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
-        const p = await readPair(x.log, rpcUrl);
-        p.dex = x.log._dex || "PancakeSwap V2";
-        p.dexId = x.log._dexId || "pancakeswap";
-        p.createdAt = x.createdAt;
-        return p;
-      });
+      const v2ToInspect = fresh.slice(0, 40);
+      let pairDataRaw;
+      try {
+        const calls = v2ToInspect.map((x) => ({ method: "eth_call", params: [{ to: "0x" + word(x.log.data, 0).slice(-40).toLowerCase(), data: "0x0902f1ac" }, "latest"] }));
+        const results = await rpcBatch(calls, rpcUrl);
+        pairDataRaw = results.map((result, i) => {
+          const x = v2ToInspect[i], log = x.log;
+          const token0 = fromTopic(log.topics[1]), token1 = fromTopic(log.topics[2]);
+          const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
+          const tokenAddress = token0 === USDT.toLowerCase() ? token1 : token0;
+          if (result.error || !result.result) return { _error: "V2 reserves batch call failed: " + String(result.error?.message || "missing result"), pair, token0, token1, tokenAddress, dex: log._dex || "PancakeSwap V2", dexId: log._dexId || "pancakeswap", createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash };
+          const reserve0 = BigInt("0x" + word(result.result, 0)), reserve1 = BigInt("0x" + word(result.result, 1));
+          const usdtIs0 = token0 === USDT.toLowerCase();
+          const usdtReserve = toFloat(usdtIs0 ? reserve0 : reserve1, 18);
+          return { pair, token0, token1, tokenAddress, symbol: tokenAddress.slice(0, 6) + "…" + tokenAddress.slice(-4), name: "Unknown token", decimals: 18, usdtReserve, liquidityUSD: usdtReserve * 2, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash, usdtIs0, dex: log._dex || "PancakeSwap V2", dexId: log._dexId || "pancakeswap" };
+        });
+      } catch (e) {
+        pairDataRaw = v2ToInspect.map((x) => ({ _error: String(e), pair: "0x" + word(x.log.data, 0).slice(-40).toLowerCase(), tokenAddress: fromTopic(x.log.topics[1]) === USDT.toLowerCase() ? fromTopic(x.log.topics[2]) : fromTopic(x.log.topics[1]), dex: x.log._dex || "PancakeSwap V2", dexId: x.log._dexId || "pancakeswap", createdBlock: asNumber(x.log.blockNumber), createdAt: x.createdAt, createdTx: x.log.transactionHash }));
+      }
       const pairData = pairDataRaw.map((p, i) => {
         if (!p || !p._error) return p;
         const x = fresh[i];
