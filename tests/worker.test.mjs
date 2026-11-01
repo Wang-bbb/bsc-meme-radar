@@ -1373,7 +1373,7 @@ test("multiscan cross-checks Solana program activity over RPC without promoting 
   assert.equal(data.solanaRpcDiagnostics.length, 1);
   const diagnostics = data.solanaRpcDiagnostics[0];
   assert.equal(diagnostics.status, "ok");
-  assert.equal(diagnostics.coverage, "program-activity-only");
+  assert.equal(diagnostics.coverage, "raydium-cpmm-initialize-only");
   assert.equal(diagnostics.candidatePoolsAdded, 0);
   assert.ok(diagnostics.programsChecked > 0);
   assert.ok(diagnostics.recentTransactions > 0);
