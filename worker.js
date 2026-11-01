@@ -642,7 +642,7 @@ function summarizePoolWalletFlow(body, tokenAddress) {
   let parsedTrades=0,totalBuyUsd=0,totalSellUsd=0,oldestTimestamp=null,newestTimestamp=null;
   for(const row of rows){
     const a=row&&row.attributes||{};
-    const wallet=String(a.tx_from||a.from_address||"").toLowerCase();
+    const wallet=String(a.tx_from_address||a.tx_from||a.from_address||"").toLowerCase();
     if(!/^0x[a-f0-9]{40}$/.test(wallet)&&!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))continue;
     const fromToken=String(a.from_token_address||"").toLowerCase();
     const toToken=String(a.to_token_address||"").toLowerCase();
