@@ -639,6 +639,32 @@ test("price risk sends sustained sell pressure to review even before hourly pric
   assert.match(result.reason, /卖出次数/);
 });
 
+test("price risk blocks a regular early pump followed by a sharp reversal", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    trendSignals: { pumpThenDump: true, peakToCurrentDrawdownPct: -38, prePeakGainPct: 65, postPeakCandleCount: 2 }
+  });
+  assert.equal(result.level, "blocked");
+  assert.match(result.reason, /拉高砸盘/);
+});
+
+test("price risk blocks a sustained gradual decline instead of waiting for one crash candle", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    trendSignals: { gradualDecline: true, trendNetChangePct: -28, downMoveRatio: 0.9, trendCandleCount: 10 }
+  });
+  assert.equal(result.level, "blocked");
+  assert.match(result.reason, /持续阴跌/);
+});
+
+test("price risk reviews an emerging pump-and-dump reversal before the hard block threshold", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    trendSignals: { pumpThenDump: true, peakToCurrentDrawdownPct: -24, prePeakGainPct: 50, postPeakCandleCount: 1 }
+  });
+  assert.equal(result.level, "review");
+});
+
 test("price risk still blocks a severe short-window dump", () => {
   const priceRisk = loadDashboardPriceRisk();
   const result = priceRisk({
@@ -691,6 +717,49 @@ test("pool-risk computes high-water drawdown and short-window changes from Gecko
   assert.equal(data.priceChange5m, -12.5);
   assert.equal(Number(data.priceChange15m.toFixed(2)), -22.22);
   assert.ok(Math.abs(data.priceChange1h - 40) < 0.01);
+});
+
+test("pool-risk identifies a strong early rise followed by a sharp dump", async () => {
+  globalThis.fetch = async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const closes = [1, 1.2, 1.4, 1.6, 1.8, 1.9, 1.2, 1.0];
+    const rows = closes.map((close, index) => [
+      now - (closes.length - index - 1) * 60,
+      index ? closes[index - 1] : close,
+      index === 5 ? 2.0 : close * 1.03,
+      close * 0.97,
+      close,
+      100
+    ]);
+    return response({ data: { attributes: { ohlcv_list: rows } } });
+  };
+  const res = await worker.fetch(request("/pool-risk?chain=bsc&pool=TestPool&token=TestToken"), {});
+  const data = await res.json();
+  assert.equal(data.status, "checked");
+  assert.equal(data.trendSignals.pumpThenDump, true);
+  assert.ok(data.trendSignals.peakToCurrentDrawdownPct <= -40);
+});
+
+test("pool-risk identifies a persistent gradual decline without a single crash candle", async () => {
+  globalThis.fetch = async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const closes = [1, 0.96, 0.92, 0.88, 0.84, 0.80, 0.76];
+    const rows = closes.map((close, index) => [
+      now - (closes.length - index - 1) * 60,
+      index ? closes[index - 1] : close,
+      close * 1.01,
+      close * 0.99,
+      close,
+      100
+    ]);
+    return response({ data: { attributes: { ohlcv_list: rows } } });
+  };
+  const res = await worker.fetch(request("/pool-risk?chain=bsc&pool=TestPool&token=TestToken"), {});
+  const data = await res.json();
+  assert.equal(data.status, "checked");
+  assert.equal(data.trendSignals.gradualDecline, true);
+  assert.ok(data.trendSignals.trendNetChangePct <= -20);
+  assert.equal(data.trendSignals.downMoveRatio, 1);
 });
 
 test("pool-risk marks insufficient candle history as unverified instead of clear", async () => {
