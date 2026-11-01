@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeSizeRiskMetrics } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -21,6 +21,58 @@ function request(path) {
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+
+test("trade-size risk metrics flag extreme early turnover and outsized average sells without inventing missing values", () => {
+  const turnover = calculateTradeSizeRiskMetrics({
+    ageMinutes: 12, liquidityUSD: 10000, volumeUSD: 250000,
+    buyVolumeUSD: 150000, sellVolumeUSD: 100000, buys: 40, sells: 20
+  });
+  assert.equal(turnover.volumeToLiquidityRatioSincePoolCreation, 25);
+  assert.equal(turnover.averageBuyTradeUSD, 3750);
+  assert.equal(turnover.averageSellTradeUSD, 5000);
+  assert.equal(turnover.sellToBuyAverageTradeSizeRatio, 1.33);
+  assert.ok(turnover.flags.some(flag => flag.includes("20倍")));
+
+  const sellPressure = calculateTradeSizeRiskMetrics({
+    ageMinutes: 20, liquidityUSD: 50000, volumeUSD: 100000,
+    buyVolumeUSD: 40000, sellVolumeUSD: 60000, buys: 40, sells: 12
+  });
+  assert.equal(sellPressure.sellToBuyAverageTradeSizeRatio, 5);
+  assert.ok(sellPressure.flags.some(flag => flag.includes("平均卖出单笔金额")));
+
+  const insufficient = calculateTradeSizeRiskMetrics({
+    ageMinutes: 5, liquidityUSD: 0, volumeUSD: 1000,
+    buyVolumeUSD: 1000, sellVolumeUSD: null, buys: 10, sells: 0
+  });
+  assert.equal(insufficient.volumeToLiquidityRatioSincePoolCreation, null);
+  assert.equal(insufficient.averageSellTradeUSD, null);
+  assert.equal(insufficient.sellToBuyAverageTradeSizeRatio, null);
+  assert.equal(insufficient.flags.length, 0);
+});
+
+test("priority watchlist excludes extreme early turnover and outsized average sells for review", () => {
+  const base = {
+    tokenAddress: "0x1111111111111111111111111111111111111111",
+    historicalRiskStatus: "stable", tradeFlowStatus: "mixed_flow",
+    swapCountSincePoolCreation: 40, buysSincePoolCreation: 25, sellsSincePoolCreation: 15,
+    buySellVolumeRatioSincePoolCreation: 1.2, tradePriceChangeSincePoolCreationPct: 5,
+    earlySignalScore: 80, liquidityUSDApprox: 30000, ageMinutes: 12
+  };
+  const turnover = classifyPriorityWatchlist({
+    ...base, volumeToLiquidityRatioSincePoolCreation: 22,
+    sellToBuyAverageTradeSizeRatio: 1.1
+  });
+  assert.equal(turnover.priorityWatchlistEligible, false);
+  assert.ok(turnover.watchlistExclusionReasons.some(reason => reason.includes("20倍")));
+
+  const largeSells = classifyPriorityWatchlist({
+    ...base, volumeToLiquidityRatioSincePoolCreation: 2,
+    sellToBuyAverageTradeSizeRatio: 3
+  });
+  assert.equal(largeSells.priorityWatchlistEligible, false);
+  assert.ok(largeSells.watchlistExclusionReasons.some(reason => reason.includes("平均卖出单笔金额")));
 });
 
 test("Solana quote liquidity uses USD stablecoin reserves or a valid SOL/USD price", () => {
