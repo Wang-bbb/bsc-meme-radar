@@ -916,9 +916,17 @@ export default {
         if (!chainID) return json({ ok: false, status: "unverified", error: "unsupported chain" }, 400);
         const params = new URLSearchParams({ address, chainID: String(chainID) });
         if (pair) params.set("pair", pair);
-        const response = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
-        if (!response.ok) throw new Error("Honeypot.is HTTP " + response.status);
-        const report = await response.json();
+        // Honeypot simulation and GoPlus holder concentration are independent
+        // providers. A Honeypot outage must not skip the GoPlus risk check.
+        let report = {};
+        let honeypotError = null;
+        try {
+          const honeypotResponse = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
+          if (!honeypotResponse.ok) throw new Error("Honeypot.is HTTP " + honeypotResponse.status);
+          report = await honeypotResponse.json();
+        } catch (error) {
+          honeypotError = String(error);
+        }
         const simulation = report.simulationResult || {};
         const flags = Array.isArray(report.summary?.flags) ? report.summary.flags : [];
         const criticalFlags = flags.filter((x) => ["critical", "danger"].includes(String(x.severity || "").toLowerCase()));
@@ -969,7 +977,9 @@ export default {
           risk: report.summary?.risk || "unknown", riskLevel,
           buyTax, sellTax, openSource: report.contractCode?.rootOpenSource ?? null,
           pairAddress: report.pairAddress || report.pair?.pair?.address || null,
+          honeypotError,
           reasons: [
+            ...(honeypotError ? ["Honeypot.is 买卖模拟服务暂不可用："+honeypotError] : []),
             ...(isHoneypot ? ["检测到貔貅/无法正常卖出"] : []),
             ...(riskLevel !== null && riskLevel >= 60 ? ["Honeypot 风险等级偏高"] : []),
             ...(sellTax !== null && sellTax > 10 ? ["卖出税超过10%"] : []),
