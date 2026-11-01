@@ -26,6 +26,49 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+
+// Conservative priority-watchlist gate. Keep all liquidity-qualified pools in
+// the diagnostic result, but only promote candidates with adequate two-way
+// trade evidence and no obvious chase/sell-pressure flags.
+function classifyPriorityWatchlist(pool) {
+  const reasons = [];
+  const swapCount = pool.swapCountSincePoolCreation;
+  const priceChange = pool.tradePriceChangeSincePoolCreationPct;
+  const sellCount = pool.sellsSincePoolCreation;
+  const ratio = pool.buySellVolumeRatioSincePoolCreation;
+
+  if (pool.tradeFlowStatus === "unavailable" || swapCount == null || sellCount == null) {
+    reasons.push("成交数据不可用或不完整");
+  } else if (swapCount < 8) {
+    reasons.push("成交样本不足8笔");
+  }
+  if (sellCount === 0) reasons.push("尚无卖出成交验证");
+  if (pool.tradeFlowStatus === "sell_volume_dominant") reasons.push("卖出成交额高于买入");
+  if (ratio != null && ratio >= 4 && sellCount > 0) reasons.push("买卖成交额严重失衡");
+
+  if (priceChange == null || !Number.isFinite(Number(priceChange))) {
+    reasons.push("首末观测成交价变化未知");
+  } else if (priceChange >= 40) {
+    reasons.push("首末观测成交价涨幅达到或超过40%，追高风险很高");
+  } else if (priceChange >= 25) {
+    reasons.push("首末观测成交价涨幅达到或超过25%，追高风险偏高");
+  } else if (priceChange <= -15) {
+    reasons.push("首末观测成交价明显下跌");
+  }
+
+  const eligible = reasons.length === 0 &&
+    pool.earlySignalScore != null && pool.earlySignalScore >= 65 &&
+    pool.tradeFlowStatus === "mixed_flow" &&
+    Number(pool.liquidityUSDApprox) >= 5000;
+  const highRisk = (priceChange != null && (priceChange >= 40 || priceChange <= -15)) ||
+    pool.tradeFlowStatus === "sell_volume_dominant" ||
+    (ratio != null && ratio >= 4 && sellCount > 0);
+  return {
+    priorityWatchlistEligible: eligible,
+    watchlistTier: eligible ? "priority_watchlist" : highRisk ? "high_risk_review" : "review_only",
+    watchlistExclusionReasons: eligible ? [] : reasons.length ? reasons : ["尚未满足优先观察名单的全部条件"]
+  };
+}
 // GoPlus responses are cached per chain/token to reduce public API rate limits.
 // Successful security records live for 5 minutes; rate-limit responses cool down for 2 minutes.
 async function fetchGoPlusCached(env, endpoint, cacheKey) {
@@ -3085,6 +3128,9 @@ export default {
         };
       }));
 
+      for (const pool of pools) Object.assign(pool, classifyPriorityWatchlist(pool));
+      const priorityWatchlist = pools.filter((pool) => pool.priorityWatchlistEligible);
+
       const pairs = pools.map((p) => ({
         chainId: "bsc",
         dexId: p.dexId || (p.dex === "PancakeSwap V3" ? "pancakeswap-v3" : "pancakeswap"),
@@ -3096,7 +3142,10 @@ export default {
         liquidity: { usd: p.liquidityUSDApprox },
         volume: { h1: p.volume1hUSD, h24: null },
         txns: { h1: { buys: p.buys1h, sells: p.sells1h } },
-        priceChange: { h1: p.priceChange1h }
+        priceChange: { h1: p.priceChange1h },
+        priorityWatchlistEligible: p.priorityWatchlistEligible,
+        watchlistTier: p.watchlistTier,
+        watchlistExclusionReasons: p.watchlistExclusionReasons
       }));
 
       return json({
@@ -3150,7 +3199,10 @@ export default {
         freshPairsFound: fresh.length + v3Fresh.length,
         candidateFilterDiagnostics: candidateFilterDiagnostics,
         earlySignalScoreVersion: "heuristic-v2",
+        watchlistPolicyVersion: "priority-watchlist-v1",
         count: pools.length,
+        priorityWatchlistCount: priorityWatchlist.length,
+        priorityWatchlist: priorityWatchlist,
         pairs: pairs,
         pools: pools,
         swapStatsAvailable: (valid.length + v3Valid.length) === 0 ? null : !swapError && !v3SwapError,
