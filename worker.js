@@ -648,9 +648,9 @@ function summarizePoolWalletFlow(body, tokenAddress) {
     const toToken=String(a.to_token_address||"").toLowerCase();
     const kind=String(a.kind||"").toLowerCase();
     let side=null;
-    if(kind==="buy"||kind==="sell")side=kind;
-    else if(toToken===token&&fromToken!==token)side="buy";
+    if(toToken===token&&fromToken!==token)side="buy";
     else if(fromToken===token&&toToken!==token)side="sell";
+    else if(kind==="buy"||kind==="sell")side=kind;
     if(!side)continue;
     const rawVolume=Number(a.volume_in_usd);
     const volume=Number.isFinite(rawVolume)&&rawVolume>0?rawVolume:0;
