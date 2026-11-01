@@ -201,12 +201,19 @@ async function scan(){
     }
     await Promise.all(historyTargets.map(async p=>{
       const chain=p.chain==="BSC"?"bsc":p.chain==="Solana"?"solana":p.chain==="Base"?"base":"eth";
-      const params=new URLSearchParams({chain,pool:p.pairAddress,token:p.tokenAddress,liquidity:String(p.liquidityUSDApprox||"")});
+      const params=new URLSearchParams({
+        chain,pool:p.pairAddress,token:p.tokenAddress,
+        liquidity:String(p.liquidityUSDApprox||""),
+        buys:p.buys1h==null?"":String(p.buys1h),
+        sells:p.sells1h==null?"":String(p.sells1h),
+        age:p.ageMinutes==null?"":String(p.ageMinutes)
+      });
       try{
         const response=await fetch(base+"/pool-risk?"+params.toString());
         const data=await response.json();
         p.marketHistoryStatus=data.status||"unavailable";
         p.marketHistoryReason=data.error||"K线数据不足";
+        p.trendScore=data.trendScore||null;
         const snapshot=data.liquiditySnapshot||{};
         p.liquiditySnapshotStatus=snapshot.status||"unavailable";
         p.liquiditySnapshotReason=snapshot.error||"流动性历史快照尚未积累足够数据";
@@ -309,6 +316,12 @@ async function scan(){
         :"";
       const goPlusError=sec.holderProviderMessage?"GoPlus返回信息："+sec.holderProviderMessage:"";
       const honeypotBody=sec.honeypotResponseBody?"Honeypot响应正文："+sec.honeypotResponseBody:"";
+      const trend=p.trendScore||{};
+      const trendLine=trend.status==="checked"
+        ? '<div class="muted">早期走势评分：<b>'+esc(trend.score)+'/100 · '+esc(trend.label||"")+'</b> · 数据完整度 '+esc(trend.confidence)+'%</div>'+
+          '<div class="muted">走势指标：'+esc((trend.components||[]).map(x=>x.label+" "+(Number(x.value).toFixed(2))+(x.key==="volumeSurge5m"?"x":x.key==="buyPressure1h"?"%":"%")).join(" · "))+'</div>'+
+          ((trend.warnings||[]).length?'<div class="muted">走势提醒：'+esc(trend.warnings.join("；"))+'</div>':'')
+        : '<div class="muted">早期走势评分：'+esc(trend.label||"数据不足，暂不评分")+(trend.confidence!=null?" · 数据完整度 "+esc(trend.confidence)+"%":"")+'</div>';
       return '<article class="card '+(p.blocked?"blocked-card":p.pendingReason?"review-card":"")+'">'+
         '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
         '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
@@ -320,6 +333,7 @@ async function scan(){
         '<div class="muted">短周期价格变化：5分钟 '+(p.priceChange5m==null?"—":pct(p.priceChange5m))+' · 15分钟 '+(p.priceChange15m==null?"—":pct(p.priceChange15m))+'</div>'+
         '<div class="muted">观察区间高点回撤（'+esc(p.marketHistoryCandleCount==null?'—':p.marketHistoryCandleCount)+'根）：'+(p.drawdownFromHighPct==null?"—":pct(p.drawdownFromHighPct))+' · K线：'+esc(p.marketHistoryStatus||"未检查")+'</div>'+
         '<div class="muted">流动性变化：5分钟 '+(p.liquidityChange5mPct==null?"—":pct(p.liquidityChange5mPct))+' · 15分钟 '+(p.liquidityChange15mPct==null?"—":pct(p.liquidityChange15mPct))+' · 快照：'+esc(p.liquiditySnapshotStatus||"未检查")+'（'+esc(p.liquiditySnapshotCount==null?'0':p.liquiditySnapshotCount)+'条）</div>'+
+        trendLine+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         '<div class="muted">持币集中度：'+esc(holderInfo)+'</div>'+
