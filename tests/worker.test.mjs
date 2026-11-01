@@ -2017,3 +2017,22 @@ test("pool history still flags a liquidity collapse when the pool falls below th
   assert.equal(result.liquidityChangePct, -100);
   assert.ok(result.reasons.some(reason => reason.includes("骤降")));
 });
+
+test("user-reported scam feedback forces the token into high-risk review and never priority", () => {
+  const result = classifyPriorityWatchlist(watchlistPool({
+    tokenAddress: "0x6af0771ca96059a2e469099facfb14c8f96f9bc3"
+  }));
+  assert.equal(result.priorityWatchlistEligible, false);
+  assert.equal(result.watchlistTier, "high_risk_review");
+  assert.equal(result.userReportedRiskStatus, "user_reported_scam");
+  assert.ok(result.userReportedRiskReasons.some(reason => reason.includes("用户反馈")));
+  assert.ok(result.watchlistExclusionReasons.some(reason => reason.includes("尚未独立核验")));
+});
+
+test("user-reported scam labels do not affect unrelated token addresses", () => {
+  const result = classifyPriorityWatchlist(watchlistPool({
+    tokenAddress: "0x1111111111111111111111111111111111111111"
+  }));
+  assert.equal(result.userReportedRiskStatus, "none");
+  assert.deepEqual(result.userReportedRiskReasons, []);
+});
