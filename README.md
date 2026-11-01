@@ -8,7 +8,7 @@
 - 默认最低流动性：约 5,000 USD。
 - 排序：优先池龄最新；同等池龄参考成交量。
 - BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
-- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源；当索引源失败或没有合格池时，使用 Solana JSON-RPC 对 Pump.fun、PumpSwap、Raydium AMM v4/CPMM、Meteora DLMM、Orca Whirlpool 的近期程序交易做只读交叉检查。RPC 线索不等于已验证新池，不会直接进入候选排名。
+- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源；当索引源失败或没有合格池时，使用 Solana JSON-RPC 做独立交叉检查。当前仅对 Raydium CPMM initialize 指令实现协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；其他已知协议仍只输出活动线索，不生成候选。
 - Ethereum / Base：优先使用 GeckoTerminal 索引；索引源无合格池或失败时，可选使用独立 RPC 扫描配置的 Uniswap V2 工厂稳定币直连池（Ethereum: USDT/USDC/DAI；Base: USDC/USDbC/USDT）。该 RPC 兜底仅覆盖一个 V2 工厂，不是全链新池索引。
 - 其他链索引结果显示报价资产符号，但**不代表钱包兑换路径已验证**。
 - 前端合并 BSC 与其他三链结果，并按池龄排序。
@@ -93,3 +93,13 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 - Solana RPC 429/402 触发共享边缘冷却，避免连续刷新重复请求；5xx 最多重试一次，仍失败则进入短冷却。DexScreener/DexPaprika/GeckoTerminal 的 5xx 也会进入冷却。冷却是限流保护，不代表上游服务恢复。
 - 推荐在 Cloudflare Worker Secret 中配置自己的 `SOLANA_RPC_URL`，以减少公共节点限流；不要把含密钥的 RPC URL 提交到仓库或聊天中。
 - 已知程序 ID 参考：[Raydium 官方程序地址文档](https://github.com/raydium-io/raydium-docs-v1/blob/main/reference/program-addresses.mdx)、[Solana DEX/Launchpad 指令与程序目录](https://github.com/mahfuz67/solana-stream-skill/blob/main/skill/resources.md)。上线前仍需复核官方地址与指令版本。
+
+
+## Raydium CPMM 协议级新池解码（PR #43）
+- 当 Solana 索引源失败，或返回 HTTP 200 但没有合格池时，独立 RPC 交叉检查仍会运行，避免把空索引页误认为没有新池。
+- 当前仅解码 Raydium CPMM `initialize` 指令，使用官方 `raydium-io/raydium-idl` 中的指令 discriminator 和账户顺序；检查交易成功状态、创建时间窗口、pool_state owner、两个 vault 的 Token 程序 owner，以及每个 vault 的 Mint 是否与初始化指令的 token_0/token_1 mint 对应。
+- 单轮最多读取 4 笔 Raydium CPMM 近期交易，并最多执行 3 组池/Vault 账户核验；与其他程序抽样合计限制 RPC 请求量，429/402 仍触发共享冷却。
+- 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算值达到最低流动性门槛时，才加入新池观察列表。此估算不是可成交深度、真实总锁仓价值或钱包兑换路径验证。
+- 新候选的成交量、买卖笔数、K线、钱包流向和卖出能力仍标记为不可用/待复核；不会因为链上池账户解码成功就进入安全通过名单。
+- Pump.fun bonding curve、PumpSwap、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍未生成 RPC 候选；不能把它们的程序活动日志或 Mint 初始化线索冒充真实池。
+- 依据：[Raydium 官方 CPMM IDL](https://github.com/raydium-io/raydium-idl/blob/master/raydium_cpmm/raydium_cp_swap.json)、[Raydium CPMM 初始化源码](https://github.com/raydium-io/raydium-cp-swap/blob/master/programs/cp-swap/src/instructions/initialize.rs)。本项目只按其公开接口解码链上数据，不复制其实现代码。
