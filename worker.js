@@ -2323,6 +2323,7 @@ export default {
       const errors = [];
       const chainSources = [];
       const failedNetworks = [];
+      const indexDiagnostics = [];
       // Once DexPaprika returns HTTP 429 for one chain, stop retrying the same
       // provider for the remaining chains in this invocation. The provider
       // cooldown is shared, so repeating the same fallback only repeats errors.
@@ -2343,6 +2344,12 @@ export default {
           }
           const body = await response.json();
           const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
+          const indexDiagnostic = {
+            chain: network.name, provider: "GeckoTerminal", status: "ok",
+            indexedPoolCount: Array.isArray(body.data) ? body.data.length : 0,
+            excludedInvalidAge: 0, excludedOutsideAgeWindow: 0,
+            excludedBelowLiquidity: 0, excludedKnownQuotePair: 0, acceptedPools: 0
+          };
           let chainPoolCount = 0;
           for (const item of body.data || []) {
             const a = item.attributes || {};
@@ -2356,7 +2363,9 @@ export default {
             const created = Date.parse(a.pool_created_at || "");
             const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
             const liquidity = Number(a.reserve_in_usd || 0);
-            if (ageMinutes == null || ageMinutes < 0 || ageMinutes > minutes || liquidity < minLiquidity) continue;
+            if (ageMinutes == null || ageMinutes < 0) { indexDiagnostic.excludedInvalidAge++; continue; }
+            if (ageMinutes > minutes) { indexDiagnostic.excludedOutsideAgeWindow++; continue; }
+            if (liquidity < minLiquidity) { indexDiagnostic.excludedBelowLiquidity++; continue; }
             const tx1h = a.transactions && a.transactions.h1 || {};
             const volume1h = Number(a.volume_usd && a.volume_usd.h1 || 0);
             const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
@@ -2368,7 +2377,7 @@ export default {
             const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
             const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
             const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
-            if (candidate.skip) continue;
+            if (candidate.skip) { indexDiagnostic.excludedKnownQuotePair++; continue; }
             results.push({
               chain: network.name, chainId: network.dexChain,
               dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
@@ -2387,7 +2396,9 @@ export default {
               riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
             });
             chainPoolCount++;
+            indexDiagnostic.acceptedPools++;
           }
+          indexDiagnostics.push(indexDiagnostic);
           if (chainPoolCount === 0) {
             // A successful HTTP response with zero qualifying pools is not proof
             // that the index covered this chain. Try the independent fallback.
@@ -2396,7 +2407,9 @@ export default {
             chainSources.push({ chain: network.name, provider: "GeckoTerminal", status: "ok", pools: chainPoolCount });
           }
         } catch (error) {
-          failedNetworks.push({ network, error: String(error) });
+          const detail = String(error);
+          indexDiagnostics.push({ chain: network.name, provider: "GeckoTerminal", status: "error", error: detail });
+          failedNetworks.push({ network, error: detail });
         }
       }
 
@@ -2699,6 +2712,7 @@ export default {
           }
         },
         chainSources,
+        indexDiagnostics,
         evmRpcDiagnostics,
         solanaRpcDiagnostics,
         fallbackChains,
