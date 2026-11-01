@@ -1205,3 +1205,55 @@ test("Solana complete legacy mint evidence can complement a complete RugCheck re
   assert.equal(data.solanaMintAuthorityActive, false);
   assert.equal(data.solanaFreezeAuthorityActive, false);
 });
+
+
+function makeOhlcvRows() {
+  const minute = Math.floor(Date.now() / 60000) * 60;
+  return Array.from({ length: 60 }, (_, index) => {
+    const timestamp = minute - (59 - index) * 60;
+    const price = 1 + index * 0.0005 + index * index * 0.000002;
+    const volume = index >= 55 ? 30 : 10;
+    return [timestamp, price, price * 1.002, price * 0.998, price, volume];
+  }).reverse();
+}
+
+test("early trend score uses volume surge, buy pressure, acceleration and age with explicit confidence", async () => {
+  const values = new Map();
+  const kv = {
+    async get(key) { return values.has(key) ? JSON.parse(values.get(key)) : null; },
+    async put(key, value) { values.set(key, value); }
+  };
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    assert.equal(url.hostname, "api.geckoterminal.com");
+    return response({ data: { attributes: { ohlcv_list: makeOhlcvRows() } } });
+  };
+  const path = "/pool-risk?chain=bsc&pool=0x2222222222222222222222222222222222222222" +
+    "&token=0x1111111111111111111111111111111111111111&liquidity=50000&buys=40&sells=10&age=12";
+  const res = await worker.fetch(request(path), { ...env, RADAR_KV: kv });
+  const data = await res.json();
+  assert.equal(data.status, "checked");
+  assert.equal(data.volumeMetrics.baselineBucketsComplete, true);
+  assert.equal(data.volumeMetrics.volumeSurge5m, 3);
+  assert.equal(data.trendScore.status, "checked");
+  assert.equal(data.trendScore.confidence, 80);
+  assert.ok(data.trendScore.score >= 0 && data.trendScore.score <= 100);
+  assert.ok(data.trendScore.components.some(item => item.key === "buyPressure1h"));
+  assert.ok(data.trendScore.components.some(item => item.key === "volumeSurge5m"));
+  assert.equal(data.liquiditySnapshot.status, "collecting");
+});
+
+test("early trend score leaves missing buy/sell and age inputs unknown instead of assuming zero", async () => {
+  globalThis.fetch = async () => response({
+    data: { attributes: { ohlcv_list: makeOhlcvRows() } }
+  });
+  const path = "/pool-risk?chain=bsc&pool=0x2222222222222222222222222222222222222222" +
+    "&token=0x1111111111111111111111111111111111111111";
+  const res = await worker.fetch(request(path), env);
+  const data = await res.json();
+  assert.equal(data.trendScore.status, "insufficient");
+  assert.equal(data.trendScore.score, null);
+  assert.equal(data.trendScore.confidence, 45);
+  assert.ok(!data.trendScore.components.some(item => item.key === "poolAge"));
+  assert.ok(!data.trendScore.components.some(item => item.key === "buyPressure1h"));
+});
