@@ -1726,4 +1726,9 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   assert.ok(source.includes("readErrors: inspected.filter((p) => p && p._error).length"));
   assert.ok(source.includes("eligibleAfterLiquidityFilter: eligible.length"));
   assert.ok(source.includes("Number.isFinite(p.liquidityUSD)"));
+  assert.ok(source.includes("inspectedPools: inspected.slice(0, 20).map"));
+  assert.ok(source.includes('status: p && p._error ? "read_error"'));
+  assert.ok(source.includes("missingLiquidity: inspected.filter"));
+  assert.ok(source.includes("const pairDataRaw = await mapLimit"));
+  assert.ok(source.includes("const v3ReadRaw = await mapLimit"));
 });
