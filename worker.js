@@ -1024,12 +1024,14 @@ export default {
         let holderProviderHttpStatus = null;
         let holderProviderCode = null;
         let holderProviderMessage = null;
+        let goPlusCacheStatus = "miss";
         let goPlusOpenSource = null;
         try {
           const holderCacheKey = "security:goplus:v1:" + chainID + ":" + address.toLowerCase();
           const holderResponse = await fetchGoPlusCached(env,
             "https://api.gopluslabs.io/api/v1/token_security/" + chainID + "?contract_addresses=" + encodeURIComponent(address),
             holderCacheKey);
+          goPlusCacheStatus = holderResponse.headers.get("x-radar-goplus-cache") || "miss";
           holderProviderHttpStatus = holderResponse.status;
           if (!holderResponse.ok) {
             holderProviderStatus = "http_error";
@@ -1080,7 +1082,7 @@ export default {
           status, top10HolderConcentrationPct: holderConcentrationPct,
           holderConcentrationStatus, holderCountChecked,
           holderProviderStatus, holderProviderHttpStatus, holderProviderCode, holderProviderMessage, goPlusOpenSource,
-          goPlusCacheStatus: holderResponse.headers.get("x-radar-goplus-cache") || "miss",
+          goPlusCacheStatus,
           honeypotHttpStatus: honeypotResponseStatus,
           honeypotResponseBody,
           simulationSuccess: report.simulationSuccess === true,
