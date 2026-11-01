@@ -1426,3 +1426,158 @@ test("Solana RPC applies cooldown when a 5xx retry is followed by HTTP 429", asy
   assert.match(data.solanaRpcDiagnostics[0].error, /HTTP 429/);
   assert.equal(rpcCalls, 2, "retry only once, then stop on rate limit");
 });
+
+
+test("Solana RPC adds a Raydium CPMM pool only after instruction, pool owner, vault owner, and mint checks", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const pool = "B".repeat(32);
+  const tokenMint = "C".repeat(32);
+  const vault0 = "D".repeat(32);
+  const vault1 = "E".repeat(32);
+  const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const cpmm = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+  const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const keys = Array.from({ length: 20 }, () => "11111111111111111111111111111111");
+  keys[3] = pool;
+  keys[4] = tokenMint;
+  keys[5] = usdc;
+  keys[10] = vault0;
+  keys[11] = vault1;
+  keys[19] = cpmm;
+  let rpcCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      rpcCalls++;
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") {
+        const program = body.params[0];
+        return response({ jsonrpc: "2.0", id: 1, result: program === cpmm
+          ? [{ signature: "5".repeat(80), blockTime: now - 30, err: null }]
+          : [] });
+      }
+      if (body.method === "getTransaction") {
+        return response({ jsonrpc: "2.0", id: 1, result: {
+          transaction: { message: { accountKeys: keys.map(pubkey => ({ pubkey })), instructions: [{
+            programIdIndex: 19,
+            accounts: Array.from({ length: 19 }, (_, index) => index),
+            data: "CpoVi745fTaBD2WpXmJtRHQYhGB7LtkDRKkDg9YGfdPu"
+          }] } },
+          meta: { err: null, innerInstructions: [], logMessages: ["Program log: Instruction: Initialize"] }
+        } });
+      }
+      if (body.method === "getMultipleAccounts") {
+        assert.deepEqual(body.params[0], [pool, vault0, vault1]);
+        return response({ jsonrpc: "2.0", id: 1, result: { value: [
+          { owner: cpmm, data: ["", "base64"] },
+          { owner: tokenProgram, data: { program: "spl-token", parsed: { type: "account", info: {
+            mint: tokenMint, tokenAmount: { amount: "1000000000", decimals: 6, uiAmount: 1000, uiAmountString: "1000" }
+          } } } },
+          { owner: tokenProgram, data: { program: "spl-token", parsed: { type: "account", info: {
+            mint: usdc, tokenAmount: { amount: "3000000000", decimals: 6, uiAmount: 3000, uiAmountString: "3000" }
+          } } } }
+        ] } });
+      }
+      throw new Error("Unexpected Solana RPC method " + body.method);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.pools.length, 1);
+  const candidate = data.pools[0];
+  assert.equal(candidate.chainId, "solana");
+  assert.equal(candidate.dex, "Raydium CPMM");
+  assert.equal(candidate.pairAddress, pool);
+  assert.equal(candidate.tokenAddress, tokenMint);
+  assert.equal(candidate.quoteSymbol, "USDC");
+  assert.equal(candidate.liquidityUSDApprox, 6000);
+  assert.equal(candidate.tokenSelectionVerified, true);
+  assert.equal(candidate.marketHistoryStatus, "unavailable");
+  assert.equal(data.solanaRpcDiagnostics[0].candidatePoolsAdded, 1);
+  assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.raydiumCpmm.accountChecks, 1);
+  assert.equal(rpcCalls, 8, "six program signature scans, one transaction lookup, and one pool/vault account lookup");
+});
+
+test("Solana RPC protocol decoder runs when the index returns HTTP 200 with no qualifying pools", async () => {
+  let signatureScans = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] });
+    if (url.includes("dexscreener.com")) return response([]);
+    if (url.includes("dexpaprika.com")) return response({ pools: [] });
+    if (url.includes("solana-rpc.invalid")) {
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") {
+        signatureScans++;
+        return response({ jsonrpc: "2.0", id: 1, result: [] });
+      }
+      throw new Error("No transaction should be requested when there are no recent signatures");
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.pools.length, 0);
+  assert.equal(data.solanaRpcDiagnostics.length, 1);
+  assert.equal(data.solanaRpcDiagnostics[0].status, "ok");
+  assert.equal(signatureScans, 6, "empty successful index pages must still trigger the independent protocol cross-check");
+});
+
+test("Raydium CPMM pool decoder rejects mismatched vault mint associations", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const pool = "B".repeat(32);
+  const tokenMint = "C".repeat(32);
+  const wrongMint = "F".repeat(32);
+  const vault0 = "D".repeat(32);
+  const vault1 = "E".repeat(32);
+  const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const cpmm = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+  const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const keys = Array.from({ length: 20 }, () => "11111111111111111111111111111111");
+  keys[3] = pool; keys[4] = tokenMint; keys[5] = usdc; keys[10] = vault0; keys[11] = vault1; keys[19] = cpmm;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") return response({ jsonrpc: "2.0", id: 1, result:
+        body.params[0] === cpmm ? [{ signature: "6".repeat(80), blockTime: now - 20, err: null }] : [] });
+      if (body.method === "getTransaction") return response({ jsonrpc: "2.0", id: 1, result: {
+        transaction: { message: { accountKeys: keys.map(pubkey => ({ pubkey })), instructions: [{
+          programIdIndex: 19, accounts: Array.from({ length: 19 }, (_, index) => index),
+          data: "CpoVi745fTaBD2WpXmJtRHQYhGB7LtkDRKkDg9YGfdPu"
+        }] } }, meta: { err: null, innerInstructions: [], logMessages: [] }
+      } });
+      if (body.method === "getMultipleAccounts") return response({ jsonrpc: "2.0", id: 1, result: { value: [
+        { owner: cpmm, data: ["", "base64"] },
+        { owner: tokenProgram, data: { parsed: { type: "account", info: {
+          mint: wrongMint, tokenAmount: { amount: "1000000000", decimals: 6, uiAmountString: "1000" }
+        } } } },
+        { owner: tokenProgram, data: { parsed: { type: "account", info: {
+          mint: usdc, tokenAmount: { amount: "3000000000", decimals: 6, uiAmountString: "3000" }
+        } } } }
+      ] } });
+      throw new Error("Unexpected RPC method " + body.method);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.pools.length, 0, "mismatched vault mint must never be promoted to a candidate");
+  assert.equal(data.solanaRpcDiagnostics[0].candidatePoolsAdded, 0);
+  assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.raydiumCpmm.skipped, 1);
+});
