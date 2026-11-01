@@ -30,7 +30,7 @@ const json = (data, status) => new Response(JSON.stringify(data), { status: stat
 // Conservative priority-watchlist gate. Keep all liquidity-qualified pools in
 // the diagnostic result, but only promote candidates with adequate two-way
 // trade evidence and no obvious chase/sell-pressure flags.
-function classifyPriorityWatchlist(pool) {
+export function classifyPriorityWatchlist(pool) {
   const reasons = [];
   const swapCount = pool.swapCountSincePoolCreation;
   const priceChange = pool.tradePriceChangeSincePoolCreationPct;
