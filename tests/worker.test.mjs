@@ -1403,3 +1403,26 @@ test("Solana RPC discovery stops immediately on HTTP 429 and reports unavailable
   assert.match(data.solanaRpcDiagnostics[0].error, /HTTP 429/);
   assert.equal(rpcCalls, 1, "do not hammer the RPC after its first 429");
 });
+
+
+test("Solana RPC applies cooldown when a 5xx retry is followed by HTTP 429", async () => {
+  let rpcCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      rpcCalls++;
+      return response({ error: "upstream unavailable" }, rpcCalls === 1 ? 503 : 429);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.solanaRpcDiagnostics[0].status, "error");
+  assert.match(data.solanaRpcDiagnostics[0].error, /HTTP 429/);
+  assert.equal(rpcCalls, 2, "retry only once, then stop on rate limit");
+});
