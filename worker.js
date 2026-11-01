@@ -1159,6 +1159,9 @@ export default {
         const network = failed.network;
         const config = EVM_RPC_SCAN_CONFIG[network.id];
         if (!config) continue;
+        // Do not replace a successful indexed fallback with an RPC warning.
+        if (chainSources.some((source) => source.chain === network.name &&
+          (source.status === "ok" || source.status === "fallback"))) continue;
         const chainRpcUrl = env && env[config.envKey];
         if (!chainRpcUrl) {
           evmRpcDiagnostics.push({
@@ -1167,10 +1170,6 @@ export default {
             status: "not_configured",
             requiredSecret: config.envKey,
             note: "请在 Cloudflare Worker Settings → Variables and Secrets 中添加该 RPC Secret。"
-          });
-          errors.push({
-            chain: network.name,
-            error: failed.error + "; " + config.envKey + " secret not configured; RPC fallback unavailable"
           });
           continue;
         }
