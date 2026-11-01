@@ -641,6 +641,31 @@ const REGRESSION_SAMPLE_MINTS = [
   "4R9jUfYAifDyiLz9Tx6bHpPqkvh3GRom71YEapkUpump"
 ];
 
+
+function loadDashboardHistoryTargetSelector() {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const match = html.match(/function selectMarketHistoryTargets\(all\)\{[\s\S]*?\n\}/);
+  assert.ok(match, "dashboard history target selector should exist");
+  return vm.runInNewContext("(" + match[0] + ")");
+}
+
+test("dashboard history sampling covers the youngest BSC pool and highest turnover pool, not only largest liquidity", () => {
+  const select = loadDashboardHistoryTargetSelector();
+  const pools = [
+    {chain:"BSC",pairAddress:"large",tokenAddress:"large-token",ageMinutes:12,liquidityUSDApprox:100000,volumeSincePoolCreationUSD:1000},
+    {chain:"BSC",pairAddress:"young",tokenAddress:"young-token",ageMinutes:1.2,liquidityUSDApprox:9000,volumeSincePoolCreationUSD:250},
+    {chain:"BSC",pairAddress:"active",tokenAddress:"active-token",ageMinutes:8,liquidityUSDApprox:12000,volumeSincePoolCreationUSD:24000},
+    {chain:"BSC",pairAddress:"middle",tokenAddress:"middle-token",ageMinutes:6,liquidityUSDApprox:30000,volumeSincePoolCreationUSD:1200},
+    {chain:"Solana",pairAddress:"sol-high",tokenAddress:"sol-token",ageMinutes:5,liquidityUSDApprox:50000},
+    {chain:"Solana",pairAddress:"sol-young",tokenAddress:"sol-young-token",ageMinutes:1,liquidityUSDApprox:90000}
+  ];
+  const selected = select(pools);
+  assert.deepEqual(selected.map(pool => pool.pairAddress), ["young","active","sol-high"]);
+  assert.equal(selected[0].marketHistorySelectionReason, "youngest_pool");
+  assert.equal(selected[1].marketHistorySelectionReason, "highest_turnover_to_liquidity");
+  assert.equal(selected[2].marketHistorySelectionReason, "highest_liquidity_solana");
+});
+
 function loadDashboardPriceRisk() {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const match = html.match(/function priceRisk\(p\)\{[\s\S]*?\n\}/);
