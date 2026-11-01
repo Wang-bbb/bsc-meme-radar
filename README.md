@@ -101,7 +101,7 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 - 单轮最多读取 4 笔 Raydium CPMM 近期交易，并最多执行 3 组池/Vault 账户核验；与其他程序抽样合计限制 RPC 请求量，429/402 仍触发共享冷却。
 - 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算值达到最低流动性门槛时，才加入新池观察列表。此估算不是可成交深度、真实总锁仓价值或钱包兑换路径验证。
 - 新候选的成交量、买卖笔数、K线、钱包流向和卖出能力仍标记为不可用/待复核；不会因为链上池账户解码成功就进入安全通过名单。
-- Pump.fun bonding curve、PumpSwap、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍未生成 RPC 候选；不能把它们的程序活动日志或 Mint 初始化线索冒充真实池。
+- Pump.fun bonding curve、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍未生成 RPC 候选；不能把它们的程序活动日志或 Mint 初始化线索冒充真实池。PumpSwap 的协议级覆盖见下文。
 - 依据：[Raydium 官方 CPMM IDL](https://github.com/raydium-io/raydium-idl/blob/master/raydium_cpmm/raydium_cp_swap.json)、[Raydium CPMM 初始化源码](https://github.com/raydium-io/raydium-cp-swap/blob/master/programs/cp-swap/src/instructions/initialize.rs)。本项目只按其公开接口解码链上数据，不复制其实现代码。
 
 ## PumpSwap 协议级新池解码（PR #44）
