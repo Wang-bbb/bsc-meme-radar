@@ -23,25 +23,31 @@ test.afterEach(() => {
 });
 
 test("EVM security gate passes only when simulation and source checks are complete", async () => {
-  globalThis.fetch = async () => response({
-    simulationSuccess: true,
-    simulationResult: { buyTax: 0, sellTax: 0 },
-    honeypotResult: { isHoneypot: false },
-    summary: { riskLevel: 10, flags: [] },
-    contractCode: { rootOpenSource: true }
-  });
+  globalThis.fetch = async (input) => {
+    if (new URL(input).hostname === "api.gopluslabs.io") return response({ code: 1, result: { "0x1111111111111111111111111111111111111111": { holders: Array.from({ length: 10 }, () => ({ percent: "0.01" })) } } });
+    return response({
+      simulationSuccess: true,
+      simulationResult: { buyTax: 0, sellTax: 0 },
+      honeypotResult: { isHoneypot: false },
+      summary: { riskLevel: 10, flags: [] },
+      contractCode: { rootOpenSource: true }
+    });
+  };
   const res = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), env);
   const data = await res.json();
   assert.equal(data.status, "pass");
 });
 
 test("EVM security gate sends missing source verification to review", async () => {
-  globalThis.fetch = async () => response({
-    simulationSuccess: true,
-    simulationResult: { buyTax: 0, sellTax: 0 },
-    honeypotResult: { isHoneypot: false },
-    summary: { riskLevel: 10, flags: [] }
-  });
+  globalThis.fetch = async (input) => {
+    if (new URL(input).hostname === "api.gopluslabs.io") return response({ code: 1, result: { "0x1111111111111111111111111111111111111111": { holders: Array.from({ length: 10 }, () => ({ percent: "0.01" })) } } });
+    return response({
+      simulationSuccess: true,
+      simulationResult: { buyTax: 0, sellTax: 0 },
+      honeypotResult: { isHoneypot: false },
+      summary: { riskLevel: 10, flags: [] }
+    });
+  };
   const res = await worker.fetch(request("/security-check?chain=base&address=0x1111111111111111111111111111111111111111"), env);
   const data = await res.json();
   assert.equal(data.status, "review");
@@ -107,6 +113,42 @@ test("Solana security gate keeps elevated or incomplete reports in review", asyn
   assert.equal(data.status, "review");
 });
 
+
+test("EVM top-ten concentration at or above 80 percent is blocked", async () => {
+  globalThis.fetch = async (input) => {
+    if (new URL(input).hostname === "api.gopluslabs.io") return response({ code: 1, result: { "0x1111111111111111111111111111111111111111": { holders: Array.from({ length: 10 }, (_, i) => ({ percent: i === 0 ? "0.75" : "0.01" })) } } });
+    return response({ simulationSuccess: true, simulationResult: { buyTax: 0, sellTax: 0 }, honeypotResult: { isHoneypot: false }, summary: { riskLevel: 10, flags: [] }, contractCode: { rootOpenSource: true } });
+  };
+  const res = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), env);
+  const data = await res.json();
+  assert.equal(data.top10HolderConcentrationPct, 84);
+  assert.equal(data.holderConcentrationStatus, "high");
+  assert.equal(data.status, "blocked");
+});
+
+test("EVM missing top-holder data remains in review", async () => {
+  globalThis.fetch = async (input) => {
+    if (new URL(input).hostname === "api.gopluslabs.io") return response({ code: 1, result: {} });
+    return response({ simulationSuccess: true, simulationResult: { buyTax: 0, sellTax: 0 }, honeypotResult: { isHoneypot: false }, summary: { riskLevel: 10, flags: [] }, contractCode: { rootOpenSource: true } });
+  };
+  const res = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), env);
+  const data = await res.json();
+  assert.equal(data.holderConcentrationStatus, "unknown");
+  assert.equal(data.status, "review");
+});
+
+test("Solana top-ten holder concentration at or above 80 percent is blocked", async () => {
+  globalThis.fetch = async () => response({
+    tokenProgram: "spl-token", risks: [], score_normalised: 1, lpLockedPct: 95,
+    mintAuthority: null, freezeAuthority: null,
+    topHolders: Array.from({ length: 10 }, (_, i) => ({ pct: i === 0 ? 75 : 1 }))
+  });
+  const res = await worker.fetch(request("/security-check?chain=solana&address=So11111111111111111111111111111111111111112"), env);
+  const data = await res.json();
+  assert.equal(data.top10HolderConcentrationPct, 84);
+  assert.equal(data.holderConcentrationStatus, "high");
+  assert.equal(data.status, "blocked");
+});
 
 test("non-BSC preflight requests do not depend on the NodeReal secret", async () => {
   const req = new Request("https://worker.test/multiscan", { method: "OPTIONS" });

@@ -882,14 +882,33 @@ export default {
             Object.prototype.hasOwnProperty.call(report.token || {}, "freezeAuthority");
           const activeAuthorities = mintAuthority != null || freezeAuthority != null;
           const unknownAuthorities = !authorityFieldsPresent;
-          const status = rugged || critical.length ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || unknownLiquidityLock || activeAuthorities || unknownAuthorities) ? "review" : "pass";
+          const holderRows = Array.isArray(report.topHolders) ? report.topHolders.slice(0, 10) : [];
+          const holderValues = holderRows.map(holder => {
+            const value = holder && (holder.pct ?? holder.percent ?? holder.percentage);
+            return value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+          });
+          const holderConcentrationPct = holderRows.length >= 10 && holderValues.every(value => value !== null)
+            ? holderValues.reduce((sum, value) => sum + value, 0) : null;
+          const holderConcentrationStatus = holderConcentrationPct === null ? "unknown"
+            : holderConcentrationPct >= 80 ? "high" : holderConcentrationPct >= 50 ? "elevated" : "observed";
+          const holderConcentrationReason = holderConcentrationPct === null
+            ? "前十大持币集中度数据缺失或不足10个有效持币记录，需复核"
+            : holderConcentrationPct >= 80
+              ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度过高"
+              : holderConcentrationPct >= 50
+                ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度偏高" : "";
+          const holderHardRisk = holderConcentrationPct !== null && holderConcentrationPct >= 80;
+          const holderReviewRisk = holderConcentrationPct === null || holderConcentrationPct >= 50;
+          const status = rugged || critical.length || holderHardRisk ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || unknownLiquidityLock || activeAuthorities || unknownAuthorities || holderReviewRisk) ? "review" : "pass";
           return json({
             ok: true, chain, tokenAddress: address, provider: "RugCheck",
             status, riskScore: report.score_normalised ?? null, lpLockedPct,
+            top10HolderConcentrationPct: holderConcentrationPct,
+            holderConcentrationStatus, holderCountChecked: holderRows.length,
             liquidityLockStatus: unknownLiquidityLock ? "unknown" : weakLiquidityLock ? "below_threshold" : "meets_threshold",
             risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
-            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["已报告的流动性锁定比例低于80%"] : []), ...(unknownLiquidityLock ? ["流动性锁定数据缺失，无法确认；不代表已确认未锁定"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : [])],
-            note: "RugCheck 摘要只覆盖其报告中的链上风险信号；不等于完整审计或实际买卖模拟。"
+            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["已报告的流动性锁定比例低于80%"] : []), ...(unknownLiquidityLock ? ["流动性锁定数据缺失，无法确认；不代表已确认未锁定"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : []), ...(holderConcentrationReason ? [holderConcentrationReason] : [])],
+            note: "前十大持币占比基于RugCheck返回的原始持币记录，可能包含池子或项目地址；仅作集中度预警，不等于最终流通筹码分布。RugCheck摘要不等于完整审计或实际买卖模拟。"
           });
         }
         const chainIds = { ethereum: 1, eth: 1, bsc: 56, base: 8453 };
@@ -911,13 +930,41 @@ export default {
         const simOK = report.simulationSuccess === true && report.honeypotResult && typeof report.honeypotResult.isHoneypot === "boolean";
         const hardRisk = isHoneypot || (riskLevel !== null && riskLevel >= 80) ||
           (sellTax !== null && sellTax >= 20) || (buyTax !== null && buyTax >= 30) || criticalFlags.length > 0;
+        let holderConcentrationPct = null;
+        let holderConcentrationStatus = "unknown";
+        let holderCountChecked = 0;
+        let holderConcentrationReason = "前十大持币集中度数据暂不可用，需复核";
+        try {
+          const holderResponse = await fetch("https://api.gopluslabs.io/api/v1/token_security/" + chainID + "?contract_addresses=" + encodeURIComponent(address), { headers: { "accept": "application/json" } });
+          if (holderResponse.ok) {
+            const holderBody = await holderResponse.json();
+            const holderRecord = holderBody && holderBody.result && (holderBody.result[address.toLowerCase()] || holderBody.result[address] || Object.values(holderBody.result)[0]);
+            const holderRows = holderRecord && Array.isArray(holderRecord.holders) ? holderRecord.holders.slice(0, 10) : [];
+            const holderValues = holderRows.map(holder => {
+              const value = holder && holder.percent;
+              return value == null || !Number.isFinite(Number(value)) ? null : Number(value) * 100;
+            });
+            holderCountChecked = holderRows.length;
+            if (holderRows.length >= 10 && holderValues.every(value => value !== null)) {
+              holderConcentrationPct = holderValues.reduce((sum, value) => sum + value, 0);
+              holderConcentrationStatus = holderConcentrationPct >= 80 ? "high" : holderConcentrationPct >= 50 ? "elevated" : "observed";
+              holderConcentrationReason = holderConcentrationPct >= 80
+                ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度过高"
+                : holderConcentrationPct >= 50
+                  ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度偏高" : "";
+            }
+          }
+        } catch (_) {}
+        const holderHardRisk = holderConcentrationPct !== null && holderConcentrationPct >= 80;
+        const holderReviewRisk = holderConcentrationPct === null || holderConcentrationPct >= 50;
         const reviewRisk = !simOK || riskLevel === null || riskLevel >= 60 ||
           buyTax === null || sellTax === null || buyTax > 10 || sellTax > 10 ||
-          highFlags.length > 0 || report.contractCode?.rootOpenSource !== true;
-        const status = hardRisk ? "blocked" : reviewRisk ? "review" : "pass";
+          highFlags.length > 0 || report.contractCode?.rootOpenSource !== true || holderReviewRisk;
+        const status = hardRisk || holderHardRisk ? "blocked" : reviewRisk ? "review" : "pass";
         return json({
-          ok: true, chain, tokenAddress: address, provider: "Honeypot.is",
-          status, simulationSuccess: report.simulationSuccess === true,
+          ok: true, chain, tokenAddress: address, provider: "Honeypot.is + GoPlus",
+          status, top10HolderConcentrationPct: holderConcentrationPct,
+          holderConcentrationStatus, holderCountChecked, simulationSuccess: report.simulationSuccess === true,
           isHoneypot: report.honeypotResult?.isHoneypot ?? null,
           risk: report.summary?.risk || "unknown", riskLevel,
           buyTax, sellTax, openSource: report.contractCode?.rootOpenSource ?? null,
@@ -929,9 +976,10 @@ export default {
             ...(!simOK ? ["买卖模拟未成功或结果不完整"] : []),
             ...(!report.contractCode?.rootOpenSource ? ["合约源码未确认开源"] : []),
             ...criticalFlags.map((x) => x.description || x.flag),
-            ...highFlags.map((x) => x.description || x.flag)
+            ...highFlags.map((x) => x.description || x.flag),
+            ...(holderConcentrationReason ? [holderConcentrationReason] : [])
           ],
-          note: "模拟结果只代表本次检测时点和检测路径；代币权限或流动性变化后风险可能改变。"
+          note: "GoPlus前十大持币比例基于其返回的持币列表，可能包含池子或项目地址；缺失数据按待复核处理。模拟结果只代表本次检测时点和检测路径；代币权限或流动性变化后风险可能改变。"
         });
       } catch (error) {
         return json({ ok: true, chain, tokenAddress: address, provider: chain === "solana" ? "RugCheck" : "Honeypot.is", status: "unverified", error: String(error), note: "安全数据不可用，按未验证处理，不进入通过安全检查的观察名单。" });
