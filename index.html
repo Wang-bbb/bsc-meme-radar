@@ -384,8 +384,11 @@ async function scan(){
     const bscStatus=bsc
       ? "BSC：RPC扫描成功，符合窗口和流动性条件的USDT池 "+bscPoolCount+" 个；扫描区块窗口内USDT池创建事件 "+bscEventTotal+" 个"+(bscDexHits?"（"+bscDexHits+"）":"")
       : "BSC：扫描失败（"+(settled[0].reason?.message||"未知错误")+"）";
+    const solanaIndexDetails=(multi?.indexDiagnostics||[]).filter(x=>x.chain==="Solana").map(x=>x.status==="ok"
+      ? "GeckoTerminal返回"+Number(x.indexedPoolCount||0)+"池，池龄超窗"+Number(x.excludedOutsideAgeWindow||0)+"，流动性不足"+Number(x.excludedBelowLiquidity||0)+"，无效池龄"+Number(x.excludedInvalidAge||0)+"，报价两侧均为已知资产"+Number(x.excludedKnownQuotePair||0)+"，通过年龄/流动性筛选"+Number(x.acceptedPools||0)
+      : "GeckoTerminal失败："+(x.error||"未知错误")).join("；");
     const solanaStatus=multi
-      ? "Solana："+solanaPoolCount+" 个原始池"+(multi.fallbackChains?.includes("Solana")?"，已切换备用索引":"，主索引请求成功")
+      ? "Solana："+solanaPoolCount+" 个原始池"+(solanaPoolCount>0?(multi.fallbackChains?.includes("Solana")?"，已切换备用索引":"，索引返回候选"):(multi.chainErrors?.some(x=>x.chain==="Solana")?"，索引/备用源存在错误，0个结果不代表没有新池":"，本轮没有池通过筛选"))
       : "Solana：扫描失败（"+(settled[1].reason?.message||"未知错误")+"）";
     $("status").textContent=bscStatus+"；"+solanaStatus+"。"+
       "原始池 "+discoveredCount+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"（含黑名单 "+denylisted.length+"）。"+
@@ -393,7 +396,9 @@ async function scan(){
       (failures.length?"；扫描异常："+failures.join("；")+"。":"")+
       (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", ")+"；失败链未返回有效数据，零结果不代表没有新池。":"")+
       (multi?.fallbackChains?.length?"；备用索引已启用："+multi.fallbackChains.join(", ")+"（DexScreener Token Profile 仅部分覆盖，不代表完整新池）。":"")+
-      ((multi?.solanaRpcDiagnostics||[]).length?"；Solana RPC 独立交叉检查："+multi.solanaRpcDiagnostics.map(x=>x.status==="ok"?"已扫描 "+Number(x.recentTransactions||0)+" 笔近期程序交易、发现 "+(x.mintHints||[]).length+" 个 Mint 线索（尚未验证为新池）":("状态 "+x.status+(x.error?"："+x.error:""))).join("；"):"");
+      (solanaIndexDetails?"；Solana主索引诊断："+solanaIndexDetails+"。":"")+
+      ((multi?.chainSources||[]).filter(x=>x.chain==="Solana").length?"；Solana数据源状态："+multi.chainSources.filter(x=>x.chain==="Solana").map(x=>x.provider+"="+x.status+(x.pools!=null?"（"+x.pools+"池）":"")+(x.note?"："+x.note:"")).join("；")+"。":"")+
+      ((multi?.solanaRpcDiagnostics||[]).length?"；Solana RPC 独立交叉检查："+multi.solanaRpcDiagnostics.map(x=>x.status==="ok"?"已扫描 "+Number(x.recentTransactions||0)+" 笔近期程序交易、解码候选 "+Number(x.candidatePoolsAdded||0)+" 个、发现 "+(x.mintHints||[]).length+" 个 Mint 线索（Mint线索不等于新池）":("状态 "+x.status+(x.error?"："+x.error:""))).join("；"):"");
   }catch(e){
     $("status").textContent="扫描失败："+e.message+"。这不是“没有新币”，请稍后重试。";
     $("cards").innerHTML='<div class="empty">暂时无法获取链上数据，请稍后重试。</div>';
