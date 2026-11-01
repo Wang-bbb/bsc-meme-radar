@@ -72,7 +72,16 @@ async function fetchGeckoTerminal(endpoint) {
     } catch (_) {}
   }
   const providerCooldown = await readProviderCooldown("geckoterminal");
-  if (providerCooldown) return providerCooldown;
+  if (providerCooldown) {
+    const headers = new Headers(providerCooldown.headers);
+    headers.set("x-radar-provider-state", "shared-cooldown");
+    headers.set("x-radar-provider", "GeckoTerminal");
+    return new Response(providerCooldown.body, {
+      status: providerCooldown.status,
+      statusText: providerCooldown.statusText,
+      headers
+    });
+  }
 
   let lastResponse;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -83,8 +92,16 @@ async function fetchGeckoTerminal(endpoint) {
     // so repeated mobile refreshes do not amplify provider throttling.
     if (response.status === 429) {
       await writeProviderCooldown("geckoterminal", response);
+      const stateHeaders = new Headers(response.headers);
+      stateHeaders.set("x-radar-provider-state", "upstream-rate-limit");
+      stateHeaders.set("x-radar-provider", "GeckoTerminal");
+      const taggedResponse = new Response(response.clone().body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: stateHeaders
+      });
       if (cache) {
-        const headers = new Headers(response.headers);
+        const headers = new Headers(stateHeaders);
         headers.set("x-radar-original-status", "429");
         headers.set("cache-control", "public, max-age=15");
         try {
@@ -93,7 +110,7 @@ async function fetchGeckoTerminal(endpoint) {
           }));
         } catch (_) {}
       }
-      return response;
+      return taggedResponse;
     }
     if (response.status < 500) {
       if (response.ok && cache) {
@@ -728,7 +745,15 @@ export default {
         try {
           const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
           const response = await fetchGeckoTerminal(endpoint);
-          if (!response.ok) throw new Error("GeckoTerminal HTTP " + response.status);
+          if (!response.ok) {
+            const providerState = response.headers.get("x-radar-provider-state");
+            const detail = providerState === "shared-cooldown"
+              ? "GeckoTerminal shared cooldown (previous upstream HTTP 429)"
+              : providerState === "upstream-rate-limit"
+                ? "GeckoTerminal upstream HTTP 429 (provider rate limit)"
+                : "GeckoTerminal HTTP " + response.status;
+            throw new Error(detail);
+          }
           const body = await response.json();
           const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
           let chainPoolCount = 0;
@@ -982,6 +1007,12 @@ export default {
         minLiquidityUSD: minLiquidity,
         dataSource: "GeckoTerminal primary; DexScreener profiles/boosts fallback; DexPaprika independent fallback when both fail",
         coverage: fallbackChains.length ? "partial" : "primary-index",
+        providerDiagnostics: {
+          geckoTerminal: {
+            note: "shared-cooldown 表示本轮请求未再次访问上游，而是命中之前由上游429触发的共享冷却；upstream-rate-limit 表示本次请求实际收到上游429。",
+            cooldownSeconds: PROVIDER_COOLDOWN_SECONDS
+          }
+        },
         chainSources,
         fallbackChains,
         count: results.length,
