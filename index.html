@@ -99,6 +99,19 @@ function sortCandidatesByTrendQuality(candidates){
     return ageA-ageB||Number(b.volume1hUSD||0)-Number(a.volume1hUSD||0);
   });
 }
+function tradeSizeRiskSummary(pool){
+  const metrics=[];
+  const add=(label,value,suffix)=>{
+    if(value==null||value===""||!Number.isFinite(Number(value)))return;
+    metrics.push(label+" "+Number(value).toFixed(2)+(suffix||""));
+  };
+  add("成交额/流动性",pool&&pool.volumeToLiquidityRatioSincePoolCreation,"x");
+  add("平均买入",pool&&pool.averageBuyTradeUSD," USD");
+  add("平均卖出",pool&&pool.averageSellTradeUSD," USD");
+  add("平均卖出/买入",pool&&pool.sellToBuyAverageTradeSizeRatio,"x");
+  const flags=pool&&Array.isArray(pool.earlyRiskFlags)?pool.earlyRiskFlags.filter(Boolean):[];
+  return {metrics,flags};
+}
 function priceRisk(p){
   const change=p.priceChange1h==null?null:Number(p.priceChange1h);
   const short5=p.priceChange5m==null?null:Number(p.priceChange5m);
@@ -365,6 +378,11 @@ async function scan(){
         :"";
       const goPlusError=sec.holderProviderMessage?"GoPlus返回信息："+sec.holderProviderMessage:"";
       const honeypotBody=sec.honeypotResponseBody?"Honeypot响应正文："+sec.honeypotResponseBody:"";
+      const tradeSizeSummary=tradeSizeRiskSummary(p);
+      const tradeSizeLine=tradeSizeSummary.metrics.length
+        ? '<div class="muted">成交结构（建池以来）：'+esc(tradeSizeSummary.metrics.join(" · "))+'</div>' : "";
+      const tradeSizeWarnings=tradeSizeSummary.flags.length
+        ? '<div class="muted">早期交易风险提醒：'+esc(tradeSizeSummary.flags.join("；"))+'</div>' : "";
       const trend=p.trendScore||{};
       const trendLine=trend.status==="checked"
         ? '<div class="muted">早期走势评分：<b>'+esc(trend.score)+'/100 · '+esc(trend.label||"")+'</b> · 数据完整度 '+esc(trend.confidence)+'%</div>'+
@@ -386,6 +404,7 @@ async function scan(){
         '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
         '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
         '<div class="muted">短周期价格变化：5分钟 '+(p.priceChange5m==null?"—":pct(p.priceChange5m))+' · 15分钟 '+(p.priceChange15m==null?"—":pct(p.priceChange15m))+'</div>'+
+        tradeSizeLine+tradeSizeWarnings+
         '<div class="muted">观察区间高点回撤（'+esc(p.marketHistoryCandleCount==null?'—':p.marketHistoryCandleCount)+'根）：'+(p.drawdownFromHighPct==null?"—":pct(p.drawdownFromHighPct))+' · K线：'+esc(p.marketHistoryStatus||"未检查")+'</div>'+
         '<div class="muted">流动性变化：5分钟 '+(p.liquidityChange5mPct==null?"—":pct(p.liquidityChange5mPct))+' · 15分钟 '+(p.liquidityChange15mPct==null?"—":pct(p.liquidityChange15mPct))+' · 快照：'+esc(p.liquiditySnapshotStatus||"未检查")+'（'+esc(p.liquiditySnapshotCount==null?'0':p.liquiditySnapshotCount)+'条）</div>'+
         trendLine+
