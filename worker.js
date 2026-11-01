@@ -2681,6 +2681,8 @@ export default {
           sells1h: swapError ? null : sells1h,
           priceChange1h: swapError ? null : priceChange1h,
           swapCount1h: swapError ? null : buys1h + sells1h,
+          swapStatsPeriod: "since_pool_creation",
+          swapStatsWindowMinutes: Math.max(0, Math.round((latestTime - p.createdAt) / 60000)),
           riskNote: "新池风险高；链上新池事件不代表代币安全。请另行核实合约权限、持币集中度、卖出限制及流动性变化。" +
             (swapError ? " 本轮 Swap 数据查询失败，成交指标未知，不得将其解释为零成交。" :
               tradeFlowStatus === "buy_only_no_sell_confirmation" ? " 当前样本只有买入、没有卖出，不能据此认定买盘健康；需等待卖出验证。" :
@@ -2777,6 +2779,7 @@ export default {
         limitations: [
           "当前覆盖配置中的多个 BSC V2/V3 DEX 工厂；未覆盖全部 BSC DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
+          "V2 Swap 成交统计从池创建时刻累计到本轮扫描时刻，非完整滚动 1 小时；swapStatsPeriod 标注为 since_pool_creation。",
           "当前成交量、买卖次数仅对 V2 新池统计；V3 新池仅显示创建和 USDT 余额估算，成交统计待接入。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
