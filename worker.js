@@ -2573,11 +2573,33 @@ export default {
         log, createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
       }));
       const v3Fresh = v3WithTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
-      const v3Read = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => {
+      const v3ReadRaw = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => {
         const pool = await readV3Pool(x.log, x.createdAt, rpcUrl);
         pool.dex = x.log._dex;
         pool.dexId = x.log._dexId;
         return pool;
+      });
+      // Preserve the pool identity when an RPC read throws, so diagnostics can
+      // show which newly created pool failed instead of only reporting a count.
+      const v3Read = v3ReadRaw.map((p, i) => {
+        if (!p || !p._error) return p;
+        const x = v3Fresh[i];
+        const log = x && x.log;
+        if (!log) return p;
+        const token0 = fromTopic(log.topics[1]);
+        const token1 = fromTopic(log.topics[2]);
+        return {
+          ...p,
+          pair: "0x" + word(log.data, 1).slice(-40).toLowerCase(),
+          token0,
+          token1,
+          tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0,
+          dex: log._dex,
+          dexId: log._dexId,
+          createdBlock: asNumber(log.blockNumber),
+          createdAt: x.createdAt,
+          createdTx: log.transactionHash
+        };
       });
       const v3Valid = v3Read.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
 
@@ -2587,12 +2609,32 @@ export default {
         createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
       }));
       const fresh = withTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
-      const pairData = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
+      const pairDataRaw = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
         const p = await readPair(x.log, rpcUrl);
         p.dex = x.log._dex || "PancakeSwap V2";
         p.dexId = x.log._dexId || "pancakeswap";
         p.createdAt = x.createdAt;
         return p;
+      });
+      const pairData = pairDataRaw.map((p, i) => {
+        if (!p || !p._error) return p;
+        const x = fresh[i];
+        const log = x && x.log;
+        if (!log) return p;
+        const token0 = fromTopic(log.topics[1]);
+        const token1 = fromTopic(log.topics[2]);
+        return {
+          ...p,
+          pair: "0x" + word(log.data, 0).slice(-40).toLowerCase(),
+          token0,
+          token1,
+          tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0,
+          dex: log._dex || "PancakeSwap V2",
+          dexId: log._dexId || "pancakeswap",
+          createdBlock: asNumber(log.blockNumber),
+          createdAt: x.createdAt,
+          createdTx: log.transactionHash
+        };
       });
       const valid = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
       const summarizeFilterStage = (events, freshRows, inspected, eligible) => ({
@@ -2601,8 +2643,21 @@ export default {
         inspected: inspected.length,
         notInspectedWithinPerScanCap: Math.max(0, freshRows.length - inspected.length),
         readErrors: inspected.filter((p) => p && p._error).length,
-        belowMinLiquidity: inspected.filter((p) => !p._error && (!Number.isFinite(p.liquidityUSD) || p.liquidityUSD < minLiquidity)).length,
-        eligibleAfterLiquidityFilter: eligible.length
+        belowMinLiquidity: inspected.filter((p) => p && !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD < minLiquidity).length,
+        missingLiquidity: inspected.filter((p) => p && !p._error && !Number.isFinite(p.liquidityUSD)).length,
+        eligibleAfterLiquidityFilter: eligible.length,
+        inspectedPools: inspected.slice(0, 20).map((p) => ({
+          dex: p && p.dex || null,
+          poolAddress: p && p.pair || null,
+          tokenAddress: p && p.tokenAddress || null,
+          symbol: p && p.symbol || null,
+          liquidityUSD: p && Number.isFinite(p.liquidityUSD) ? p.liquidityUSD : null,
+          usdtReserve: p && Number.isFinite(p.usdtReserve) ? p.usdtReserve : null,
+          status: p && p._error ? "read_error"
+            : p && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity ? "eligible"
+            : p && Number.isFinite(p.liquidityUSD) ? "below_min_liquidity" : "missing_liquidity",
+          error: p && p._error ? String(p._error).slice(0, 240) : null
+        }))
       });
       const candidateFilterDiagnostics = {
         v2: summarizeFilterStage(creationLogs.length, fresh, pairData, valid),
