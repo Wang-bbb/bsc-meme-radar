@@ -709,13 +709,13 @@ test("wallet-flow counts distinct buyers and flags concentrated early buy volume
     const token="0x1111111111111111111111111111111111111111";
     const rows=[];
     for(let i=0;i<10;i++)rows.push({attributes:{
-      tx_from:"0x"+String(i+1).padStart(40,"0"),
+      tx_from_address:"0x"+String(i+1).padStart(40,"0"),
       from_token_address:"0x9999999999999999999999999999999999999999",
       to_token_address:token,volume_in_usd:i<3?"30":"1",
       block_timestamp:new Date(Date.now()-i*60000).toISOString()
     }});
     rows.push({attributes:{
-      tx_from:"0x"+"1".padStart(40,"0"),from_token_address:token,
+      tx_from_address:"0x"+"1".padStart(40,"0"),from_token_address:token,
       to_token_address:"0x9999999999999999999999999999999999999999",
       volume_in_usd:"5",block_timestamp:new Date().toISOString()
     }});
@@ -733,7 +733,7 @@ test("wallet-flow counts distinct buyers and flags concentrated early buy volume
 
 test("wallet-flow keeps small trade samples insufficient and never calls them healthy", async () => {
   globalThis.fetch=async()=>response({data:[{attributes:{
-    tx_from:"0x1111111111111111111111111111111111111111",
+    tx_from_address:"0x1111111111111111111111111111111111111111",
     from_token_address:"0x9999999999999999999999999999999999999999",
     to_token_address:"0x2222222222222222222222222222222222222222",
     volume_in_usd:"10"
