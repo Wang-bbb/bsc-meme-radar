@@ -660,7 +660,7 @@ test("dashboard history sampling covers the youngest BSC pool and highest turnov
     {chain:"Solana",pairAddress:"sol-young",tokenAddress:"sol-young-token",ageMinutes:1,liquidityUSDApprox:90000}
   ];
   const selected = select(pools);
-  assert.deepEqual(selected.map(pool => pool.pairAddress), ["young","active","sol-high"]);
+  assert.equal(Array.from(selected, pool => pool.pairAddress).join(","), "young,active,sol-high");
   assert.equal(selected[0].marketHistorySelectionReason, "youngest_pool");
   assert.equal(selected[1].marketHistorySelectionReason, "highest_turnover_to_liquidity");
   assert.equal(selected[2].marketHistorySelectionReason, "highest_liquidity_solana");
