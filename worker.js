@@ -32,6 +32,10 @@ const json = (data, status) => new Response(JSON.stringify(data), { status: stat
 // trade evidence and no obvious chase/sell-pressure flags.
 export function classifyPriorityWatchlist(pool) {
   const reasons = [];
+  if (pool.historicalRiskStatus !== "stable") {
+    const historyReasons = Array.isArray(pool.historicalRiskReasons) ? pool.historicalRiskReasons : [];
+    reasons.push(...(historyReasons.length ? historyReasons : ["历史趋势尚未验证"]));
+  }
   const swapCount = pool.swapCountSincePoolCreation;
   const priceChange = pool.tradePriceChangeSincePoolCreationPct;
   const buyCount = pool.buysSincePoolCreation;
@@ -90,6 +94,119 @@ export function classifyLiquidityDiagnostic(pool, minLiquidity = 5000) {
   return "below_min_liquidity";
 }
 
+const POOL_HISTORY_KEY = "radar:pool-history:bsc:v1";
+const POOL_HISTORY_MIN_GAP_MS = 20000;
+const POOL_HISTORY_MAX_GAP_MS = 30 * 60 * 1000;
+const POOL_HISTORY_WRITE_INTERVAL_MS = 120 * 1000;
+const POOL_HISTORY_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+// Compare two observations of the same pool. Cumulative volume and swap counts
+// must be monotonic; liquidity changes are approximate and only used as a risk flag.
+export function classifyPoolHistory(pool, previous, nowMs = Date.now()) {
+  const reasons = [];
+  if (!previous || !Number.isFinite(Number(previous.observedAt))) {
+    return { status: "insufficient", reasons: ["首次观察，尚无可比较的历史快照"], observationGapSeconds: null, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+  }
+  const gapMs = nowMs - Number(previous.observedAt);
+  const observationGapSeconds = Math.round(gapMs / 1000);
+  if (gapMs < POOL_HISTORY_MIN_GAP_MS) {
+    return { status: "insufficient", reasons: ["两次历史观察间隔过短，尚不能确认趋势"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+  }
+  if (gapMs > POOL_HISTORY_MAX_GAP_MS) {
+    return { status: "insufficient", reasons: ["历史快照已过期，需要重新建立基线"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+  }
+  const currentLiquidity = Number(pool.liquidityUSDApprox);
+  const previousLiquidity = Number(previous.liquidityUSDApprox);
+  const currentVolume = Number(pool.volumeSincePoolCreationUSD);
+  const previousVolume = Number(previous.volumeSincePoolCreationUSD);
+  const currentSwaps = Number(pool.swapCountSincePoolCreation);
+  const previousSwaps = Number(previous.swapCountSincePoolCreation);
+  const currentBuys = Number(pool.buysSincePoolCreation);
+  const previousBuys = Number(previous.buysSincePoolCreation);
+  const currentSells = Number(pool.sellsSincePoolCreation);
+  const previousSells = Number(previous.sellsSincePoolCreation);
+  const values = [currentLiquidity, previousLiquidity, currentVolume, previousVolume, currentSwaps, previousSwaps, currentBuys, previousBuys, currentSells, previousSells];
+  if (!values.every(Number.isFinite) || currentLiquidity <= 0 || previousLiquidity <= 0 ||
+      currentVolume < 0 || previousVolume < 0 ||
+      ![currentSwaps, previousSwaps, currentBuys, previousBuys, currentSells, previousSells].every(Number.isInteger)) {
+    return { status: "insufficient", reasons: ["历史或当前成交/流动性指标缺失，无法验证趋势"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+  }
+  if (currentSwaps < previousSwaps || currentBuys < previousBuys || currentSells < previousSells || currentVolume + 0.01 < previousVolume) {
+    return { status: "inconsistent", reasons: ["累计成交笔数或成交额出现倒退，历史数据不一致"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+  }
+  const liquidityChangePct = Math.round(((currentLiquidity - previousLiquidity) / previousLiquidity) * 10000) / 100;
+  const newSwapCount = currentSwaps - previousSwaps;
+  const newVolumeUSD = Math.round((currentVolume - previousVolume) * 100) / 100;
+  if (liquidityChangePct <= -50) reasons.push("两次观察间估算流动性骤降50%或以上");
+  else if (liquidityChangePct <= -30) reasons.push("两次观察间估算流动性下降30%或以上");
+  if (newSwapCount === 0 && newVolumeUSD <= 0.01) reasons.push("两次观察间没有新增成交活动");
+  const status = liquidityChangePct <= -50 ? "high_risk"
+    : liquidityChangePct <= -30 || (newSwapCount === 0 && newVolumeUSD <= 0.01) ? "review"
+    : reasons.length ? "review" : "stable";
+  return { status, reasons, observationGapSeconds, liquidityChangePct, newSwapCount, newVolumeUSD };
+}
+
+async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
+  const kv = env && env.RADAR_KV;
+  const unavailable = (status, reason) => {
+    for (const pool of pools) {
+      pool.historicalRiskStatus = status;
+      pool.historicalRiskReasons = [reason];
+      pool.historicalLiquidityChangePct = null;
+      pool.historicalNewSwapCount = null;
+      pool.historicalNewVolumeUSD = null;
+      pool.historicalObservationGapSeconds = null;
+    }
+    return { status, trackedPoolCount: 0, reason };
+  };
+  if (!kv || typeof kv.get !== "function" || typeof kv.put !== "function") {
+    return unavailable("unavailable", "历史快照 KV 存储未配置，短期趋势未验证");
+  }
+  let document;
+  try { document = await kv.get(POOL_HISTORY_KEY, "json"); }
+  catch (_) { return unavailable("unavailable", "历史快照读取失败，短期趋势未验证"); }
+  const storedPools = document && document.version === 1 && document.pools && typeof document.pools === "object" ? document.pools : {};
+  for (const pool of pools) {
+    const address = String(pool.pairAddress || pool.pair || "").toLowerCase();
+    const previous = address ? storedPools[address] : null;
+    const history = classifyPoolHistory(pool, previous, nowMs);
+    pool.historicalRiskStatus = history.status;
+    pool.historicalRiskReasons = history.reasons;
+    pool.historicalLiquidityChangePct = history.liquidityChangePct;
+    pool.historicalNewSwapCount = history.newSwapCount;
+    pool.historicalNewVolumeUSD = history.newVolumeUSD;
+    pool.historicalObservationGapSeconds = history.observationGapSeconds;
+  }
+  const lastWriteAt = Number(document && document.updatedAt) || 0;
+  const shouldWrite = !document || nowMs - lastWriteAt >= POOL_HISTORY_WRITE_INTERVAL_MS;
+  if (shouldWrite) {
+    const nextPools = {};
+    for (const [address, snapshot] of Object.entries(storedPools)) {
+      if (Number(snapshot.observedAt) > 0 && nowMs - Number(snapshot.observedAt) <= POOL_HISTORY_TTL_SECONDS * 1000) nextPools[address] = snapshot;
+    }
+    for (const pool of pools) {
+      const address = String(pool.pairAddress || pool.pair || "").toLowerCase();
+      if (!address) continue;
+      nextPools[address] = {
+        observedAt: nowMs,
+        liquidityUSDApprox: Number(pool.liquidityUSDApprox),
+        volumeSincePoolCreationUSD: Number(pool.volumeSincePoolCreationUSD),
+        swapCountSincePoolCreation: Number(pool.swapCountSincePoolCreation),
+        buysSincePoolCreation: Number(pool.buysSincePoolCreation),
+        sellsSincePoolCreation: Number(pool.sellsSincePoolCreation)
+      };
+    }
+    const sortedEntries = Object.entries(nextPools).sort((a, b) => Number(b[1].observedAt) - Number(a[1].observedAt)).slice(0, 500);
+    const nextDocument = { version: 1, updatedAt: nowMs, pools: Object.fromEntries(sortedEntries) };
+    try {
+      await kv.put(POOL_HISTORY_KEY, JSON.stringify(nextDocument), { expirationTtl: POOL_HISTORY_TTL_SECONDS });
+      return { status: "updated", trackedPoolCount: sortedEntries.length, snapshotUpdatedAt: new Date(nowMs).toISOString(), writeIntervalSeconds: POOL_HISTORY_WRITE_INTERVAL_MS / 1000 };
+    } catch (_) {
+      return unavailable("unavailable", "历史快照写入失败，短期趋势未验证");
+    }
+  }
+  return { status: "available_cached_baseline", trackedPoolCount: Object.keys(storedPools).length, snapshotUpdatedAt: lastWriteAt ? new Date(lastWriteAt).toISOString() : null, nextWriteInSeconds: Math.max(0, Math.ceil((POOL_HISTORY_WRITE_INTERVAL_MS - (nowMs - lastWriteAt)) / 1000)), writeIntervalSeconds: POOL_HISTORY_WRITE_INTERVAL_MS / 1000 };
+}
 // GoPlus responses are cached per chain/token to reduce public API rate limits.
 // Successful security records live for 5 minutes; rate-limit responses cool down for 2 minutes.
 async function fetchGoPlusCached(env, endpoint, cacheKey) {
@@ -3148,6 +3265,7 @@ export default {
         };
       }));
 
+      const historyTracking = await attachPoolHistoryRisk(env, pools, Date.now());
       for (const pool of pools) Object.assign(pool, classifyPriorityWatchlist(pool));
       const priorityWatchlist = pools.filter((pool) => pool.priorityWatchlistEligible);
 
@@ -3219,7 +3337,9 @@ export default {
         freshPairsFound: fresh.length + v3Fresh.length,
         candidateFilterDiagnostics: candidateFilterDiagnostics,
         earlySignalScoreVersion: "heuristic-v2",
-        watchlistPolicyVersion: "priority-watchlist-v1",
+        watchlistPolicyVersion: "priority-watchlist-v2-history-gate",
+        historyTrackingPolicyVersion: "pool-history-v1",
+        historyTracking: historyTracking,
         count: pools.length,
         priorityWatchlistCount: priorityWatchlist.length,
         priorityWatchlist: priorityWatchlist,
@@ -3243,6 +3363,8 @@ export default {
           "tradePriceChangeSincePoolCreationPct 是首笔与末笔观测成交价的变化，不是滚动 1 小时价格变化，也不是可靠的现货价格预言机。",
           "V2/V3 成交统计按各自 Swap 事件累计至本轮扫描时刻，非滚动 1 小时；V3 方向按 USDT 与代币 signed amount 判断，无法确认方向的事件不计入买卖次数。",
           "V2 与 V3 Swap 查询状态分别见 swapStatsByDexVersion；没有通过流动性筛选的池时状态为 not_needed_no_eligible_pools，不代表已验证成交统计可用。RPC 查询失败时对应成交指标为未知，不得解释为零成交。",
+          "历史风险追踪比较同一池的跨扫描快照；流动性为近似值，历史不足/存储不可用时不会进入优先观察名单。",
+          "历史快照最多保留7天，最多追踪最近500个池；KV写入限频为每120秒一次。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
         note: "只读观察，不会自动交易。"
