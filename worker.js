@@ -2748,6 +2748,45 @@ export default {
           : sells1h === 0 ? "buy_only_no_sell_confirmation"
           : buySellVolumeRatio >= 4 ? "strong_buy_sell_imbalance"
           : sellVolume1hUSD > buyVolume1hUSD ? "sell_volume_dominant" : "mixed_flow";
+
+        // Heuristic triage only: this is not a security audit or a buy signal.
+        // Keep unavailable chain metrics unknown instead of treating them as zero.
+        const earlySignalReasons = [];
+        const earlyRiskFlags = [];
+        let earlySignalScore = swapError ? null : 50;
+        if (!swapError) {
+          const swapCount = buys1h + sells1h;
+          if (swapCount >= 8) { earlySignalScore += 5; earlySignalReasons.push("至少观测到8笔池级成交"); }
+          else { earlyRiskFlags.push("成交样本不足"); }
+          if (volume1hUSD >= 1500) { earlySignalScore += 10; earlySignalReasons.push("建池以来成交额达到观察阈值"); }
+          else if (volume1hUSD >= 500) { earlySignalScore += 5; earlySignalReasons.push("建池以来有一定成交活动"); }
+          if (p.liquidityUSD >= 20000) { earlySignalScore += 5; earlySignalReasons.push("估算流动性高于2万美元"); }
+          if (sells1h === 0 && swapCount >= 8) {
+            earlySignalScore -= 15;
+            earlyRiskFlags.push("尚无卖出成交验证");
+          }
+          if (sellVolume1hUSD > buyVolume1hUSD) {
+            earlySignalScore -= 20;
+            earlyRiskFlags.push("卖出成交额高于买入");
+          }
+          if (buySellVolumeRatio != null && buySellVolumeRatio >= 4 && sells1h > 0) {
+            earlySignalScore -= 10;
+            earlyRiskFlags.push("买卖成交额严重失衡");
+          }
+          if (priceChangeSincePoolCreationPct != null && priceChangeSincePoolCreationPct >= 25) {
+            earlySignalScore -= 10;
+            earlyRiskFlags.push("建池以来首末成交价涨幅过快，警惕追高");
+          }
+          if (priceChangeSincePoolCreationPct != null && priceChangeSincePoolCreationPct <= -15) {
+            earlySignalScore -= 20;
+            earlyRiskFlags.push("建池以来首末成交价明显下跌");
+          }
+          earlySignalScore = Math.max(0, Math.min(100, Math.round(earlySignalScore)));
+        }
+        const earlySignalGrade = swapError ? "insufficient_data"
+          : earlyRiskFlags.some(flag => flag.includes("明显下跌") || flag.includes("卖出成交额高于买入")) ? "high_risk_review"
+          : earlyRiskFlags.length > 0 ? "caution"
+          : earlySignalScore >= 65 ? "watchlist_candidate" : "watch";
         return {
           chain: "BSC",
           dex: p.dex || "PancakeSwap V2",
@@ -2777,6 +2816,11 @@ export default {
           buySellVolumeRatio: swapError ? null : buySellVolumeRatio,
           buyVolumeSharePct: swapError ? null : buyVolumeSharePct,
           tradeFlowStatus: swapError ? "unavailable" : tradeFlowStatus,
+          earlySignalScore,
+          earlySignalGrade,
+          earlySignalReasons,
+          earlyRiskFlags,
+          earlySignalScoreVersion: "heuristic-v1",
           buys1h: swapError ? null : buys1h,
           sells1h: swapError ? null : sells1h,
           // Deprecated compatibility alias; value is first-to-last trade price change since pool creation.
