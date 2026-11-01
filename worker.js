@@ -263,9 +263,37 @@ async function rpc(method, params, rpcUrl, networkLabel = "BSC") {
         }
         throw lastError;
       }
-      if (!response.ok) throw new Error(networkLabel + " RPC HTTP " + response.status);
+      if (!response.ok) {
+        // Read provider diagnostics without ever echoing the RPC URL or API key.
+        const rawError = await response.text().catch(() => "");
+        let providerError = null;
+        try {
+          const parsed = JSON.parse(rawError);
+          providerError = parsed && parsed.error ? parsed.error : parsed;
+        } catch (_) {}
+        const safeMessage = providerError && typeof providerError.message === "string"
+          ? providerError.message
+          : "";
+        const safeCode = providerError && (typeof providerError.code === "number" || typeof providerError.code === "string")
+          ? String(providerError.code)
+          : "";
+        const sanitizedMessage = safeMessage
+          .replace(/https?:\/\/[^\s"'<>]+/gi, "[endpoint]")
+          .replace(/(api[_-]?key|apikey|token)=([^&\s]+)/gi, "$1=[redacted]")
+          .replace(/\b(alch[a-z0-9_-]{8,})\b/gi, "[redacted]")
+          .slice(0, 240);
+        const detail = [safeCode, sanitizedMessage].filter(Boolean).join(": ");
+        throw new Error(networkLabel + " RPC HTTP " + response.status + (detail ? " (" + detail + ")" : ""));
+      }
       const body = await response.json();
-      if (body.error) throw new Error(networkLabel + " RPC " + body.error.code + ": " + body.error.message);
+      if (body.error) {
+        const message = String(body.error.message || "JSON-RPC error")
+          .replace(/https?:\/\/[^\s"'<>]+/gi, "[endpoint]")
+          .replace(/(api[_-]?key|apikey|token)=([^&\s]+)/gi, "$1=[redacted]")
+          .replace(/\b(alch[a-z0-9_-]{8,})\b/gi, "[redacted]")
+          .slice(0, 240);
+        throw new Error(networkLabel + " RPC " + String(body.error.code ?? "error") + ": " + message);
+      }
       return body.result;
     } catch (error) {
       lastError = error;
