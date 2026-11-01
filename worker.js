@@ -632,6 +632,7 @@ async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
   return {
     pools: candidates,
     diagnostics: {
+      chain: config.chain,
       provider: label + " RPC",
       status: "ok",
       coverage: "partial",
