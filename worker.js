@@ -35,6 +35,35 @@ const json = (data, status) => new Response(JSON.stringify(data), { status: stat
 const USER_REPORTED_RISK_TOKENS = new Map([
   ["0x6af0771ca96059a2e469099facfb14c8f96f9bc3", "用户反馈该代币疑似诈骗；尚未独立核验"]
 ]);
+export function calculateTradeMicrostructureMetrics(input) {
+  const n = value => value == null || value === "" ? null : Number(value);
+  const age = n(input.ageMinutes), volume = n(input.volumeUSD), liquidity = n(input.liquidityUSD);
+  const buyVolume = n(input.buyVolumeUSD), sellVolume = n(input.sellVolumeUSD);
+  const buys = n(input.buys), sells = n(input.sells);
+  const finite = value => value !== null && Number.isFinite(value);
+  const turnover = finite(volume) && finite(liquidity) && liquidity > 0 ? volume / liquidity : null;
+  const averageBuy = finite(buyVolume) && finite(buys) && buys > 0 ? buyVolume / buys : null;
+  const averageSell = finite(sellVolume) && finite(sells) && sells > 0 ? sellVolume / sells : null;
+  const sellSizeRatio = finite(averageBuy) && averageBuy > 0 && finite(averageSell)
+    ? averageSell / averageBuy : null;
+  const flags = [];
+  if (finite(age) && age <= 30 && finite(turnover) && turnover >= 20) {
+    flags.push("建池30分钟内成交额/估算流动性达到20倍，异常高换手需复核");
+  }
+  if (finite(buys) && finite(sells) && buys >= 20 && sells >= 10 &&
+      finite(sellSizeRatio) && sellSizeRatio >= 2.5) {
+    flags.push("平均卖出单笔金额达到平均买入2.5倍以上，存在大额卖出压力");
+  }
+  const round = value => value == null || !Number.isFinite(value) ? null : Math.round(value * 100) / 100;
+  return {
+    volumeToLiquidityRatioSincePoolCreation: round(turnover),
+    averageBuyTradeUSD: round(averageBuy),
+    averageSellTradeUSD: round(averageSell),
+    sellToBuyAverageTradeSizeRatio: round(sellSizeRatio),
+    microstructureRiskFlags: flags
+  };
+}
+
 export function classifyPriorityWatchlist(pool) {
   const reasons = [];
   const tokenAddress = String(pool.tokenAddress || "").toLowerCase();
@@ -68,6 +97,8 @@ export function classifyPriorityWatchlist(pool) {
   if (sellCount === 0) reasons.push("尚无卖出成交验证");
   if (pool.tradeFlowStatus === "sell_volume_dominant") reasons.push("卖出成交额高于买入");
   if (ratio != null && ratio >= 4 && sellCount > 0) reasons.push("买卖成交额严重失衡");
+  const microstructure = Array.isArray(pool.microstructureRiskFlags) ? pool.microstructureRiskFlags : [];
+  reasons.push(...microstructure);
 
   if (priceChange == null || !Number.isFinite(Number(priceChange))) {
     reasons.push("首末观测成交价变化未知");
@@ -87,7 +118,8 @@ export function classifyPriorityWatchlist(pool) {
     pool.tradeFlowStatus === "sell_volume_dominant" ||
     pool.historicalRiskStatus === "high_risk" ||
     Boolean(userReportedRiskReason) ||
-    (ratio != null && ratio >= 4 && sellCount > 0);
+    (ratio != null && ratio >= 4 && sellCount > 0) ||
+    microstructure.length > 0;
   return {
     priorityWatchlistEligible: eligible,
     userReportedRiskStatus: userReportedRiskReason ? "user_reported_scam" : "none",
@@ -3172,6 +3204,12 @@ export default {
         // it is not a rolling one-hour candle or a reliable spot-price oracle.
         const priceChangeSincePoolCreationPct = tradePrices.length > 1 && tradePrices[0] > 0
           ? (tradePrices[tradePrices.length - 1] / tradePrices[0] - 1) * 100 : null;
+        const microstructureMetrics = calculateTradeMicrostructureMetrics({
+          ageMinutes: (latestTime - p.createdAt) / 60000,
+          volumeUSD: volume1hUSD, liquidityUSD: p.liquidityUSD,
+          buyVolumeUSD: buyVolume1hUSD, sellVolumeUSD: sellVolume1hUSD,
+          buys: buys1h, sells: sells1h
+        });
         const tradeFlowStatus = swaps.length === 0 ? "no_swaps_observed"
           : buys1h + sells1h < 8 ? "insufficient_trade_sample"
           : sells1h === 0 ? "buy_only_no_sell_confirmation"
@@ -3245,6 +3283,9 @@ export default {
           sellsSincePoolCreation: swapError ? null : sells1h,
           swapCountSincePoolCreation: swapError ? null : buys1h + sells1h,
           tradePriceChangeSincePoolCreationPct: swapError ? null : priceChangeSincePoolCreationPct,
+          ...Object.fromEntries(Object.entries(microstructureMetrics).map(([key, value]) => [
+            key, key === "microstructureRiskFlags" ? (swapError ? [] : value) : (swapError ? null : value)
+          ])),
           volume1hUSD: swapError ? null : volume1hUSD,
           buyVolume1hUSD: swapError ? null : buyVolume1hUSD,
           sellVolume1hUSD: swapError ? null : sellVolume1hUSD,
@@ -3325,6 +3366,12 @@ export default {
         const tradePriceChangeSincePoolCreationPct = tradePrices.length > 1 && tradePrices[0] > 0
           ? (tradePrices[tradePrices.length - 1] / tradePrices[0] - 1) * 100 : null;
         const swapCount = buysSincePoolCreation + sellsSincePoolCreation;
+        const microstructureMetrics = calculateTradeMicrostructureMetrics({
+          ageMinutes: (latestTime - p.createdAt) / 60000,
+          volumeUSD: volumeSincePoolCreationUSD, liquidityUSD: p.liquidityUSD,
+          buyVolumeUSD: buyVolumeSincePoolCreationUSD, sellVolumeUSD: sellVolumeSincePoolCreationUSD,
+          buys: buysSincePoolCreation, sells: sellsSincePoolCreation
+        });
         const tradeFlowStatus = v3SwapError ? "unavailable"
           : swaps.length === 0 ? "no_swaps_observed"
           : swapCount < 8 ? "insufficient_trade_sample"
@@ -3389,6 +3436,9 @@ export default {
           sellsSincePoolCreation: metric(sellsSincePoolCreation),
           swapCountSincePoolCreation: metric(swapCount),
           tradePriceChangeSincePoolCreationPct: metric(tradePriceChangeSincePoolCreationPct),
+          ...Object.fromEntries(Object.entries(microstructureMetrics).map(([key, value]) => [
+            key, key === "microstructureRiskFlags" ? (v3SwapError ? [] : value) : metric(value)
+          ])),
           volume1hUSD: metric(volumeSincePoolCreationUSD),
           buyVolume1hUSD: metric(buyVolumeSincePoolCreationUSD),
           sellVolume1hUSD: metric(sellVolumeSincePoolCreationUSD),
