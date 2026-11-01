@@ -149,6 +149,21 @@ test("EVM top-ten concentration at or above 80 percent is blocked", async () => 
   assert.equal(data.status, "blocked");
 });
 
+test("EVM security response exposes Honeypot and GoPlus provider failures", async () => {
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.honeypot.is") return new Response("not found", { status: 404 });
+    if (url.hostname === "api.gopluslabs.io") return new Response(JSON.stringify({ code: 1, result: {} }), { status: 200, headers: { "content-type": "application/json" } });
+    throw new Error("Unexpected provider " + url.hostname);
+  };
+  const res = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), env);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.equal(data.honeypotHttpStatus, 404);
+  assert.equal(data.holderProviderStatus, "no_token_data");
+  assert.match(data.reasons.join(" "), /GoPlus持币数据源状态/);
+});
+
 test("EVM missing top-holder data remains in review", async () => {
   globalThis.fetch = async (input) => {
     if (new URL(input).hostname === "api.gopluslabs.io") return response({ code: 1, result: {} });

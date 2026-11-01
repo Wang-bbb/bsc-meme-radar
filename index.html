@@ -258,14 +258,23 @@ async function scan(){
           const response=await fetch(base+"/security-check?"+params.toString());
           const report=await response.json();
           p.security=report;
+          const tradeQualityReasons=[];
+          const ageMinutes=Number(p.ageMinutes||0);
+          const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
+          const volume=Number(p.volume1hUSD||0);
+          if(ageMinutes>=5&&buys+sells===0&&volume===0){
+            tradeQualityReasons.push("新池已运行至少5分钟但仍无成交，交易活跃度无法验证");
+          }else if(ageMinutes>=5&&buys>=5&&sells===0){
+            tradeQualityReasons.push("买入明显单边且没有卖出记录，存在交易失衡/刷量疑点，需复核");
+          }
           if(report.status==="blocked"){
             p.pendingReason=(report.reasons||[]).join("；")||"检测到合约高危信号";
             pending.push({...p,blocked:true});
           }else if(trendRisk.level==="blocked"){
             p.pendingReason=trendRisk.reason;
             pending.push({...p,blocked:true});
-          }else if(report.status!=="pass"||trendRisk.level==="review"){
-            p.pendingReason=[...(report.reasons||[]),...(trendRisk.level==="review"?[trendRisk.reason]:[])].join("；")||report.error||"安全信息不足";
+          }else if(report.status!=="pass"||trendRisk.level==="review"||tradeQualityReasons.length){
+            p.pendingReason=[...(report.reasons||[]),...(trendRisk.level==="review"?[trendRisk.reason]:[]),...tradeQualityReasons].join("；")||report.error||"安全信息不足";
             pending.push(p);
           }else{
             checked.push(p);
@@ -291,6 +300,9 @@ async function scan(){
         ?"卖出税："+(sec.sellTax==null?"未知":Number(sec.sellTax).toFixed(2)+"%")+" · 模拟："+(sec.simulationSuccess?"成功":"未成功")
         :"RugCheck 风险分："+(sec.riskScore==null?"未知":sec.riskScore)+" · LP锁定："+(sec.lpLockedPct==null?"未知":sec.lpLockedPct+"%");
       const holderInfo="前十大持币合计："+(sec.top10HolderConcentrationPct==null?"未知":Number(sec.top10HolderConcentrationPct).toFixed(2)+"%")+" · 状态："+(sec.holderConcentrationStatus||"unknown");
+      const providerInfo=sec.provider&&sec.provider.includes("Honeypot")
+        ?"安全数据源：Honeypot "+(sec.honeypotHttpStatus==null?"未返回":"HTTP "+sec.honeypotHttpStatus)+" · GoPlus "+(sec.holderProviderStatus||"unknown")+(sec.holderProviderHttpStatus?" HTTP "+sec.holderProviderHttpStatus:"")+" · 持币记录 "+(sec.holderCountChecked??0)
+        :"";
       return '<article class="card '+(p.blocked?"blocked-card":p.pendingReason?"review-card":"")+'">'+
         '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
         '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
@@ -305,6 +317,7 @@ async function scan(){
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         '<div class="muted">持币集中度：'+esc(holderInfo)+'</div>'+
+        (providerInfo?'<div class="muted">'+esc(providerInfo)+'</div>':'')+
         (p.source?'<div class="muted">数据源：'+esc(p.source)+'</div>':'')+
         (p.tokenSelectionNote?'<div class="muted">代币识别：'+esc(p.tokenSelectionNote)+'</div>':'')+
         (p.priceRisk?.level==="watch"?'<div class="muted">行情提示：'+esc(p.priceRisk.reason)+'</div>':'')+
