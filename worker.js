@@ -3072,12 +3072,15 @@ export default {
         count: pools.length,
         pairs: pairs,
         pools: pools,
-        swapStatsAvailable: !swapError && !v3SwapError,
-        swapStatsStatus: swapError || v3SwapError ? "partial_or_unavailable" : "available",
+        swapStatsAvailable: (valid.length + v3Valid.length) === 0 ? null : !swapError && !v3SwapError,
+        swapStatsStatus: (valid.length + v3Valid.length) === 0 ? "not_needed_no_eligible_pools"
+          : swapError || v3SwapError ? "partial_or_unavailable" : "available",
         swapStatsError: swapError || v3SwapError,
         swapStatsByDexVersion: {
-          v2: { available: !swapError, status: swapError ? "unavailable" : "available", error: swapError },
-          v3: { available: !v3SwapError, status: v3SwapError ? "unavailable" : "available", error: v3SwapError }
+          v2: { available: valid.length === 0 ? null : !swapError,
+            status: valid.length === 0 ? "not_needed_no_eligible_pools" : swapError ? "unavailable" : "available", error: swapError },
+          v3: { available: v3Valid.length === 0 ? null : !v3SwapError,
+            status: v3Valid.length === 0 ? "not_needed_no_eligible_pools" : v3SwapError ? "unavailable" : "available", error: v3SwapError }
         },
         generatedAt: new Date(latestTime).toISOString(),
         limitations: [
@@ -3086,7 +3089,7 @@ export default {
           "V2 Swap 成交统计从池创建时刻累计到本轮扫描时刻，非完整滚动 1 小时；优先使用明确命名的 *SincePoolCreation 字段。旧 *1h 字段仅为兼容保留，语义同样是建池以来累计。",
           "tradePriceChangeSincePoolCreationPct 是首笔与末笔观测成交价的变化，不是滚动 1 小时价格变化，也不是可靠的现货价格预言机。",
           "V2/V3 成交统计按各自 Swap 事件累计至本轮扫描时刻，非滚动 1 小时；V3 方向按 USDT 与代币 signed amount 判断，无法确认方向的事件不计入买卖次数。",
-          "V2 与 V3 Swap 查询状态分别见 swapStatsByDexVersion；RPC 查询失败时对应成交指标为未知，不得解释为零成交。",
+          "V2 与 V3 Swap 查询状态分别见 swapStatsByDexVersion；没有通过流动性筛选的池时状态为 not_needed_no_eligible_pools，不代表已验证成交统计可用。RPC 查询失败时对应成交指标为未知，不得解释为零成交。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
         note: "只读观察，不会自动交易。"
