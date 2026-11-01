@@ -30,8 +30,16 @@ const json = (data, status) => new Response(JSON.stringify(data), { status: stat
 // Conservative priority-watchlist gate. Keep all liquidity-qualified pools in
 // the diagnostic result, but only promote candidates with adequate two-way
 // trade evidence and no obvious chase/sell-pressure flags.
+// User-reported risk labels are intentionally distinguished from independently verified findings.
+// This token was reported by the project owner as a scam; the report is not an independent audit.
+const USER_REPORTED_RISK_TOKENS = new Map([
+  ["0x6af0771ca96059a2e469099facfb14c8f96f9bc3", "用户反馈该代币疑似诈骗；尚未独立核验"]
+]);
 export function classifyPriorityWatchlist(pool) {
   const reasons = [];
+  const tokenAddress = String(pool.tokenAddress || "").toLowerCase();
+  const userReportedRiskReason = USER_REPORTED_RISK_TOKENS.get(tokenAddress) || null;
+  if (userReportedRiskReason) reasons.push(userReportedRiskReason);
   if (pool.historicalRiskStatus !== "stable") {
     const historyReasons = Array.isArray(pool.historicalRiskReasons) ? pool.historicalRiskReasons : [];
     reasons.push(...(historyReasons.length ? historyReasons : ["历史趋势尚未验证"]));
@@ -78,9 +86,12 @@ export function classifyPriorityWatchlist(pool) {
   const highRisk = (priceChange != null && (priceChange >= 40 || priceChange <= -15)) ||
     pool.tradeFlowStatus === "sell_volume_dominant" ||
     pool.historicalRiskStatus === "high_risk" ||
+    Boolean(userReportedRiskReason) ||
     (ratio != null && ratio >= 4 && sellCount > 0);
   return {
     priorityWatchlistEligible: eligible,
+    userReportedRiskStatus: userReportedRiskReason ? "user_reported_scam" : "none",
+    userReportedRiskReasons: userReportedRiskReason ? [userReportedRiskReason] : [],
     watchlistTier: eligible ? "priority_watchlist" : highRisk ? "high_risk_review" : "review_only",
     watchlistExclusionReasons: eligible ? [] : reasons.length ? reasons : ["尚未满足优先观察名单的全部条件"]
   };
