@@ -2013,16 +2013,6 @@ export default {
         } else {
           const scanned = await scanSolanaRpcActivity(solanaRpcUrl, minutes);
           solanaRpcDiagnostics.push(scanned);
-          chainSources.push({
-            chain: "Solana", provider: "Solana RPC program activity",
-            status: scanned.status === "error" ? "error" : "partial",
-            coverage: "program-activity-only",
-            pools: 0,
-            recentTransactions: scanned.recentTransactions,
-            mintHints: scanned.mintHints.length,
-            note: scanned.note,
-            error: scanned.error || null
-          });
         }
       }
 
