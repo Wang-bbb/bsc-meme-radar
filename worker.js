@@ -41,7 +41,7 @@ function restoreCachedResponse(cached) {
   return new Response(cached.body, { status: originalStatus, statusText, headers });
 }
 
-const PROVIDER_COOLDOWN_SECONDS = 60;
+const PROVIDER_COOLDOWN_SECONDS = 300;
 function providerCooldownKey(provider) {
   return new Request("https://radar-cache.invalid/provider-cooldown/" + provider);
 }
@@ -49,16 +49,26 @@ async function readProviderCooldown(provider) {
   if (typeof caches === "undefined" || !caches.default) return null;
   try {
     const cached = await caches.default.match(providerCooldownKey(provider));
-    return cached ? restoreCachedResponse(cached) : null;
+    if (!cached) return null;
+    const restored = restoreCachedResponse(cached);
+    const headers = new Headers(restored.headers);
+    headers.set("x-radar-provider-state", "shared-cooldown");
+    headers.set("x-radar-provider", provider);
+    return new Response(restored.body, { status: restored.status, statusText: restored.statusText, headers });
   } catch (_) { return null; }
 }
 async function writeProviderCooldown(provider, response) {
   if (typeof caches === "undefined" || !caches.default) return;
+  const status = Number(response.status || 429);
   const retryAfter = Number(response.headers.get("retry-after") || 0);
-  const ttl = Math.min(180, Math.max(PROVIDER_COOLDOWN_SECONDS, retryAfter || 0));
-  const headers = new Headers({ "x-radar-original-status": "429", "cache-control": "public, max-age=" + ttl });
+  const baseTtl = provider === "dexpaprika" && status === 402 ? 600 : PROVIDER_COOLDOWN_SECONDS;
+  const ttl = Math.min(900, Math.max(baseTtl, retryAfter || 0));
+  const headers = new Headers({
+    "x-radar-original-status": String(status),
+    "cache-control": "public, max-age=" + ttl
+  });
   try {
-    await caches.default.put(providerCooldownKey(provider), new Response("Provider rate limited", { status: 200, headers }));
+    await caches.default.put(providerCooldownKey(provider), new Response("Provider cooldown", { status: 200, headers }));
   } catch (_) {}
 }
 
@@ -152,7 +162,7 @@ async function fetchDexPaprikaJson(endpoint) {
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
   // Cache provider-side quota/auth failures too: retrying HTTP 402 on every
   // refresh cannot restore access and only adds noise to an already partial scan.
-  if (response.status === 429) await writeProviderCooldown("dexpaprika", response);
+  if ([402, 429].includes(response.status)) await writeProviderCooldown("dexpaprika", response);
   if (cache && (response.ok || [401, 402, 403, 429].includes(response.status))) {
     const headers = new Headers(response.headers);
     const shouldCacheError = !response.ok;
