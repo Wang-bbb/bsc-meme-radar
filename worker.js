@@ -1706,7 +1706,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
         skipped: 0
       }
     },
-    note: "仅将通过 PumpSwap create_pool 或 Raydium CPMM initialize 指令、池账户归属和双侧 Vault/Mint 关联核验的新池加入待复核候选；其他协议目前仍只做活动线索诊断。"
+    note: "仅将通过 PumpSwap create_pool 或 Raydium CPMM initialize 指令、池账户归属和双侧 Vault/Mint 关联核验的新池加入待复核候选。USDC/USDT 按报价侧储备×2估算；wrapped-SOL 报价池仅使用通过新鲜度与置信区间校验的 Pyth SOL/USD 价格估算，价格源不可用或不合格时跳过。其他协议目前仍只做活动线索诊断；RPC 仅抽样少量近期交易，不代表完整新池覆盖。"
   };
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoff = nowSeconds - minutes * 60;
@@ -2796,7 +2796,7 @@ export default {
           "RPC 新池发现结果缺少成交量、买卖次数、价格历史或钱包兑换验证时，必须进入待复核，不能视为通过安全筛查。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；只有标记为 USDT 的池才表示池子直接以 USDT 为一侧资产，仍不代表钱包兑换路径已验证。",
-          "Solana RPC 仅对 Raydium CPMM initialize 指令执行协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；仅 USDT/USDC 报价池可按稳定币侧储备×2估算流动性。Pump.fun、PumpSwap、Raydium AMM v4、Meteora、Orca 当前仍只做活动线索诊断；本兜底不是全 Solana 新池索引，成交/K线/钱包路由缺失的候选仍待复核。",
+          "Solana RPC 当前对 PumpSwap create_pool 和 Raydium CPMM initialize 执行协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；USDT/USDC 按报价侧储备×2估算美元流动性，wrapped-SOL 报价池使用通过新鲜度与置信区间校验的 Pyth SOL/USD 价格估算，价格源不合格时跳过。Pump.fun bonding curve、Raydium AMM v4、Meteora、Orca 当前仍只做活动线索诊断；本兜底仅抽样少量近期交易，不是全 Solana 新池索引，成交/K线/钱包路由缺失的候选仍待复核。",
           "公共索引和 RPC 的 429/402 使用共享冷却；5xx 最多重试一次并进入短冷却。冷却和缓存是尽力而为的 Cloudflare 边缘级治理，不代表上游配额已恢复。",
           "本接口只读，不执行兑换或交易。"
         ],
