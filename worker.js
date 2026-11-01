@@ -2501,13 +2501,18 @@ export default {
       const windowStartTime = asNumber(windowStartBlock.timestamp) * 1000;
       const actualWindowSeconds = Math.max(0, (latestTime - windowStartTime) / 1000);
       const factoryFilterBase = { fromBlock: hexNum(fromBlock), toBlock: latestHex };
-      const v2FactoryResults = await Promise.all(V2_FACTORIES.map(async (factory) => {
-        const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [PAIR_CREATED] }], rpcUrl);
-        const usdtLogs = logs.filter((log) =>
+      // JSON-RPC eth_getLogs accepts an address array. Query all configured
+      // V2 factories in one subrequest, then partition locally by emitting factory.
+      const v2FactoryLogs = await rpc("eth_getLogs", [{
+        ...factoryFilterBase, address: V2_FACTORIES.map((factory) => factory.address), topics: [PAIR_CREATED]
+      }], rpcUrl);
+      const v2FactoryResults = V2_FACTORIES.map((factory) => {
+        const allLogs = v2FactoryLogs.filter((log) => String(log.address).toLowerCase() === factory.address.toLowerCase());
+        const usdtLogs = allLogs.filter((log) =>
           fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
         );
-        return { factory, allLogs: logs, usdtLogs };
-      }));
+        return { factory, allLogs, usdtLogs };
+      });
       const allV2FactoryLogs = v2FactoryResults.flatMap((x) => x.allLogs);
       const v2UsdtEvents = v2FactoryResults.flatMap(({ factory, usdtLogs }) =>
         usdtLogs.map((log) => ({ ...log, _dex: factory.name, _dexId: factory.dexId }))
@@ -2519,13 +2524,17 @@ export default {
       }
 
       const timeCache = new Map();
-      const v3FactoryResults = await Promise.all(V3_FACTORIES.map(async (factory) => {
-        const logs = await rpc("eth_getLogs", [{ ...factoryFilterBase, address: factory.address, topics: [V3_POOL_CREATED] }], rpcUrl);
-        const usdtLogs = logs.filter((log) =>
+      // Same aggregation for V3 factories: two version-level log queries total.
+      const v3FactoryLogs = await rpc("eth_getLogs", [{
+        ...factoryFilterBase, address: V3_FACTORIES.map((factory) => factory.address), topics: [V3_POOL_CREATED]
+      }], rpcUrl);
+      const v3FactoryResults = V3_FACTORIES.map((factory) => {
+        const allLogs = v3FactoryLogs.filter((log) => String(log.address).toLowerCase() === factory.address.toLowerCase());
+        const usdtLogs = allLogs.filter((log) =>
           fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
         );
-        return { factory, allLogs: logs, usdtLogs };
-      }));
+        return { factory, allLogs, usdtLogs };
+      });
       // Quote-asset counts are diagnostics only. Only USDT pools continue into
       // the candidate pipeline; WBNB/USDC/BUSD pools are never promoted here.
       const BSC_QUOTE_ASSETS = [
@@ -2543,26 +2552,13 @@ export default {
         ).length, 0);
         return [asset.symbol, { v2PoolCreatedEvents: v2Count, v3PoolCreatedEvents: v3Count, total: v2Count + v3Count }];
       }));
-      const factoryCodeChecks = await Promise.all(
-        [...V2_FACTORIES, ...V3_FACTORIES].map(async (factory) => {
-          try {
-            const code = await rpc("eth_getCode", [factory.address, "latest"], rpcUrl);
-            return {
-              dex: factory.name,
-              address: factory.address,
-              contractCodePresent: !!code && code !== "0x",
-              codeBytes: code && code !== "0x" ? Math.max(0, (code.length - 2) / 2) : 0
-            };
-          } catch (error) {
-            return {
-              dex: factory.name,
-              address: factory.address,
-              contractCodePresent: null,
-              codeCheckError: String(error)
-            };
-          }
-        })
-      );
+      // Factory addresses are pinned in source control. Re-fetching bytecode for
+      // all eight factories on every scan adds no candidate evidence and wastes
+      // Worker subrequests; deployment-time configuration is reported instead.
+      const factoryCodeChecks = [...V2_FACTORIES, ...V3_FACTORIES].map((factory) => ({
+        dex: factory.name, address: factory.address,
+        contractCodePresent: null, codeCheckStatus: "skipped_to_conserve_subrequests"
+      }));
       const allV3FactoryLogs = v3FactoryResults.flatMap((x) => x.allLogs);
       const v3UsdtEvents = v3FactoryResults.flatMap(({ factory, usdtLogs }) =>
         usdtLogs.map((log) => ({ ...log, _dex: factory.name, _dexId: factory.dexId }))
