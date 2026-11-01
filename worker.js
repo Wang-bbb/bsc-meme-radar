@@ -580,6 +580,37 @@ async function blockTime(blockNumber, cache, rpcUrl, networkLabel = "BSC") {
   return time;
 }
 
+// Fetch timestamps for many pool-creation blocks in one HTTP subrequest.
+// This is important on Cloudflare Workers: one eth_getBlockByNumber fetch per
+// pool can exhaust the invocation subrequest budget before liquidity/Swap checks.
+async function blockTimes(blockNumbers, cache, rpcUrl, networkLabel = "BSC") {
+  const missing = [...new Set(blockNumbers.map(Number))]
+    .filter((number) => Number.isFinite(number) && number >= 0 && !cache.has(number));
+  if (!missing.length) return cache;
+  const requests = missing.map((number, index) => ({
+    jsonrpc: "2.0", id: index + 1, method: "eth_getBlockByNumber",
+    params: [hexNum(number), false]
+  }));
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json" },
+    body: JSON.stringify(requests)
+  });
+  if (!response.ok) throw new Error(networkLabel + " RPC batch HTTP " + response.status);
+  const body = await response.json();
+  if (!Array.isArray(body)) throw new Error(networkLabel + " RPC batch response was not an array");
+  const byId = new Map(body.map((item) => [Number(item.id), item]));
+  for (let index = 0; index < missing.length; index++) {
+    const result = byId.get(index + 1);
+    if (result && !result.error && result.result && result.result.timestamp) {
+      cache.set(missing[index], asNumber(result.result.timestamp) * 1000);
+    } else {
+      cache.set(missing[index], 0);
+    }
+  }
+  return cache;
+}
+
 async function readV3Pool(log, createdAt, rpcUrl) {
   const token0 = fromTopic(log.topics[1]);
   const token1 = fromTopic(log.topics[2]);
@@ -2581,8 +2612,9 @@ export default {
         v3LogMap.set(pool, log);
       }
       const v3CreationLogs = Array.from(v3LogMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
-      const v3WithTimes = await mapLimit(v3CreationLogs, 3, async (log) => ({
-        log, createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
+      await blockTimes(v3CreationLogs.map((log) => asNumber(log.blockNumber)), timeCache, rpcUrl);
+      const v3WithTimes = v3CreationLogs.map((log) => ({
+        log, createdAt: timeCache.get(asNumber(log.blockNumber)) || 0
       }));
       const v3Fresh = v3WithTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
       const v3ReadRaw = await mapLimit(v3Fresh.slice(0, 40), 3, async (x) => {
@@ -2617,9 +2649,10 @@ export default {
       const v3Valid = await mapLimit(v3ValidByLiquidity, 2, async (p) => enrichTokenMetadata(p, rpcUrl));
 
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
-      const withTimes = await mapLimit(creationLogs, 3, async (log) => ({
+      await blockTimes(creationLogs.map((log) => asNumber(log.blockNumber)), timeCache, rpcUrl);
+      const withTimes = creationLogs.map((log) => ({
         log: log,
-        createdAt: await blockTime(asNumber(log.blockNumber), timeCache, rpcUrl)
+        createdAt: timeCache.get(asNumber(log.blockNumber)) || 0
       }));
       const fresh = withTimes.filter((x) => x.createdAt > 0 && latestTime - x.createdAt >= 0 && latestTime - x.createdAt <= minutes * 60000);
       const pairDataRaw = await mapLimit(fresh.slice(0, 40), 3, async (x) => {
