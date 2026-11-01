@@ -17,6 +17,7 @@ const V3_FACTORIES = [
 const V3_POOL_CREATED = "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118";
 const PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9";
 const SWAP_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
+const V3_SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67";
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": "*",
@@ -534,6 +535,10 @@ const fromTopic = (topic) => "0x" + topic.slice(-40).toLowerCase();
 const word = (data, index) => data.slice(2 + index * 64, 2 + (index + 1) * 64);
 const asNumber = (hex) => Number(BigInt(hex || "0x0"));
 const toFloat = (value, decimals) => Number(value) / Math.pow(10, decimals);
+const signedInt256 = (hexWord) => {
+  const value = BigInt("0x" + hexWord);
+  return value >= (1n << 255n) ? value - (1n << 256n) : value;
+};
 
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);
@@ -2688,6 +2693,19 @@ export default {
         } catch (e) { swapError = String(e); }
       }
 
+      let v3SwapError = null;
+      let v3SwapLogs = [];
+      if (v3Valid.length) {
+        try {
+          v3SwapLogs = await rpc("eth_getLogs", [{
+            address: v3Valid.map((p) => p.pair),
+            fromBlock: hexNum(Math.min(...v3Valid.map((p) => p.createdBlock))),
+            toBlock: latestHex,
+            topics: [V3_SWAP_TOPIC]
+          }], rpcUrl);
+        } catch (e) { v3SwapError = String(e); }
+      }
+
       const pairByAddress = new Map(valid.map((p) => [p.pair.toLowerCase(), p]));
       const swapsByPair = new Map();
       for (const log of swapLogs) {
@@ -2843,23 +2861,148 @@ export default {
         };
       }).sort((a, b) => a.ageMinutes - b.ageMinutes);
 
-      pools.push(...v3Valid.map((p) => ({
-        chain: "BSC", dex: p.dex || "PancakeSwap V3",
-        symbol: p.symbol, name: p.name, tokenAddress: p.tokenAddress,
-        pairAddress: p.pair,
-        poolUrl: "https://dexscreener.com/bsc/" + p.pair,
-        bscScanUrl: "https://bscscan.com/token/" + p.tokenAddress,
-        createdAt: new Date(p.createdAt).toISOString(),
-        ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
-        usdtReserve: p.usdtReserve, liquidityUSDApprox: p.liquidityUSD,
-        volumeSincePoolCreationUSD: null, buyVolumeSincePoolCreationUSD: null,
-        sellVolumeSincePoolCreationUSD: null, buySellVolumeRatioSincePoolCreation: null,
-        buysSincePoolCreation: null, sellsSincePoolCreation: null,
-        swapCountSincePoolCreation: null, tradePriceChangeSincePoolCreationPct: null,
-        volume1hUSD: null, buys1h: null, sells1h: null,
-        priceChange1h: null, swapCount1h: null,
-        riskNote: "V3 新池；成交统计尚未接入。新池风险高，请核实合约权限、持币集中度、卖出限制及流动性变化。"
-      })));
+      const v3SwapLogsByPair = new Map();
+      for (const log of v3SwapLogs) {
+        const key = String(log.address || "").toLowerCase();
+        if (!v3Valid.some((p) => p.pair.toLowerCase() === key)) continue;
+        if (!v3SwapLogsByPair.has(key)) v3SwapLogsByPair.set(key, []);
+        v3SwapLogsByPair.get(key).push(log);
+      }
+      pools.push(...v3Valid.map((p) => {
+        const swaps = (v3SwapLogsByPair.get(p.pair.toLowerCase()) || []).sort((a, b) => {
+          const blockDiff = asNumber(a.blockNumber) - asNumber(b.blockNumber);
+          return blockDiff || asNumber(a.logIndex) - asNumber(b.logIndex);
+        });
+        let volumeSincePoolCreationUSD = 0, buyVolumeSincePoolCreationUSD = 0, sellVolumeSincePoolCreationUSD = 0;
+        let buysSincePoolCreation = 0, sellsSincePoolCreation = 0;
+        const tradePrices = [];
+        if (!v3SwapError) {
+          for (const swap of swaps) {
+            if (asNumber(swap.blockNumber) < p.createdBlock) continue;
+            try {
+              // Uniswap V3 Swap emits signed int256 amount0 and amount1.
+              // Positive means the token entered the pool; negative means it left.
+              const amount0 = signedInt256(word(swap.data, 0));
+              const amount1 = signedInt256(word(swap.data, 1));
+              const usdtAmountRaw = p.usdtIs0 ? amount0 : amount1;
+              const tokenAmountRaw = p.usdtIs0 ? amount1 : amount0;
+              const usdtAbs = usdtAmountRaw < 0n ? -usdtAmountRaw : usdtAmountRaw;
+              const tokenAbs = tokenAmountRaw < 0n ? -tokenAmountRaw : tokenAmountRaw;
+              if (usdtAbs === 0n || tokenAbs === 0n) continue;
+              const usdtAmount = toFloat(usdtAbs, 18);
+              const tokenAmount = toFloat(tokenAbs, p.decimals);
+              if (!(usdtAmount > 0) || !(tokenAmount > 0) || !Number.isFinite(usdtAmount / tokenAmount)) continue;
+              volumeSincePoolCreationUSD += usdtAmount;
+              tradePrices.push(usdtAmount / tokenAmount);
+              if (usdtAmountRaw > 0n && tokenAmountRaw < 0n) {
+                buysSincePoolCreation++;
+                buyVolumeSincePoolCreationUSD += usdtAmount;
+              } else if (usdtAmountRaw < 0n && tokenAmountRaw > 0n) {
+                sellsSincePoolCreation++;
+                sellVolumeSincePoolCreationUSD += usdtAmount;
+              }
+            } catch (_) {
+              // Ignore malformed event data; do not fabricate trade direction.
+            }
+          }
+        }
+        const totalDirectionalVolume = buyVolumeSincePoolCreationUSD + sellVolumeSincePoolCreationUSD;
+        const buySellVolumeRatioSincePoolCreation = sellVolumeSincePoolCreationUSD > 0
+          ? buyVolumeSincePoolCreationUSD / sellVolumeSincePoolCreationUSD : null;
+        const buyVolumeSharePct = totalDirectionalVolume > 0
+          ? buyVolumeSincePoolCreationUSD / totalDirectionalVolume * 100 : null;
+        const tradePriceChangeSincePoolCreationPct = tradePrices.length > 1 && tradePrices[0] > 0
+          ? (tradePrices[tradePrices.length - 1] / tradePrices[0] - 1) * 100 : null;
+        const swapCount = buysSincePoolCreation + sellsSincePoolCreation;
+        const tradeFlowStatus = v3SwapError ? "unavailable"
+          : swaps.length === 0 ? "no_swaps_observed"
+          : swapCount < 8 ? "insufficient_trade_sample"
+          : sellsSincePoolCreation === 0 ? "buy_only_no_sell_confirmation"
+          : buySellVolumeRatioSincePoolCreation != null && buySellVolumeRatioSincePoolCreation >= 4
+            ? "strong_buy_sell_imbalance"
+          : sellVolumeSincePoolCreationUSD > buyVolumeSincePoolCreationUSD ? "sell_volume_dominant" : "mixed_flow";
+        const earlySignalReasons = [];
+        const earlyRiskFlags = [];
+        let earlySignalScore = v3SwapError ? null : 50;
+        if (!v3SwapError) {
+          if (swapCount >= 8) { earlySignalScore += 5; earlySignalReasons.push("至少观测到8笔池级成交"); }
+          else earlyRiskFlags.push("成交样本不足");
+          if (volumeSincePoolCreationUSD >= 1500) { earlySignalScore += 10; earlySignalReasons.push("建池以来成交额达到观察阈值"); }
+          else if (volumeSincePoolCreationUSD >= 500) { earlySignalScore += 5; earlySignalReasons.push("建池以来有一定成交活动"); }
+          if (p.liquidityUSD >= 20000) { earlySignalScore += 5; earlySignalReasons.push("估算流动性高于2万美元"); }
+          if (sellsSincePoolCreation === 0 && swapCount >= 8) {
+            earlySignalScore -= 15;
+            earlyRiskFlags.push("尚无卖出成交验证");
+            earlySignalScore = Math.min(earlySignalScore, 49);
+          }
+          if (sellVolumeSincePoolCreationUSD > buyVolumeSincePoolCreationUSD) {
+            earlySignalScore -= 20;
+            earlyRiskFlags.push("卖出成交额高于买入");
+          }
+          if (buySellVolumeRatioSincePoolCreation != null && buySellVolumeRatioSincePoolCreation >= 4 && sellsSincePoolCreation > 0) {
+            earlySignalScore -= 10;
+            earlyRiskFlags.push("买卖成交额严重失衡");
+          }
+          if (tradePriceChangeSincePoolCreationPct != null && tradePriceChangeSincePoolCreationPct >= 40) {
+            earlySignalScore -= 20;
+            earlyRiskFlags.push("建池以来首末成交价暴涨，追高风险很高");
+          } else if (tradePriceChangeSincePoolCreationPct != null && tradePriceChangeSincePoolCreationPct >= 25) {
+            earlySignalScore -= 10;
+            earlyRiskFlags.push("建池以来首末成交价涨幅过快，警惕追高");
+          }
+          if (tradePriceChangeSincePoolCreationPct != null && tradePriceChangeSincePoolCreationPct <= -15) {
+            earlySignalScore -= 20;
+            earlyRiskFlags.push("建池以来首末成交价明显下跌");
+          }
+          earlySignalScore = Math.max(0, Math.min(100, Math.round(earlySignalScore)));
+        }
+        const earlySignalGrade = v3SwapError ? "insufficient_data"
+          : earlyRiskFlags.some(flag => flag.includes("明显下跌") || flag.includes("卖出成交额高于买入") || flag.includes("暴涨")) ? "high_risk_review"
+          : earlyRiskFlags.length > 0 ? "caution"
+          : earlySignalScore >= 65 ? "watchlist_candidate" : "watch";
+        const metric = (value) => v3SwapError ? null : value;
+        return {
+          chain: "BSC", dex: p.dex || "PancakeSwap V3", dexId: p.dexId || "pancakeswap-v3",
+          symbol: p.symbol, name: p.name, tokenAddress: p.tokenAddress,
+          pairAddress: p.pair,
+          poolUrl: "https://dexscreener.com/bsc/" + p.pair,
+          bscScanUrl: "https://bscscan.com/token/" + p.tokenAddress,
+          createdAt: new Date(p.createdAt).toISOString(),
+          ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
+          usdtReserve: p.usdtReserve, liquidityUSDApprox: p.liquidityUSD,
+          volumeSincePoolCreationUSD: metric(volumeSincePoolCreationUSD),
+          buyVolumeSincePoolCreationUSD: metric(buyVolumeSincePoolCreationUSD),
+          sellVolumeSincePoolCreationUSD: metric(sellVolumeSincePoolCreationUSD),
+          buySellVolumeRatioSincePoolCreation: metric(buySellVolumeRatioSincePoolCreation),
+          buysSincePoolCreation: metric(buysSincePoolCreation),
+          sellsSincePoolCreation: metric(sellsSincePoolCreation),
+          swapCountSincePoolCreation: metric(swapCount),
+          tradePriceChangeSincePoolCreationPct: metric(tradePriceChangeSincePoolCreationPct),
+          volume1hUSD: metric(volumeSincePoolCreationUSD),
+          buyVolume1hUSD: metric(buyVolumeSincePoolCreationUSD),
+          sellVolume1hUSD: metric(sellVolumeSincePoolCreationUSD),
+          buySellVolumeRatio: metric(buySellVolumeRatioSincePoolCreation),
+          buyVolumeSharePct: metric(buyVolumeSharePct),
+          tradeFlowStatus,
+          earlySignalScore,
+          earlySignalGrade,
+          earlySignalReasons,
+          earlyRiskFlags,
+          earlySignalScoreVersion: "heuristic-v2",
+          buys1h: metric(buysSincePoolCreation),
+          sells1h: metric(sellsSincePoolCreation),
+          priceChange1h: metric(tradePriceChangeSincePoolCreationPct),
+          swapCount1h: metric(swapCount),
+          swapStatsPeriod: "since_pool_creation",
+          swapStatsWindowMinutes: Math.max(0, Math.round((latestTime - p.createdAt) / 60000)),
+          riskNote: "V3 新池风险高；成交统计为建池以来累计，非滚动1小时。请核实合约权限、持币集中度、卖出限制及流动性变化。" +
+            (v3SwapError ? " 本轮 V3 Swap 查询失败，成交指标未知，不得将其解释为零成交。" :
+              tradeFlowStatus === "buy_only_no_sell_confirmation" ? " 当前样本只有买入、没有卖出，不能据此认定买盘健康；需等待卖出验证。" :
+              tradeFlowStatus === "strong_buy_sell_imbalance" ? " 买卖成交额明显失衡，存在单边拉升或卖出验证不足风险。" :
+              tradeFlowStatus === "sell_volume_dominant" ? " 卖出成交额高于买入，需警惕抛压。" :
+              tradeFlowStatus === "insufficient_trade_sample" ? " Swap 样本不足，暂不评价资金流方向。" : "")
+        };
+      }));
 
       const pairs = pools.map((p) => ({
         chainId: "bsc",
@@ -2929,16 +3072,21 @@ export default {
         count: pools.length,
         pairs: pairs,
         pools: pools,
-        swapStatsAvailable: !swapError,
-        swapStatsStatus: swapError ? "unavailable" : "available",
-        swapStatsError: swapError,
+        swapStatsAvailable: !swapError && !v3SwapError,
+        swapStatsStatus: swapError || v3SwapError ? "partial_or_unavailable" : "available",
+        swapStatsError: swapError || v3SwapError,
+        swapStatsByDexVersion: {
+          v2: { available: !swapError, status: swapError ? "unavailable" : "available", error: swapError },
+          v3: { available: !v3SwapError, status: v3SwapError ? "unavailable" : "available", error: v3SwapError }
+        },
         generatedAt: new Date(latestTime).toISOString(),
         limitations: [
           "当前覆盖配置中的多个 BSC V2/V3 DEX 工厂；未覆盖全部 BSC DEX。",
           "流动性按 USDT 储备 × 2 粗略估算，不等于第三方聚合器的完整 USD 流动性。",
           "V2 Swap 成交统计从池创建时刻累计到本轮扫描时刻，非完整滚动 1 小时；优先使用明确命名的 *SincePoolCreation 字段。旧 *1h 字段仅为兼容保留，语义同样是建池以来累计。",
           "tradePriceChangeSincePoolCreationPct 是首笔与末笔观测成交价的变化，不是滚动 1 小时价格变化，也不是可靠的现货价格预言机。",
-          "当前成交量、买卖次数仅对 V2 新池统计；V3 新池仅显示创建和 USDT 余额估算，成交统计待接入。",
+          "V2/V3 成交统计按各自 Swap 事件累计至本轮扫描时刻，非滚动 1 小时；V3 方向按 USDT 与代币 signed amount 判断，无法确认方向的事件不计入买卖次数。",
+          "V2 与 V3 Swap 查询状态分别见 swapStatsByDexVersion；RPC 查询失败时对应成交指标为未知，不得解释为零成交。",
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
         note: "只读观察，不会自动交易。"
