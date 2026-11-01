@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -1749,7 +1749,7 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("尚无卖出成交验证"));
   assert.ok(source.includes("priorityWatchlistCount: priorityWatchlist.length"));
   assert.ok(source.includes("priorityWatchlist: priorityWatchlist"));
-  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v1"'));
+  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v2-history-gate"'));
 });
 
 
@@ -1815,6 +1815,8 @@ function watchlistPool(overrides = {}) {
     tradePriceChangeSincePoolCreationPct: 12,
     buySellVolumeRatioSincePoolCreation: 1.5,
     tradeFlowStatus: "mixed_flow",
+    historicalRiskStatus: "stable",
+    historicalRiskReasons: [],
     earlySignalScore: 70,
     liquidityUSDApprox: 25000,
     ...overrides
@@ -1895,4 +1897,123 @@ test("priority watchlist keeps missing trade metrics out of the priority list", 
   assert.equal(result.priorityWatchlistEligible, false);
   assert.equal(result.watchlistTier, "review_only");
   assert.ok(result.watchlistExclusionReasons.some((x) => x.includes("成交数据不可用")));
+});
+
+
+function historyPool(overrides = {}) {
+  return {
+    pairAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6,
+    ...overrides
+  };
+}
+
+test("pool history requires a previous snapshot before claiming a trend", () => {
+  const result = classifyPoolHistory(historyPool(), null, 1_000_000);
+  assert.equal(result.status, "insufficient");
+  assert.equal(result.liquidityChangePct, null);
+  assert.ok(result.reasons.some(reason => reason.includes("首次观察")));
+});
+
+test("pool history identifies stable observations only with sufficient time and consistent cumulative metrics", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  };
+  const result = classifyPoolHistory(historyPool({
+    liquidityUSDApprox: 19800,
+    volumeSincePoolCreationUSD: 1250,
+    swapCountSincePoolCreation: 25,
+    buysSincePoolCreation: 17,
+    sellsSincePoolCreation: 8
+  }), previous, 1_060_000);
+  assert.equal(result.status, "stable");
+  assert.equal(result.liquidityChangePct, -1);
+  assert.equal(result.newSwapCount, 5);
+  assert.equal(result.newVolumeUSD, 250);
+});
+
+test("pool history marks large liquidity drops as high risk", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  };
+  const result = classifyPoolHistory(historyPool({
+    liquidityUSDApprox: 9000,
+    volumeSincePoolCreationUSD: 1300,
+    swapCountSincePoolCreation: 25,
+    buysSincePoolCreation: 17,
+    sellsSincePoolCreation: 8
+  }), previous, 1_060_000);
+  assert.equal(result.status, "high_risk");
+  assert.ok(result.reasons.some(reason => reason.includes("骤降")));
+  const watchlist = classifyPriorityWatchlist({
+    ...watchlistPool(),
+    historicalRiskStatus: result.status,
+    historicalRiskReasons: result.reasons
+  });
+  assert.equal(watchlist.priorityWatchlistEligible, false);
+  assert.equal(watchlist.watchlistTier, "high_risk_review");
+});
+
+test("pool history refuses to infer a trend from missing metrics or reset cumulative counts", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  };
+  const missing = classifyPoolHistory(historyPool({ volumeSincePoolCreationUSD: null }), previous, 1_060_000);
+  assert.equal(missing.status, "insufficient");
+  const reset = classifyPoolHistory(historyPool({ swapCountSincePoolCreation: 12, buysSincePoolCreation: 8, sellsSincePoolCreation: 4 }), previous, 1_060_000);
+  assert.equal(reset.status, "inconsistent");
+  assert.ok(reset.reasons.some(reason => reason.includes("倒退")));
+});
+
+test("pool history rejects observations that are too close together or too old", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  };
+  assert.equal(classifyPoolHistory(historyPool(), previous, 1_010_000).status, "insufficient");
+  assert.equal(classifyPoolHistory(historyPool(), previous, 3_000_000).status, "insufficient");
+});
+
+test("pool history still flags a liquidity collapse when the pool falls below the candidate threshold and trade metrics are unavailable", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  };
+  const result = classifyPoolHistory(historyPool({
+    liquidityUSDApprox: 0,
+    volumeSincePoolCreationUSD: null,
+    swapCountSincePoolCreation: null,
+    buysSincePoolCreation: null,
+    sellsSincePoolCreation: null
+  }), previous, 1_060_000);
+  assert.equal(result.status, "high_risk");
+  assert.equal(result.liquidityChangePct, -100);
+  assert.ok(result.reasons.some(reason => reason.includes("骤降")));
 });
