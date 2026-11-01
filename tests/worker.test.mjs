@@ -639,6 +639,32 @@ test("price risk sends sustained sell pressure to review even before hourly pric
   assert.match(result.reason, /卖出次数/);
 });
 
+test("price risk blocks a regular early pump followed by a sharp reversal", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    trendSignals: { pumpThenDump: true, peakToCurrentDrawdownPct: -38, prePeakGainPct: 65, postPeakCandleCount: 2 }
+  });
+  assert.equal(result.level, "blocked");
+  assert.match(result.reason, /拉高砸盘/);
+});
+
+test("price risk blocks a sustained gradual decline instead of waiting for one crash candle", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    trendSignals: { gradualDecline: true, trendNetChangePct: -28, downMoveRatio: 0.9, trendCandleCount: 10 }
+  });
+  assert.equal(result.level, "blocked");
+  assert.match(result.reason, /持续阴跌/);
+});
+
+test("price risk reviews an emerging pump-and-dump reversal before the hard block threshold", () => {
+  const priceRisk = loadDashboardPriceRisk();
+  const result = priceRisk({
+    trendSignals: { pumpThenDump: true, peakToCurrentDrawdownPct: -24, prePeakGainPct: 50, postPeakCandleCount: 1 }
+  });
+  assert.equal(result.level, "review");
+});
+
 test("price risk still blocks a severe short-window dump", () => {
   const priceRisk = loadDashboardPriceRisk();
   const result = priceRisk({
