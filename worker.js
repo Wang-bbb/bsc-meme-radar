@@ -727,6 +727,19 @@ export default {
       const minutes = Number(url.searchParams.get("minutes") || 15);
       const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
       if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
+      // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
+      const scanKv = env && env.RADAR_KV;
+      const scanCacheKey = "multiscan:v1:" + minutes + ":" + minLiquidity;
+      if (scanKv && typeof scanKv.get === "function") {
+        try {
+          const cachedScan = await scanKv.get(scanCacheKey, "json");
+          const cachedAt = cachedScan && Number(cachedScan._cachedAt);
+          const ageSeconds = cachedAt > 0 ? Math.floor(Date.now() / 1000 - cachedAt) : Infinity;
+          if (cachedScan && cachedScan.payload && ageSeconds >= 0 && ageSeconds < 45) {
+            return json({ ...cachedScan.payload, cache: { status: "hit", ageSeconds, ttlSeconds: 45 } });
+          }
+        } catch (_) {}
+      }
       const networks = [
         { id: "solana", name: "Solana", dexChain: "solana" },
         { id: "eth", name: "Ethereum", dexChain: "ethereum" },
@@ -998,7 +1011,7 @@ export default {
         }
       }
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
-      return json({
+      const responsePayload = {
         ok: true,
         complete: errors.length === 0,
         mode: "multichain-new-pools",
@@ -1027,7 +1040,16 @@ export default {
           "本接口只读，不执行兑换或交易。"
         ],
         generatedAt: new Date().toISOString()
-      });
+      };
+      if (scanKv && typeof scanKv.put === "function") {
+        try {
+          await scanKv.put(scanCacheKey, JSON.stringify({
+            _cachedAt: Math.floor(Date.now() / 1000),
+            payload: responsePayload
+          }), { expirationTtl: 90 });
+        } catch (_) {}
+      }
+      return json({ ...responsePayload, cache: { status: "miss", ageSeconds: 0, ttlSeconds: 45 } });
     }
     if (url.pathname !== "/scan") return json({ ok: false, error: "not found" }, 404);
 
