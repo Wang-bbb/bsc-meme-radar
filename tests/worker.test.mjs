@@ -1106,3 +1106,102 @@ test("GoPlus provider-wide rate-limit cooldown prevents requests for other token
   assert.equal(goPlusCalls, 1);
   assert.equal(secondData.status, "review");
 });
+
+
+const SOLANA_TEST_MINT = "So11111111111111111111111111111111111111112";
+const SOLANA_TEST_RPC_ENV = { ...env, SOLANA_RPC_URL: "https://solana-rpc.invalid.test" };
+function solanaMintRpc(info, owner = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") {
+  return response({ result: { value: {
+    owner,
+    data: { parsed: { type: "mint", info } }
+  } } });
+}
+
+test("Solana direct RPC evidence keeps an active mint authority in review even when RugCheck is unavailable", async () => {
+  globalThis.fetch = async (input) => {
+    const host = new URL(input).hostname;
+    if (host === "api.rugcheck.xyz") return new Response("unavailable", { status: 503 });
+    if (host === "solana-rpc.invalid.test") {
+      return solanaMintRpc({
+        mintAuthority: "Authority111111111111111111111111111111111",
+        freezeAuthority: null,
+        supply: "1000000000",
+        decimals: 9
+      });
+    }
+    throw new Error("Unexpected provider " + host);
+  };
+  const res = await worker.fetch(request("/security-check?chain=solana&address=" + SOLANA_TEST_MINT), SOLANA_TEST_RPC_ENV);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.equal(data.solanaRpcStatus, "ok");
+  assert.equal(data.solanaMintAuthorityActive, true);
+  assert.equal(data.solanaFreezeAuthorityActive, false);
+  assert.ok(data.reasons.some(reason => reason.includes("Mint / Freeze Authority 仍有效")));
+  assert.match(data.rugCheckError, /HTTP 503/);
+});
+
+test("Solana direct RPC reports unknown Token-2022 extensions as unassessed", async () => {
+  globalThis.fetch = async (input) => {
+    const host = new URL(input).hostname;
+    if (host === "api.rugcheck.xyz") {
+      return response({
+        tokenProgram: "token-2022",
+        mintAuthority: null,
+        freezeAuthority: null,
+        risks: [],
+        score_normalised: 1,
+        lpLockedPct: 100,
+        topHolders: Array.from({ length: 10 }, () => ({ pct: 0.01 }))
+      });
+    }
+    if (host === "solana-rpc.invalid.test") {
+      return solanaMintRpc({
+        mintAuthority: null,
+        freezeAuthority: null,
+        supply: "1000000000",
+        decimals: 9,
+        extensions: [{ extension: "FutureUnknownExtension" }]
+      }, "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+    }
+    throw new Error("Unexpected provider " + host);
+  };
+  const res = await worker.fetch(request("/security-check?chain=solana&address=" + SOLANA_TEST_MINT), SOLANA_TEST_RPC_ENV);
+  const data = await res.json();
+  assert.equal(data.status, "review");
+  assert.equal(data.solanaTokenProgram, "token-2022");
+  assert.deepEqual(data.solanaUnassessedExtensions, ["FutureUnknownExtension"]);
+  assert.ok(data.reasons.some(reason => reason.includes("尚未评估的 Token-2022 扩展")));
+});
+
+test("Solana complete legacy mint evidence can complement a complete RugCheck report", async () => {
+  globalThis.fetch = async (input) => {
+    const host = new URL(input).hostname;
+    if (host === "api.rugcheck.xyz") {
+      return response({
+        tokenProgram: "spl-token",
+        mintAuthority: null,
+        freezeAuthority: null,
+        risks: [],
+        score_normalised: 1,
+        lpLockedPct: 100,
+        topHolders: Array.from({ length: 10 }, () => ({ pct: 0.01 }))
+      });
+    }
+    if (host === "solana-rpc.invalid.test") {
+      return solanaMintRpc({
+        mintAuthority: null,
+        freezeAuthority: null,
+        supply: "1000000000",
+        decimals: 9
+      });
+    }
+    throw new Error("Unexpected provider " + host);
+  };
+  const res = await worker.fetch(request("/security-check?chain=solana&address=" + SOLANA_TEST_MINT), SOLANA_TEST_RPC_ENV);
+  const data = await res.json();
+  assert.equal(data.status, "pass");
+  assert.equal(data.solanaRpcStatus, "ok");
+  assert.equal(data.solanaMintAuthorityActive, false);
+  assert.equal(data.solanaFreezeAuthorityActive, false);
+});

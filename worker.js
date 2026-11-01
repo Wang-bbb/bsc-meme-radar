@@ -340,6 +340,99 @@ async function fetchDexScreenerJson(endpoint) {
   return response;
 }
 
+
+const SOLANA_LEGACY_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const SOLANA_TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const SOLANA_KNOWN_EXTENSIONS = new Set([
+  "transferfeeconfig", "transferhook", "permanentdelegate", "defaultaccountstate",
+  "nontransferable", "confidentialtransfermint", "confidentialtransferfeeconfig",
+  "pausableconfig", "mintcloseauthority", "metadatapointer", "tokenmetadata",
+  "grouppointer", "tokengroup", "interestbearingconfig", "scaleduiamount"
+]);
+const SOLANA_RISKY_EXTENSIONS = new Set([
+  "transferfeeconfig", "transferhook", "permanentdelegate", "defaultaccountstate",
+  "nontransferable", "confidentialtransfermint", "confidentialtransferfeeconfig",
+  "pausableconfig", "mintcloseauthority", "scaleduiamount"
+]);
+
+// Independent, read-only Solana mint evidence. A provider failure is returned
+// as unknown evidence; it never becomes a clean/safe result.
+async function fetchSolanaMintEvidence(env, address) {
+  const unknown = { status: "unavailable", authorityFieldsPresent: false,
+    mintAuthorityActive: null, freezeAuthorityActive: null, tokenProgram: null,
+    extensionNames: [], riskyExtensions: [], unassessedExtensions: [],
+    httpStatus: null, error: null };
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(address || ""))) {
+    return { ...unknown, error: "Solana mint address format is invalid" };
+  }
+  const rpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+  if (!/^https:\/\//i.test(rpcUrl) || /\s/.test(rpcUrl)) {
+    return { ...unknown, error: "Solana RPC endpoint configuration is invalid" };
+  }
+  try {
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "getAccountInfo",
+        params: [address, { encoding: "jsonParsed", commitment: "confirmed" }]
+      })
+    });
+    if (!response.ok) {
+      return { ...unknown, httpStatus: response.status, error: "Solana RPC HTTP " + response.status };
+    }
+    let body;
+    try { body = await response.json(); }
+    catch (_) { return { ...unknown, httpStatus: response.status, error: "Solana RPC returned invalid JSON" }; }
+    if (body && body.error) {
+      const code = body.error.code != null ? String(body.error.code).slice(0, 24) : "";
+      return { ...unknown, httpStatus: response.status, error: "Solana RPC JSON-RPC error" + (code ? " (" + code + ")" : "") };
+    }
+    const value = body && body.result && body.result.value;
+    if (!value) return { ...unknown, httpStatus: response.status, error: "Solana mint account not found" };
+    const parsed = value.data && value.data.parsed;
+    const info = parsed && parsed.info;
+    if (!info || parsed.type !== "mint") {
+      return { ...unknown, httpStatus: response.status, error: "Solana RPC did not return parsed mint data" };
+    }
+    const tokenProgram = value.owner === SOLANA_LEGACY_TOKEN_PROGRAM ? "spl-token"
+      : value.owner === SOLANA_TOKEN_2022_PROGRAM ? "token-2022" : "unknown";
+    const authorityFieldsPresent = Object.prototype.hasOwnProperty.call(info, "mintAuthority") &&
+      Object.prototype.hasOwnProperty.call(info, "freezeAuthority");
+    const extensionRows = Array.isArray(info.extensions) ? info.extensions : null;
+    const extensionNames = [];
+    const riskyExtensions = [];
+    const unassessedExtensions = [];
+    if (extensionRows) {
+      for (const row of extensionRows) {
+        const raw = row && (row.extension || row.type || row.kind);
+        if (typeof raw !== "string" || !raw.trim()) {
+          unassessedExtensions.push("unnamed-extension");
+          continue;
+        }
+        const normalized = raw.replace(/[^a-z0-9]/gi, "").toLowerCase();
+        extensionNames.push(raw.slice(0, 48));
+        if (SOLANA_RISKY_EXTENSIONS.has(normalized)) riskyExtensions.push(raw.slice(0, 48));
+        if (!SOLANA_KNOWN_EXTENSIONS.has(normalized)) unassessedExtensions.push(raw.slice(0, 48));
+      }
+    }
+    const extensionsComplete = tokenProgram !== "token-2022" || extensionRows !== null;
+    const status = authorityFieldsPresent && tokenProgram !== "unknown" && extensionsComplete &&
+      unassessedExtensions.length === 0 ? "ok" : "incomplete";
+    return {
+      status, httpStatus: response.status, error: null, tokenProgram,
+      authorityFieldsPresent,
+      mintAuthorityActive: authorityFieldsPresent ? info.mintAuthority != null : null,
+      freezeAuthorityActive: authorityFieldsPresent ? info.freezeAuthority != null : null,
+      extensionNames: [...new Set(extensionNames)],
+      riskyExtensions: [...new Set(riskyExtensions)],
+      unassessedExtensions: [...new Set(unassessedExtensions)]
+    };
+  } catch (_) {
+    return { ...unknown, error: "Solana RPC request failed" };
+  }
+}
+
 const VERIFIED_QUOTE_ASSETS = {
   solana: new Set([
     "so11111111111111111111111111111111111111112",
@@ -997,13 +1090,24 @@ export default {
       if (!address) return json({ ok: false, status: "unverified", error: "missing token address" }, 400);
       try {
         if (chain === "solana") {
-          const response = await fetch("https://api.rugcheck.xyz/v1/tokens/" + encodeURIComponent(address) + "/report", { headers: { "accept": "application/json" } });
-          if (!response.ok) throw new Error("RugCheck HTTP " + response.status);
-          const report = await response.json();
+          const [rugCheckResult, mintEvidence] = await Promise.all([
+            (async () => {
+              try {
+                const response = await fetch("https://api.rugcheck.xyz/v1/tokens/" + encodeURIComponent(address) + "/report", { headers: { "accept": "application/json" } });
+                if (!response.ok) return { report: {}, httpStatus: response.status, error: "RugCheck HTTP " + response.status };
+                return { report: await response.json(), httpStatus: response.status, error: null };
+              } catch (_) {
+                return { report: {}, httpStatus: null, error: "RugCheck request failed" };
+              }
+            })(),
+            fetchSolanaMintEvidence(env, address)
+          ]);
+          const report = rugCheckResult.report || {};
           const risks = Array.isArray(report.risks) ? report.risks : [];
           const critical = risks.filter((risk) => ["danger", "critical"].includes(String(risk.level || "").toLowerCase()));
           const warnings = risks.filter((risk) => ["high", "medium", "caution", "warn", "warning", "info"].includes(String(risk.level || "").toLowerCase()));
           const hasUsableReport = !!report.tokenProgram || risks.length > 0 || report.score_normalised != null || report.lpLockedPct != null;
+          const hasAnyEvidence = hasUsableReport || mintEvidence.status === "ok" || mintEvidence.status === "incomplete";
           const lpLockedPct = report.lpLockedPct == null || !Number.isFinite(Number(report.lpLockedPct))
             ? null : Number(report.lpLockedPct);
           const weakLiquidityLock = lpLockedPct !== null && lpLockedPct < 80;
@@ -1011,12 +1115,15 @@ export default {
           const rugged = report.rugged === true;
           const mintAuthority = report.mintAuthority ?? report.token?.mintAuthority ?? null;
           const freezeAuthority = report.freezeAuthority ?? report.token?.freezeAuthority ?? null;
-          const authorityFieldsPresent = Object.prototype.hasOwnProperty.call(report, "mintAuthority") ||
-            Object.prototype.hasOwnProperty.call(report, "freezeAuthority") ||
-            Object.prototype.hasOwnProperty.call(report.token || {}, "mintAuthority") ||
+          const rugMintField = Object.prototype.hasOwnProperty.call(report, "mintAuthority") ||
+            Object.prototype.hasOwnProperty.call(report.token || {}, "mintAuthority");
+          const rugFreezeField = Object.prototype.hasOwnProperty.call(report, "freezeAuthority") ||
             Object.prototype.hasOwnProperty.call(report.token || {}, "freezeAuthority");
-          const activeAuthorities = mintAuthority != null || freezeAuthority != null;
-          const unknownAuthorities = !authorityFieldsPresent;
+          const rugAuthorityFieldsPresent = rugMintField && rugFreezeField;
+          const activeAuthorities = mintAuthority != null || freezeAuthority != null ||
+            mintEvidence.mintAuthorityActive === true || mintEvidence.freezeAuthorityActive === true;
+          const authorityEvidencePresent = rugAuthorityFieldsPresent || mintEvidence.authorityFieldsPresent === true;
+          const unknownAuthorities = !authorityEvidencePresent;
           const holderRows = Array.isArray(report.topHolders) ? report.topHolders.slice(0, 10) : [];
           const holderValues = holderRows.map(holder => {
             const value = holder && (holder.pct ?? holder.percent ?? holder.percentage);
@@ -1034,16 +1141,48 @@ export default {
                 ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度偏高" : "";
           const holderHardRisk = holderConcentrationPct !== null && holderConcentrationPct >= 80;
           const holderReviewRisk = holderConcentrationPct === null || holderConcentrationPct >= 50;
-          const status = rugged || critical.length || holderHardRisk ? "blocked" : (!hasUsableReport || warnings.length || weakLiquidityLock || unknownLiquidityLock || activeAuthorities || unknownAuthorities || holderReviewRisk) ? "review" : "pass";
+          const riskyExtensions = mintEvidence.riskyExtensions || [];
+          const unassessedExtensions = mintEvidence.unassessedExtensions || [];
+          const extensionReviewRisk = riskyExtensions.length > 0 || unassessedExtensions.length > 0 || mintEvidence.status === "incomplete";
+          const status = rugged || critical.length || holderHardRisk ? "blocked" :
+            (!hasAnyEvidence || warnings.length || weakLiquidityLock || unknownLiquidityLock ||
+             activeAuthorities || unknownAuthorities || holderReviewRisk || extensionReviewRisk) ? "review" : "pass";
           return json({
-            ok: true, chain, tokenAddress: address, provider: "RugCheck",
+            ok: true, chain, tokenAddress: address, provider: "RugCheck + Solana RPC",
             status, riskScore: report.score_normalised ?? null, lpLockedPct,
             top10HolderConcentrationPct: holderConcentrationPct,
             holderConcentrationStatus, holderCountChecked: holderRows.length,
             liquidityLockStatus: unknownLiquidityLock ? "unknown" : weakLiquidityLock ? "below_threshold" : "meets_threshold",
+            solanaRpcStatus: mintEvidence.status,
+            solanaRpcHttpStatus: mintEvidence.httpStatus,
+            solanaRpcError: mintEvidence.error,
+            solanaTokenProgram: mintEvidence.tokenProgram,
+            solanaMintAuthorityActive: mintEvidence.mintAuthorityActive,
+            solanaFreezeAuthorityActive: mintEvidence.freezeAuthorityActive,
+            solanaExtensions: mintEvidence.extensionNames,
+            solanaRiskyExtensions: riskyExtensions,
+            solanaUnassessedExtensions: unassessedExtensions,
+            rugCheckHttpStatus: rugCheckResult.httpStatus,
+            rugCheckError: rugCheckResult.error,
             risks: risks.map((risk) => ({ name: risk.name, level: risk.level, value: risk.value, description: risk.description })),
-            reasons: [...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []), ...critical.map((x) => x.name), ...warnings.map((x) => x.name), ...(!hasUsableReport ? ["RugCheck 报告信息不足"] : []), ...(weakLiquidityLock ? ["已报告的流动性锁定比例低于80%"] : []), ...(unknownLiquidityLock ? ["流动性锁定数据缺失，无法确认；不代表已确认未锁定"] : []), ...(activeAuthorities ? ["Mint 或 Freeze Authority 仍有效"] : []), ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : []), ...(holderConcentrationReason ? [holderConcentrationReason] : [])],
-            note: "前十大持币占比基于RugCheck返回的原始持币记录，可能包含池子或项目地址；仅作集中度预警，不等于最终流通筹码分布。RugCheck摘要不等于完整审计或实际买卖模拟。"
+            reasons: [
+              ...(rugged ? ["RugCheck 标记该代币已发生 Rug"] : []),
+              ...critical.map((x) => x.name),
+              ...warnings.map((x) => x.name),
+              ...(!hasAnyEvidence ? ["RugCheck 与 Solana RPC 均未返回可用安全证据"] : []),
+              ...(rugCheckResult.error ? ["RugCheck 数据源不可用：" + rugCheckResult.error] : []),
+              ...(mintEvidence.error ? ["Solana 链上权限数据不可用：" + mintEvidence.error] : []),
+              ...(weakLiquidityLock ? ["已报告的流动性锁定比例低于80%"] : []),
+              ...(unknownLiquidityLock ? ["流动性锁定数据缺失，无法确认；不代表已确认未锁定"] : []),
+              ...(activeAuthorities ? ["链上或 RugCheck 证据显示 Mint / Freeze Authority 仍有效"] : []),
+              ...(unknownAuthorities ? ["Mint / Freeze Authority 状态缺失，无法确认"] : []),
+              ...(riskyExtensions.length ? ["检测到需要人工复核的 Token-2022 扩展：" + riskyExtensions.join(", ")] : []),
+              ...(unassessedExtensions.length ? ["存在尚未评估的 Token-2022 扩展：" + unassessedExtensions.join(", ")] : []),
+              ...(mintEvidence.tokenProgram === "token-2022" && mintEvidence.status === "incomplete" && !unassessedExtensions.length
+                ? ["Token-2022 扩展数据不完整，无法确认全部转账控制"] : []),
+              ...(holderConcentrationReason ? [holderConcentrationReason] : [])
+            ],
+            note: "新增 Solana RPC 独立读取 Mint / Freeze Authority 和 Token-2022 扩展；RugCheck 仍负责风险摘要、持币与 LP 锁定信号。池子/项目地址可能影响持币集中度。任一数据源失败或字段不完整均不会被当作安全通过。"
           });
         }
         const chainIds = { ethereum: 1, eth: 1, bsc: 56, base: 8453 };

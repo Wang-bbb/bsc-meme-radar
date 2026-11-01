@@ -16,9 +16,9 @@
 
 ## 安全筛查范围与限制
 - EVM 使用 Honeypot.is 买卖模拟及风险信号，覆盖范围受其支持的链、DEX 和交易路由限制。
-- Solana 使用 RugCheck 风险摘要、权限和 LP 锁定信号。
+- Solana 使用 RugCheck 风险摘要、持币/LP 锁定信号，并独立通过 Solana JSON-RPC 读取 Mint / Freeze Authority 与 Token-2022 扩展；链上证据缺失、未知扩展或权限仍有效时进入待复核。
 - 通过筛查不代表绝对安全，也不是完整合约审计。
-- 尚未完整实现：创建者及关联钱包历史、EVM 全量持币集中度、LP 锁仓合约可信度验证、持续监控流动性撤出。
+- 尚未完整实现：创建者及关联钱包历史、EVM 全量持币集中度、Solana 按持有人归并后的链上集中度、LP 锁仓合约可信度验证、持续监控流动性撤出。Solana Token-2022 当前对已识别扩展做风险提示；未知扩展不会当作安全通过。
 - 安全数据不可用、模拟失败或信息不完整时，按待复核处理，不进入通过筛查列表。
 
 ## 数据覆盖限制
@@ -29,7 +29,7 @@
 - BSC USDT 直连池与其他链的钱包兑换路径是两回事；其他三链目前不提供 USDT 直连或可成交保证。
 
 ## 部署说明
-1. Cloudflare Worker 使用仓库中的 `worker.js`，并在 Cloudflare Secret 中配置 `NODEREAL_RPC_URL`。
+1. Cloudflare Worker 使用仓库中的 `worker.js`，并在 Cloudflare Secret 中配置 `NODEREAL_RPC_URL`。Solana 链上安全检查默认使用 Solana 公共 JSON-RPC；建议在 Cloudflare Secret 中额外配置 `SOLANA_RPC_URL`，指向你自己的可靠 Solana RPC 服务，以降低公共节点限流概率。
 2. 为启用 Ethereum / Base 链上兜底扫描，可在 Cloudflare Dashboard → Workers & Pages → `younbsc-meme-radar` → Settings → Variables and Secrets 中分别添加 Secret：`ETH_RPC_URL`、`BASE_RPC_URL`。两者可分别配置，建议使用支持对应链 `eth_getLogs` 的 RPC 服务；不要把 RPC URL 或 API Key 提交到 GitHub 仓库或聊天中。
 3. 未配置对应 Secret 时，该链仍尝试公共索引源，并在扫描诊断中明确标记 RPC fallback 未配置。
 4. GitHub Pages 发布仓库根目录的 `index.html`。
