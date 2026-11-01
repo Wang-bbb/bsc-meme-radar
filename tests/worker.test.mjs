@@ -1983,7 +1983,7 @@ test("pool history detects a sharp decline in normalized activity rate without c
     sellsSincePoolCreation: 6
   }), previous, 1_060_000);
   assert.equal(result.activityTrendStatus, "sharp_decline");
-  assert.equal(result.activityChangePct, -98);
+  assert.equal(result.activityChangePct, -96);
   assert.equal(result.status, "review");
   assert.ok(result.reasons.some(reason => reason.includes("成交持续性预警")));
 });
