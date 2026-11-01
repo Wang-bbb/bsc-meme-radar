@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -21,6 +21,28 @@ function request(path) {
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("Solana quote liquidity uses USD stablecoin reserves or a valid SOL/USD price", () => {
+  assert.equal(calculateSolanaQuoteLiquidityUSD("USDC", 3000), 6000);
+  assert.equal(calculateSolanaQuoteLiquidityUSD("USDT", 2500), 5000);
+  assert.equal(calculateSolanaQuoteLiquidityUSD("SOL", 40, 100), 8000);
+  assert.equal(calculateSolanaQuoteLiquidityUSD("SOL", 40, null), null);
+  assert.equal(calculateSolanaQuoteLiquidityUSD("UNKNOWN", 100000, 100), null);
+  assert.equal(calculateSolanaQuoteLiquidityUSD("SOL", -1, 100), null);
+});
+
+test("Pyth SOL/USD price parser rejects stale, uncertain, or malformed oracle data", () => {
+  const feedId = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+  const now = 1_800_000_000;
+  const good = { parsed: [{ id: feedId, price: { price: "10000", conf: "10", expo: -2, publish_time: now - 10 } }] };
+  const parsed = parsePythSolUsdPrice(good, now);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.priceUsd, 100);
+  assert.equal(parsed.ageSeconds, 10);
+  assert.equal(parsePythSolUsdPrice({ parsed: [{ id: feedId, price: { price: "10000", conf: "10", expo: -2, publish_time: now - 121 } }] }, now).ok, false);
+  assert.equal(parsePythSolUsdPrice({ parsed: [{ id: feedId, price: { price: "10000", conf: "300", expo: -2, publish_time: now } }] }, now).ok, false);
+  assert.equal(parsePythSolUsdPrice({ parsed: [{ id: feedId, price: { price: "0", conf: "1", expo: -2, publish_time: now } }] }, now).ok, false);
 });
 
 test("EVM security gate passes only when simulation and source checks are complete", async () => {
