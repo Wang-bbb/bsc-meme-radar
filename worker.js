@@ -77,6 +77,7 @@ export function classifyPriorityWatchlist(pool) {
     Number(pool.liquidityUSDApprox) >= 5000;
   const highRisk = (priceChange != null && (priceChange >= 40 || priceChange <= -15)) ||
     pool.tradeFlowStatus === "sell_volume_dominant" ||
+    pool.historicalRiskStatus === "high_risk" ||
     (ratio != null && ratio >= 4 && sellCount > 0);
   return {
     priorityWatchlistEligible: eligible,
@@ -125,8 +126,9 @@ export function classifyPoolHistory(pool, previous, nowMs = Date.now()) {
   const previousBuys = Number(previous.buysSincePoolCreation);
   const currentSells = Number(pool.sellsSincePoolCreation);
   const previousSells = Number(previous.sellsSincePoolCreation);
+  const rawValues = [pool.liquidityUSDApprox, previous.liquidityUSDApprox, pool.volumeSincePoolCreationUSD, previous.volumeSincePoolCreationUSD, pool.swapCountSincePoolCreation, previous.swapCountSincePoolCreation, pool.buysSincePoolCreation, previous.buysSincePoolCreation, pool.sellsSincePoolCreation, previous.sellsSincePoolCreation];
   const values = [currentLiquidity, previousLiquidity, currentVolume, previousVolume, currentSwaps, previousSwaps, currentBuys, previousBuys, currentSells, previousSells];
-  if (!values.every(Number.isFinite) || currentLiquidity <= 0 || previousLiquidity <= 0 ||
+  if (rawValues.some((value) => value == null || value === "") || !values.every(Number.isFinite) || currentLiquidity <= 0 || previousLiquidity <= 0 ||
       currentVolume < 0 || previousVolume < 0 ||
       ![currentSwaps, previousSwaps, currentBuys, previousBuys, currentSells, previousSells].every(Number.isInteger)) {
     return { status: "insufficient", reasons: ["历史或当前成交/流动性指标缺失，无法验证趋势"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
@@ -189,11 +191,11 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
       if (!address) continue;
       nextPools[address] = {
         observedAt: nowMs,
-        liquidityUSDApprox: Number(pool.liquidityUSDApprox),
-        volumeSincePoolCreationUSD: Number(pool.volumeSincePoolCreationUSD),
-        swapCountSincePoolCreation: Number(pool.swapCountSincePoolCreation),
-        buysSincePoolCreation: Number(pool.buysSincePoolCreation),
-        sellsSincePoolCreation: Number(pool.sellsSincePoolCreation)
+        liquidityUSDApprox: pool.liquidityUSDApprox == null ? null : Number(pool.liquidityUSDApprox),
+        volumeSincePoolCreationUSD: pool.volumeSincePoolCreationUSD == null ? null : Number(pool.volumeSincePoolCreationUSD),
+        swapCountSincePoolCreation: pool.swapCountSincePoolCreation == null ? null : Number(pool.swapCountSincePoolCreation),
+        buysSincePoolCreation: pool.buysSincePoolCreation == null ? null : Number(pool.buysSincePoolCreation),
+        sellsSincePoolCreation: pool.sellsSincePoolCreation == null ? null : Number(pool.sellsSincePoolCreation)
       };
     }
     const sortedEntries = Object.entries(nextPools).sort((a, b) => Number(b[1].observedAt) - Number(a[1].observedAt)).slice(0, 500);
