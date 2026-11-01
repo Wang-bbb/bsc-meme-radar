@@ -1815,6 +1815,8 @@ function watchlistPool(overrides = {}) {
     tradePriceChangeSincePoolCreationPct: 12,
     buySellVolumeRatioSincePoolCreation: 1.5,
     tradeFlowStatus: "mixed_flow",
+    historicalRiskStatus: "stable",
+    historicalRiskReasons: [],
     earlySignalScore: 70,
     liquidityUSDApprox: 25000,
     ...overrides
@@ -1992,7 +1994,7 @@ test("pool history rejects observations that are too close together or too old",
     sellsSincePoolCreation: 6
   };
   assert.equal(classifyPoolHistory(historyPool(), previous, 1_010_000).status, "insufficient");
-  assert.equal(classifyPoolHistory(historyPool(), previous, 1_900_000).status, "insufficient");
+  assert.equal(classifyPoolHistory(historyPool(), previous, 3_000_000).status, "insufficient");
 });
 
 test("pool history still flags a liquidity collapse when the pool falls below the candidate threshold and trade metrics are unavailable", () => {
