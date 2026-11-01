@@ -115,6 +115,26 @@ test("non-BSC preflight requests do not depend on the NodeReal secret", async ()
   assert.equal(res.headers.get("access-control-allow-origin"), "*");
 });
 
+test("multiscan supports Solana-only stable scope without querying Ethereum or Base", async () => {
+  const requestedChains = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      const chain = url.pathname.split("/")[4];
+      requestedChains.push(chain);
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "0" } });
+    }
+    if (url.hostname === "api.dexscreener.com") return response([]);
+    if (url.hostname === "api.dexpaprika.com") return new Response("rate limited", { status: 429 });
+    throw new Error("Unexpected URL " + url.href);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {});
+  const data = await res.json();
+  assert.deepEqual(data.chains, ["Solana"]);
+  assert.deepEqual(data.chainErrors.map(item => item.chain), ["Solana"]);
+  assert.deepEqual(requestedChains, ["solana"]);
+});
+
 test("multiscan stops retrying GeckoTerminal immediately after HTTP 429 and does not report a false empty success", async () => {
   const attempts = new Map();
   globalThis.fetch = async (input) => {

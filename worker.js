@@ -913,9 +913,10 @@ export default {
       const minutes = Number(url.searchParams.get("minutes") || 15);
       const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
       if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
+      const requestedChains = String(url.searchParams.get("chains") || "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
       // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
       const scanKv = env && env.RADAR_KV;
-      const scanCacheKey = "multiscan:v1:" + minutes + ":" + minLiquidity;
+      const scanCacheKey = "multiscan:scope-v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
       if (scanKv && typeof scanKv.get === "function") {
         try {
           const cachedScan = await scanKv.get(scanCacheKey, "json");
@@ -926,11 +927,19 @@ export default {
           }
         } catch (_) {}
       }
-      const networks = [
+      // Keep every chain available for future restoration, while allowing the
+      // client to request a reduced stable scan scope (for example chains=solana).
+      const availableNetworks = [
         { id: "solana", name: "Solana", dexChain: "solana" },
         { id: "eth", name: "Ethereum", dexChain: "ethereum" },
         { id: "base", name: "Base", dexChain: "base" }
       ];
+      const networks = requestedChains.length
+        ? availableNetworks.filter(network => requestedChains.includes(network.id))
+        : availableNetworks;
+      if (requestedChains.length && networks.length === 0) {
+        return json({ ok: false, error: "chains must include a supported chain: solana, eth, base" }, 400);
+      }
       const results = [];
       const errors = [];
       const chainSources = [];
@@ -1276,7 +1285,7 @@ export default {
         pools: results,
         chainErrors: errors,
         limitations: [
-          "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
+          "当前稳定模式只主动扫描 Solana；BSC 继续使用原有链上扫描接口。Ethereum/Base 暂停主动请求，相关代码和 RPC 备用配置保留，后续可恢复。",
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
           "GeckoTerminal 公共 API 可能限流；失败时先尝试 DexScreener 最新 Token Profile 与 Boost 名单，若也失败则尝试 DexPaprika 最近新池搜索。备用源只取有限结果且覆盖不完整，必须显示为部分覆盖，不能当作完整新池扫描；第三方 API 仍可能限流。",
           "Ethereum/Base 在索引源失败时可选使用 ETH_RPC_URL / BASE_RPC_URL 扫描配置的 Uniswap V2 稳定币直连池；仅覆盖单一 V2 工厂，不覆盖全链 DEX，也不提供完整成交/K线数据。",
