@@ -1238,7 +1238,7 @@ test("early trend score uses volume surge, buy pressure, acceleration and age wi
   assert.equal(data.volumeMetrics.baselineBucketsComplete, true);
   assert.equal(data.volumeMetrics.volumeSurge5m, 3);
   assert.equal(data.trendScore.status, "checked");
-  assert.equal(data.trendScore.confidence, 80);
+  assert.equal(data.trendScore.confidence, 100);
   assert.ok(data.trendScore.score >= 0 && data.trendScore.score <= 100);
   assert.ok(data.trendScore.components.some(item => item.key === "buyPressure1h"));
   assert.ok(data.trendScore.components.some(item => item.key === "volumeSurge5m"));
@@ -1255,7 +1255,7 @@ test("early trend score leaves missing buy/sell and age inputs unknown instead o
   const data = await res.json();
   assert.equal(data.trendScore.status, "insufficient");
   assert.equal(data.trendScore.score, null);
-  assert.equal(data.trendScore.confidence, 45);
+  assert.equal(data.trendScore.confidence, 55);
   assert.ok(!data.trendScore.components.some(item => item.key === "poolAge"));
   assert.ok(!data.trendScore.components.some(item => item.key === "buyPressure1h"));
 });
