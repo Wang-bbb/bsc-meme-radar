@@ -852,3 +852,58 @@ test("multiscan explicitly reports missing Ethereum and Base RPC secrets", async
   assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Ethereum" && item.requiredSecret === "ETH_RPC_URL"));
   assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Base" && item.requiredSecret === "BASE_RPC_URL"));
 });
+
+
+test("BSC scan uses a timestamp-bounded window and reports non-USDT quotes diagnostically only", async () => {
+  const latest = 10000;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const wbnb = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
+  const meme = "0x1111111111111111111111111111111111111111";
+  const padTopic = (address) => "0x" + address.slice(2).toLowerCase().padStart(64, "0");
+  const pancakeV2 = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
+  globalThis.fetch = async (input, init = {}) => {
+    const body = JSON.parse(init.body);
+    const method = body.method;
+    if (method === "eth_blockNumber") {
+      return response({ jsonrpc: "2.0", id: 1, result: "0x" + latest.toString(16) });
+    }
+    if (method === "eth_getBlockByNumber") {
+      const n = parseInt(body.params[0], 16);
+      const timestamp = Math.floor(nowSeconds - (latest - n) * 0.45);
+      return response({ jsonrpc: "2.0", id: 1, result: { timestamp: "0x" + timestamp.toString(16) } });
+    }
+    if (method === "eth_getLogs") {
+      const filter = body.params[0];
+      if (filter.address.toLowerCase() === pancakeV2 && filter.topics[0] === "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9") {
+        return response({ jsonrpc: "2.0", id: 1, result: [{
+          address: pancakeV2,
+          topics: [
+            "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9",
+            padTopic(wbnb), padTopic(meme)
+          ],
+          data: "0x" + "0".repeat(64) + "0".repeat(64),
+          blockNumber: "0x" + latest.toString(16),
+          transactionHash: "0x" + "1".repeat(64),
+          logIndex: "0x0"
+        }] });
+      }
+      return response({ jsonrpc: "2.0", id: 1, result: [] });
+    }
+    if (method === "eth_getCode") {
+      return response({ jsonrpc: "2.0", id: 1, result: "0x6000" });
+    }
+    throw new Error("Unexpected BSC RPC method " + method);
+  };
+  const res = await worker.fetch(request("/scan?minutes=15&minLiquidity=5000"), env);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.minutes, 15);
+  assert.equal(data.usdtPoolEventsFound.v2["PancakeSwap V2"], 0);
+  assert.equal(data.quoteAssetDiagnostics.WBNB.total, 1);
+  assert.equal(data.quoteAssetDiagnostics.USDT.total, 0);
+  assert.equal(data.count, 0, "non-USDT diagnostic pools must not enter candidates");
+  assert.ok(data.actualWindowSeconds >= 900);
+  assert.ok(data.actualWindowSeconds < 901);
+  assert.equal(data.requestedWindowSeconds, 900);
+  assert.ok(data.windowStartBlock < data.latestBlock);
+});
