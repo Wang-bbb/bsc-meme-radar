@@ -1263,20 +1263,23 @@ test("early trend score leaves missing buy/sell and age inputs unknown instead o
   assert.ok(!data.trendScore.components.some(item => item.key === "buyPressure1h"));
 });
 
-test("early trend score adds sustained candle structure and does not reward repeated red candles", async () => {
+test("early trend score penalizes persistent red-candle structure", async () => {
   const values = new Map();
   const kv = {
     async get(key) { return values.has(key) ? JSON.parse(values.get(key)) : null; },
     async put(key, value) { values.set(key, value); }
   };
   globalThis.fetch = async () => response({
-    data: { attributes: { ohlcv_list: makeOhlcvRows() } }
+    data: { attributes: { ohlcv_list: makeOhlcvRows({ declining: true }) } }
   });
   const path = "/pool-risk?chain=bsc&pool=0x2222222222222222222222222222222222222222" +
     "&token=0x1111111111111111111111111111111111111111&liquidity=50000&buys=40&sells=10&age=12";
   const res = await worker.fetch(request(path), { ...env, RADAR_KV: kv });
   const data = await res.json();
   assert.equal(data.trendScore.status, "checked");
-  assert.ok(data.trendScore.components.some(item => item.key === "trendStructure10m"));
+  const structure = data.trendScore.components.find(item => item.key === "trendStructure10m");
+  assert.ok(structure);
+  assert.ok(structure.score <= 35);
+  assert.ok(data.trendScore.warnings.some(item => item.includes("短线连续收跌")));
   assert.equal(data.trendScore.confidence, 85);
 });
