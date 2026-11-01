@@ -642,6 +642,30 @@ const REGRESSION_SAMPLE_MINTS = [
 ];
 
 
+
+function loadDashboardTradeSizeSummary() {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const match = html.match(/function tradeSizeRiskSummary\(pool\)\{[\\s\\S]*?\\n\}/);
+  assert.ok(match, "dashboard trade-size summary helper should exist");
+  return vm.runInNewContext("(" + match[0] + ")");
+}
+
+test("dashboard displays only available trade-size metrics and explicit risk flags", () => {
+  const summarize = loadDashboardTradeSizeSummary();
+  const result = summarize({
+    volumeToLiquidityRatioSincePoolCreation: 24.5,
+    averageBuyTradeUSD: 1200,
+    averageSellTradeUSD: null,
+    sellToBuyAverageTradeSizeRatio: 2.8,
+    earlyRiskFlags: ["高换手需复核"]
+  });
+  assert.equal(result.metrics.join("|"), "成交额/流动性 24.50x|平均买入 1200.00 USD|平均卖出/买入 2.80x");
+  assert.deepEqual(Array.from(result.flags), ["高换手需复核"]);
+  const missing = summarize({volumeToLiquidityRatioSincePoolCreation:null,earlyRiskFlags:[]});
+  assert.equal(missing.metrics.length, 0);
+  assert.equal(missing.flags.length, 0);
+});
+
 function loadDashboardHistoryTargetSelector() {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const match = html.match(/function selectMarketHistoryTargets\(all\)\{[\s\S]*?\n\}/);
