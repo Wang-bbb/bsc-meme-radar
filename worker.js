@@ -1039,6 +1039,10 @@ async function solanaRpcCall(rpcUrl, method, params) {
     });
     if (response.status >= 500) await writeProviderCooldown("solana-rpc", response);
   }
+  if (response.status === 429 || response.status === 402) {
+    await writeProviderCooldown("solana-rpc", response);
+    throw new Error("Solana RPC HTTP " + response.status + " (provider cooldown)");
+  }
   if (!response.ok) throw new Error("Solana RPC HTTP " + response.status);
   let body;
   try { body = await response.json(); }
