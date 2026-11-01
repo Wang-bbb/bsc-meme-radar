@@ -952,8 +952,10 @@ export default {
         // providers. A Honeypot outage must not skip the GoPlus risk check.
         let report = {};
         let honeypotError = null;
+        let honeypotResponseStatus = null;
         try {
           const honeypotResponse = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
+          honeypotResponseStatus = honeypotResponse.status;
           if (!honeypotResponse.ok) throw new Error("Honeypot.is HTTP " + honeypotResponse.status);
           report = await honeypotResponse.json();
         } catch (error) {
@@ -974,27 +976,52 @@ export default {
         let holderConcentrationStatus = "unknown";
         let holderCountChecked = 0;
         let holderConcentrationReason = "前十大持币集中度数据暂不可用，需复核";
+        let holderProviderStatus = "not_checked";
+        let holderProviderHttpStatus = null;
+        let holderProviderCode = null;
+        let holderProviderMessage = null;
+        let goPlusOpenSource = null;
         try {
           const holderResponse = await fetch("https://api.gopluslabs.io/api/v1/token_security/" + chainID + "?contract_addresses=" + encodeURIComponent(address), { headers: { "accept": "application/json" } });
-          if (holderResponse.ok) {
+          holderProviderHttpStatus = holderResponse.status;
+          if (!holderResponse.ok) {
+            holderProviderStatus = "http_error";
+            holderProviderMessage = "GoPlus HTTP " + holderResponse.status;
+          } else {
             const holderBody = await holderResponse.json();
-            const holderRecord = holderBody && holderBody.result && (holderBody.result[address.toLowerCase()] || holderBody.result[address] || Object.values(holderBody.result)[0]);
-            const holderRows = holderRecord && Array.isArray(holderRecord.holders) ? holderRecord.holders.slice(0, 10) : [];
-            const holderValues = holderRows.map(holder => {
-              const value = holder && holder.percent;
-              return value == null || !Number.isFinite(Number(value)) ? null : Number(value) * 100;
-            });
-            holderCountChecked = holderRows.length;
-            if (holderRows.length >= 10 && holderValues.every(value => value !== null)) {
-              holderConcentrationPct = holderValues.reduce((sum, value) => sum + value, 0);
-              holderConcentrationStatus = holderConcentrationPct >= 80 ? "high" : holderConcentrationPct >= 50 ? "elevated" : "observed";
-              holderConcentrationReason = holderConcentrationPct >= 80
-                ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度过高"
-                : holderConcentrationPct >= 50
-                  ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度偏高" : "";
+            holderProviderCode = holderBody && holderBody.code != null ? String(holderBody.code) : null;
+            holderProviderMessage = holderBody && (holderBody.message || holderBody.msg) || null;
+            if (holderBody && holderBody.code != null && String(holderBody.code) !== "1") {
+              holderProviderStatus = "api_error";
+            } else {
+              const holderRecord = holderBody && holderBody.result && (holderBody.result[address.toLowerCase()] || holderBody.result[address] || Object.values(holderBody.result)[0]);
+              if (holderRecord) {
+                holderProviderStatus = "ok";
+                if (holderRecord.is_open_source === "1" || holderRecord.is_open_source === 1) goPlusOpenSource = true;
+                else if (holderRecord.is_open_source === "0" || holderRecord.is_open_source === 0) goPlusOpenSource = false;
+              } else {
+                holderProviderStatus = "no_token_data";
+              }
+              const holderRows = holderRecord && Array.isArray(holderRecord.holders) ? holderRecord.holders.slice(0, 10) : [];
+              const holderValues = holderRows.map(holder => {
+                const value = holder && holder.percent;
+                return value == null || !Number.isFinite(Number(value)) ? null : Number(value) * 100;
+              });
+              holderCountChecked = holderRows.length;
+              if (holderRows.length >= 10 && holderValues.every(value => value !== null)) {
+                holderConcentrationPct = holderValues.reduce((sum, value) => sum + value, 0);
+                holderConcentrationStatus = holderConcentrationPct >= 80 ? "high" : holderConcentrationPct >= 50 ? "elevated" : "observed";
+                holderConcentrationReason = holderConcentrationPct >= 80
+                  ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度过高"
+                  : holderConcentrationPct >= 50
+                    ? "前十大持币地址合计占比达到" + holderConcentrationPct.toFixed(2) + "%，集中度偏高" : "";
+              }
             }
           }
-        } catch (_) {}
+        } catch (error) {
+          holderProviderStatus = "request_error";
+          holderProviderMessage = String(error);
+        }
         const holderHardRisk = holderConcentrationPct !== null && holderConcentrationPct >= 80;
         const holderReviewRisk = holderConcentrationPct === null || holderConcentrationPct >= 50;
         const reviewRisk = !simOK || riskLevel === null || riskLevel >= 60 ||
@@ -1004,7 +1031,10 @@ export default {
         return json({
           ok: true, chain, tokenAddress: address, provider: "Honeypot.is + GoPlus",
           status, top10HolderConcentrationPct: holderConcentrationPct,
-          holderConcentrationStatus, holderCountChecked, simulationSuccess: report.simulationSuccess === true,
+          holderConcentrationStatus, holderCountChecked,
+          holderProviderStatus, holderProviderHttpStatus, holderProviderCode, holderProviderMessage, goPlusOpenSource,
+          honeypotHttpStatus: honeypotResponseStatus,
+          simulationSuccess: report.simulationSuccess === true,
           isHoneypot: report.honeypotResult?.isHoneypot ?? null,
           risk: report.summary?.risk || "unknown", riskLevel,
           buyTax, sellTax, openSource: report.contractCode?.rootOpenSource ?? null,
@@ -1019,7 +1049,9 @@ export default {
             ...(!report.contractCode?.rootOpenSource ? ["合约源码未确认开源"] : []),
             ...criticalFlags.map((x) => x.description || x.flag),
             ...highFlags.map((x) => x.description || x.flag),
-            ...(holderConcentrationReason ? [holderConcentrationReason] : [])
+            ...(holderConcentrationReason ? [holderConcentrationReason] : []),
+            ...(holderProviderStatus !== "ok" ? ["GoPlus持币数据源状态："+holderProviderStatus+(holderProviderHttpStatus ? "（HTTP "+holderProviderHttpStatus+"）" : "")+(holderProviderMessage ? "："+holderProviderMessage : "")] : []),
+            ...(goPlusOpenSource === false ? ["GoPlus显示合约源码未开源"] : [])
           ],
           note: "GoPlus前十大持币比例基于其返回的持币列表，可能包含池子或项目地址；缺失数据按待复核处理。模拟结果只代表本次检测时点和检测路径；代币权限或流动性变化后风险可能改变。"
         });
