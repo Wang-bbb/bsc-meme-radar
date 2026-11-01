@@ -75,3 +75,11 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 - `/multiscan?minutes=15&minLiquidity=5000`：Solana、Ethereum、Base 新池索引
 - `/security-check?chain=...&address=...`：单个代币安全预检
 - `/history?hours=24&dex=pancakeswap-v2`：BSC 单工厂历史验证
+
+
+## 早期钱包行为观察（PR #41）
+- 通过 GeckoTerminal pool trades 索引样本统计独立买家、卖家、重复买家、买卖双向钱包和前三大买家成交额占比。
+- 样本少于 8 笔时标记为 insufficient，不输出健康判断。
+- 前三大买家占买入额至少 60%、样本只有买入没有卖出、或重复买家占比较高时给出观察提醒。
+- 不将钱包地址相同解释为同一控制人，不猜测开发者钱包或关联钱包；识别关联资金需要额外链上资金流证据。
+- 索引数据有限、可能限流或缺失；钱包行为指标只作为走势质量补充，不覆盖合约安全门槛，也不触发自动交易。

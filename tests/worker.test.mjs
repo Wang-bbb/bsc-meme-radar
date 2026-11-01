@@ -701,6 +701,50 @@ test("four user-reported Solana dump cases are retained as regression sample ide
 });
 
 
+test("wallet-flow counts distinct buyers and flags concentrated early buy volume", async () => {
+  globalThis.fetch=async(input)=>{
+    const url=new URL(input);
+    assert.equal(url.hostname,"api.geckoterminal.com");
+    assert.match(url.pathname,/\/networks\/bsc\/pools\/0x2222222222222222222222222222222222222222\/trades$/);
+    const token="0x1111111111111111111111111111111111111111";
+    const rows=[];
+    for(let i=0;i<10;i++)rows.push({attributes:{
+      tx_from_address:"0x"+String(i+1).padStart(40,"0"),
+      from_token_address:"0x9999999999999999999999999999999999999999",
+      to_token_address:token,volume_in_usd:i<3?"30":"1",
+      block_timestamp:new Date(Date.now()-i*60000).toISOString()
+    }});
+    rows.push({attributes:{
+      tx_from_address:"0x"+"1".padStart(40,"0"),from_token_address:token,
+      to_token_address:"0x9999999999999999999999999999999999999999",
+      volume_in_usd:"5",block_timestamp:new Date().toISOString()
+    }});
+    return response({data:rows});
+  };
+  const res=await worker.fetch(request("/wallet-flow?chain=bsc&pool=0x2222222222222222222222222222222222222222&token=0x1111111111111111111111111111111111111111"),{});
+  const data=await res.json();
+  assert.equal(data.walletFlow.status,"checked");
+  assert.equal(data.walletFlow.uniqueBuyers,10);
+  assert.equal(data.walletFlow.uniqueSellers,1);
+  assert.equal(data.walletFlow.walletsBuyingAndSelling,1);
+  assert.ok(data.walletFlow.top3BuySharePct>=60);
+  assert.ok(data.walletFlow.warnings.some(x=>x.includes("前三大买入钱包")));
+});
+
+test("wallet-flow keeps small trade samples insufficient and never calls them healthy", async () => {
+  globalThis.fetch=async()=>response({data:[{attributes:{
+    tx_from_address:"0x1111111111111111111111111111111111111111",
+    from_token_address:"0x9999999999999999999999999999999999999999",
+    to_token_address:"0x2222222222222222222222222222222222222222",
+    volume_in_usd:"10"
+  }}]});
+  const res=await worker.fetch(request("/wallet-flow?chain=bsc&pool=0x3333333333333333333333333333333333333333&token=0x2222222222222222222222222222222222222222"),{});
+  const data=await res.json();
+  assert.equal(data.walletFlow.status,"insufficient");
+  assert.equal(data.walletFlow.sampleTrades,1);
+  assert.deepEqual(data.walletFlow.warnings,[]);
+});
+
 test("pool-risk computes high-water drawdown and short-window changes from GeckoTerminal minute candles", async () => {
   globalThis.fetch = async (input) => {
     const url = new URL(input);
