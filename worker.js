@@ -460,11 +460,16 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
   const now = Math.floor(Date.now() / 1000);
   const candles = rows.map((row) => ({
     timestamp: Number(row && row[0]),
+    open: Number(row && row[1]),
     high: Number(row && row[2]),
-    close: Number(row && row[4])
+    low: Number(row && row[3]),
+    close: Number(row && row[4]),
+    volume: Number(row && row[5])
   })).filter((row) =>
     Number.isFinite(row.timestamp) &&
+    Number.isFinite(row.open) && row.open > 0 &&
     Number.isFinite(row.high) && row.high > 0 &&
+    Number.isFinite(row.low) && row.low > 0 &&
     Number.isFinite(row.close) && row.close > 0 &&
     row.timestamp <= now + 60 && row.timestamp >= now - 60 * 65
   ).sort((a, b) => a.timestamp - b.timestamp);
@@ -481,6 +486,23 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
   const oldest = candles[0];
   const maxHigh = Math.max(...candles.map((row) => row.high));
   const drawdownPct = (latest.close / maxHigh - 1) * 100;
+  const peakIndex = candles.findIndex((row) => row.high === maxHigh);
+  const peakBase = candles[0].close;
+  const prePeakGainPct = peakBase > 0 ? (maxHigh / peakBase - 1) * 100 : null;
+  const peakToCurrentDrawdownPct = drawdownPct;
+  const postPeakCandleCount = peakIndex >= 0 ? candles.length - peakIndex - 1 : 0;
+  const pumpThenDump = peakIndex >= 1 && postPeakCandleCount >= 1 &&
+    prePeakGainPct >= 35 && peakToCurrentDrawdownPct <= -20;
+  const trendCandles = candles.slice(-Math.min(10, candles.length));
+  let downMoves = 0;
+  for (let index = 1; index < trendCandles.length; index += 1) {
+    if (trendCandles[index].close < trendCandles[index - 1].close) downMoves += 1;
+  }
+  const trendMoveCount = Math.max(0, trendCandles.length - 1);
+  const downMoveRatio = trendMoveCount ? downMoves / trendMoveCount : null;
+  const trendNetChangePct = trendCandles.length >= 2 && trendCandles[0].close > 0
+    ? (trendCandles[trendCandles.length - 1].close / trendCandles[0].close - 1) * 100 : null;
+  const gradualDecline = trendCandles.length >= 6 && downMoveRatio >= 0.7 && trendNetChangePct <= -15;
   const changeFromMinutes = (minutes) => {
     const target = latest.timestamp - minutes * 60;
     const reference = candles.reduce((best, row) =>
@@ -498,6 +520,16 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
     candleCount: candles.length,
     historyMinutes,
     drawdownFromHighPct: Math.round(drawdownPct * 100) / 100,
+    trendSignals: {
+      pumpThenDump,
+      prePeakGainPct: Math.round(prePeakGainPct * 100) / 100,
+      peakToCurrentDrawdownPct: Math.round(peakToCurrentDrawdownPct * 100) / 100,
+      postPeakCandleCount,
+      gradualDecline,
+      trendNetChangePct: trendNetChangePct === null ? null : Math.round(trendNetChangePct * 100) / 100,
+      downMoveRatio: downMoveRatio === null ? null : Math.round(downMoveRatio * 100) / 100,
+      trendCandleCount: trendCandles.length
+    },
     priceChange5m: changeFromMinutes(5),
     priceChange15m: changeFromMinutes(15),
     priceChange1h: changeFromMinutes(60),
