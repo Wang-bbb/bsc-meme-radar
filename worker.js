@@ -2621,9 +2621,11 @@ export default {
         if (!swapsByPair.has(key)) swapsByPair.set(key, []);
         swapsByPair.get(key).push(log);
       }
-      const allSwapBlocks = Array.from(new Set(swapLogs.map((l) => asNumber(l.blockNumber))));
-      await mapLimit(allSwapBlocks, 3, async (n) => blockTime(n, timeCache, rpcUrl));
-
+      // Every queried pair was created inside the requested <= 60 minute window.
+      // A pair cannot emit Swap logs before its creation block, so these logs are
+      // already time-bounded by the pool's own lifetime. Avoid one RPC block-time
+      // lookup per distinct swap block: that fan-out exhausted Cloudflare's
+      // subrequest budget on active pools.
       const pools = valid.map((p) => {
         const swaps = (swapsByPair.get(p.pair.toLowerCase()) || []).sort((a, b) => {
           const blockDiff = asNumber(a.blockNumber) - asNumber(b.blockNumber);
@@ -2632,8 +2634,10 @@ export default {
         let volume1hUSD = 0, buys1h = 0, sells1h = 0;
         const prices = [];
         for (const s of swaps) {
-          const ts = timeCache.get(asNumber(s.blockNumber)) || 0;
-          if (!ts || ts < p.createdAt || latestTime - ts > 3600000) continue;
+          // The address-filtered log query starts no earlier than the oldest
+          // candidate creation block. Enforce each pair's own creation block
+          // as an additional guard; no timestamp RPC is needed for this window.
+          if (asNumber(s.blockNumber) < p.createdBlock) continue;
           const a0i = BigInt("0x" + word(s.data, 0));
           const a1i = BigInt("0x" + word(s.data, 1));
           const a0o = BigInt("0x" + word(s.data, 2));
@@ -2663,12 +2667,13 @@ export default {
           ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
           usdtReserve: p.usdtReserve,
           liquidityUSDApprox: p.liquidityUSD,
-          volume1hUSD: volume1hUSD,
-          buys1h: buys1h,
-          sells1h: sells1h,
-          priceChange1h: priceChange1h,
-          swapCount1h: buys1h + sells1h,
-          riskNote: "新池风险高；链上新池事件不代表代币安全。请另行核实合约权限、持币集中度、卖出限制及流动性变化。"
+          volume1hUSD: swapError ? null : volume1hUSD,
+          buys1h: swapError ? null : buys1h,
+          sells1h: swapError ? null : sells1h,
+          priceChange1h: swapError ? null : priceChange1h,
+          swapCount1h: swapError ? null : buys1h + sells1h,
+          riskNote: "新池风险高；链上新池事件不代表代币安全。请另行核实合约权限、持币集中度、卖出限制及流动性变化。" +
+            (swapError ? " 本轮 Swap 数据查询失败，成交指标未知，不得将其解释为零成交。" : "")
         };
       }).sort((a, b) => a.ageMinutes - b.ageMinutes);
 
@@ -2753,6 +2758,7 @@ export default {
         pairs: pairs,
         pools: pools,
         swapStatsAvailable: !swapError,
+        swapStatsStatus: swapError ? "unavailable" : "available",
         swapStatsError: swapError,
         generatedAt: new Date(latestTime).toISOString(),
         limitations: [
