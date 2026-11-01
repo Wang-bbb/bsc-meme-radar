@@ -1749,7 +1749,7 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("尚无卖出成交验证"));
   assert.ok(source.includes("priorityWatchlistCount: priorityWatchlist.length"));
   assert.ok(source.includes("priorityWatchlist: priorityWatchlist"));
-  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v1"'));
+  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v2-history-gate"'));
 });
 
 
