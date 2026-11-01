@@ -1147,6 +1147,61 @@ export default {
           }
         }
       }
+      // When all indexed providers fail or return no qualifying pools, use a
+      // separately configured chain RPC to inspect recent stablecoin-quoted V2
+      // PairCreated events. This is deliberately partial coverage, not a full
+      // chain-wide DEX index.
+      const evmRpcDiagnostics = [];
+      for (const failed of failedNetworks) {
+        const network = failed.network;
+        const config = EVM_RPC_SCAN_CONFIG[network.id];
+        if (!config) continue;
+        const chainRpcUrl = env && env[config.envKey];
+        if (!chainRpcUrl) {
+          evmRpcDiagnostics.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC",
+            status: "not_configured",
+            requiredSecret: config.envKey,
+            note: "请在 Cloudflare Worker Settings → Variables and Secrets 中添加该 RPC Secret。"
+          });
+          errors.push({
+            chain: network.name,
+            error: failed.error + "; " + config.envKey + " secret not configured; RPC fallback unavailable"
+          });
+          continue;
+        }
+        try {
+          const scanned = await scanEvmRpcRecentPools(config, chainRpcUrl, minutes, minLiquidity);
+          results.push(...scanned.pools);
+          evmRpcDiagnostics.push(scanned.diagnostics);
+          chainSources.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC · " + config.dex,
+            status: "fallback",
+            coverage: "partial",
+            pools: scanned.pools.length,
+            diagnostics: scanned.diagnostics,
+            primaryIndexError: failed.error
+          });
+          fallbackChains.push(network.name + " RPC");
+        } catch (rpcError) {
+          const detail = config.networkLabel + " RPC fallback: " + String(rpcError);
+          evmRpcDiagnostics.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC",
+            status: "error",
+            error: String(rpcError)
+          });
+          errors.push({ chain: network.name, error: failed.error + "; " + detail });
+          chainSources.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC",
+            status: "error",
+            note: String(rpcError)
+          });
+        }
+      }
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       const responsePayload = {
         ok: true,
@@ -1164,6 +1219,7 @@ export default {
           }
         },
         chainSources,
+        evmRpcDiagnostics,
         fallbackChains,
         count: results.length,
         pools: results,
@@ -1172,7 +1228,9 @@ export default {
           "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
           "GeckoTerminal 公共 API 可能限流；失败时先尝试 DexScreener 最新 Token Profile 与 Boost 名单，若也失败则尝试 DexPaprika 最近新池搜索。备用源只取有限结果且覆盖不完整，必须显示为部分覆盖，不能当作完整新池扫描；第三方 API 仍可能限流。",
-          "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
+          "Ethereum/Base 在索引源失败时可选使用 ETH_RPC_URL / BASE_RPC_URL 扫描配置的 Uniswap V2 稳定币直连池；仅覆盖单一 V2 工厂，不覆盖全链 DEX，也不提供完整成交/K线数据。",
+          "RPC 新池发现结果缺少成交量、买卖次数、价格历史或钱包兑换验证时，必须进入待复核，不能视为通过安全筛查。",
+          "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。"
           "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
           "本接口只读，不执行兑换或交易。"
         ],
