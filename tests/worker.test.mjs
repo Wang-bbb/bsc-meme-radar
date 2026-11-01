@@ -1757,12 +1757,12 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   const source = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
   assert.ok(source.includes("candidateFilterDiagnostics: candidateFilterDiagnostics"));
   assert.ok(source.includes("notInspectedWithinPerScanCap: Math.max(0, freshRows.length - inspected.length)"));
-  assert.ok(source.includes("readErrors: inspected.filter((p) => p && p._error).length"));
+  assert.ok(source.includes('readErrors: inspected.filter((p) => classifyLiquidityDiagnostic(p, minLiquidity) === "read_error").length'));
   assert.ok(source.includes("eligibleAfterLiquidityFilter: eligible.length"));
   assert.ok(source.includes("Number.isFinite(p.liquidityUSD)"));
   assert.ok(source.includes("inspectedPools: inspected.slice(0, 20).map"));
   assert.ok(source.includes("status: classifyLiquidityDiagnostic(p, minLiquidity)"));
-  assert.ok(source.includes("missingLiquidity: inspected.filter"));
+  assert.ok(source.includes('missingLiquidity: inspected.filter((p) => classifyLiquidityDiagnostic(p, minLiquidity) === "missing_liquidity").length'));
   assert.ok(source.includes("const v2ToInspect = fresh.slice(0, 40)"));
   assert.ok(source.includes("const calls = v2ToInspect.map"));
   assert.ok(source.includes("const results = await rpcBatch(calls, rpcUrl)"));
