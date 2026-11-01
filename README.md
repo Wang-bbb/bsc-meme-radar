@@ -89,9 +89,9 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 
 
 ## Solana RPC 独立活动交叉检查（PR #42）
-- 当 GeckoTerminal 没有返回符合条件的池或请求失败时，Worker 会使用 `SOLANA_RPC_URL`（未配置时使用 Solana 公共主网 RPC）抽样检查 Pump.fun、PumpSwap、Raydium AMM v4、Raydium CPMM、Meteora DLMM 和 Orca Whirlpool 程序的近期交易。
+- 当 GeckoTerminal 没有返回符合条件的池或请求失败时，Worker 会使用 `SOLANA_RPC_URL`（未配置时使用 Solana 公共主网 RPC）抽样检查 Pump.fun、PumpSwap、Raydium AMM v4、Raydium CPMM、Meteora DLMM 和 Orca Whirlpool 程序的近期交易；当前只有 PumpSwap `create_pool` 和 Raydium CPMM `initialize` 有协议级候选解码。
 - 每个程序最多查询最近 20 条签名，并最多抽样读取 1 笔交易；单轮最多约 12 次 RPC 请求。诊断会显示扫描程序数、窗口内交易数、抽样交易数、SPL Mint 初始化线索和池初始化日志线索。
-- 这不是完整 Solana 新池索引：目前没有完成各协议的账户布局/指令解码、池地址与 token side 识别、创建时间核验、vault 储备/流动性计算。因此 `candidatePoolsAdded` 固定为 0，Mint/日志线索只用于诊断，不进入原始池数、候选排名或安全通过列表。
+- 这不是完整 Solana 新池索引：RPC 兜底每个程序只抽样少量近期交易，未覆盖的协议只输出活动线索。PumpSwap 和 Raydium CPMM 只有在指令、池账户、vault/Mint 关联核验通过且流动性估算达到门槛时才生成待复核候选；因此 `candidatePoolsAdded` 可能为 0，不能把 Mint/日志线索当成新池。
 - 要把 RPC 交易线索升级成真实候选，必须逐协议实现并测试池创建指令解码、池账户归属、mint/vault 关联和链上储备读取；未完成前不能用交易签名或 Mint 初始化事件伪装成新池。
 - Solana RPC 429/402 触发共享边缘冷却，避免连续刷新重复请求；5xx 最多重试一次，仍失败则进入短冷却。DexScreener/DexPaprika/GeckoTerminal 的 5xx 也会进入冷却。冷却是限流保护，不代表上游服务恢复。
 - 推荐在 Cloudflare Worker Secret 中配置自己的 `SOLANA_RPC_URL`，以减少公共节点限流；不要把含密钥的 RPC URL 提交到仓库或聊天中。
@@ -110,7 +110,7 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 ## PumpSwap 协议级新池解码（PR #44）
 - 在 Solana 索引源失败或没有合格池时，RPC 对 PumpSwap 最多抽样 3 笔近期交易；只识别官方 PumpSwap IDL 中的 create_pool 指令 discriminator，不把普通 buy/sell 交易当作新池。
 - 依据官方 pump-fun/pump-public-docs/idl/pump_amm.json 的账户顺序提取 pool、base/quote mint 和双侧 vault；核验交易成功、创建时间窗口、pool account owner、两个 vault 的 Token Program owner，以及 vault parsed mint 与指令 mint 完全一致。
-- 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算达到最低流动性门槛时，才加入待复核观察列表。SOL 报价池暂不估算美元流动性，避免使用未经校验的 SOL/USD 价格；因此当前 PumpSwap RPC 兜底会漏掉多数 SOL 报价池，覆盖不完整。
+- 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算达到最低流动性门槛时，才加入待复核观察列表。SOL 报价池暂不估算美元流动性，避免使用未经校验的 SOL/USD 价格；因此 RPC 兜底会漏掉多数 SOL 报价池。第三方索引可返回 SOL 报价池，但索引限流、仅读取第一页、默认池龄窗口和约 $5,000 最低流动性门槛仍可能造成 0 个候选。
 - 每轮 PumpSwap 与 Raydium CPMM 的池/Vault 账户核验总量仍共享上限 3；近期交易抽样总上限 12。provider 429/402 仍触发共享冷却。
 - 新候选的成交量、买卖笔数、K线、钱包流向、LP 赎回风险和钱包可交易/卖出能力仍未验证，必须待复核；稳定币侧储备×2只是粗略估算，不是可成交深度或真实总 TVL。
 - Pump.fun bonding curve、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍只输出活动线索，不生成候选。
