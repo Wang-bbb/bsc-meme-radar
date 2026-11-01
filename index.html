@@ -34,7 +34,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
 <b>数据说明：</b>当前稳定模式主动扫描 Solana，并保留 BSC 链上新池扫描；Ethereum / Base 暂停主动请求以避免持续限流噪声，原有代码和 RPC 配置保留，后续可逐链恢复。Solana 优先使用 GeckoTerminal 新池索引，限流时尝试 DexScreener / DexPaprika 备用源；备用名单覆盖不完整，不代表完整新池扫描。最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制，不能保证捕获所有新池。BSC 扫描已接入 DEX 的 USDT 直连池；Solana 显示报价资产，不代表钱包兑换路径已验证。
-<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、Solana 1 个候选的 1 分钟 K 线；未抽查或 K 线不足的币进入待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>额外拦截：</b>用户明确列入黑名单的代币地址会直接拦截，不进入候选或待复核名单；短周期急跌、观察高点大幅回撤、LP快速流失和明显卖压继续执行现有拦截/复核规则。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
+<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、Solana 1 个候选的 1 分钟 K 线；BSC 优先抽查最新池和成交额/流动性比最高的池，不再只挑流动性最大的两个。最新池即使不足3分钟也会尝试查询，K线不足则明确标记待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>额外拦截：</b>用户明确列入黑名单的代币地址会直接拦截，不进入候选或待复核名单；短周期急跌、观察高点大幅回撤、LP快速流失和明显卖压继续执行现有拦截/复核规则。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
 <script>
@@ -53,6 +53,30 @@ const BLOCKED_TOKEN_ADDRESSES = new Set([
 function isBlockedToken(p){
   return String(p.tokenAddress || "").trim().toLowerCase().length > 0 &&
     BLOCKED_TOKEN_ADDRESSES.has(String(p.tokenAddress || "").trim().toLowerCase());
+}
+function selectMarketHistoryTargets(all){
+  const selected=[];
+  const add=(pool,reason)=>{
+    if(!pool||selected.includes(pool))return;
+    pool.marketHistorySelectionReason=reason;
+    selected.push(pool);
+  };
+  const valid=all.filter(p=>p&&p.pairAddress&&p.tokenAddress&&Number.isFinite(Number(p.ageMinutes))&&Number(p.ageMinutes)>=0);
+  const bsc=valid.filter(p=>p.chain==="BSC");
+  const youngest=[...bsc].sort((a,b)=>Number(a.ageMinutes)-Number(b.ageMinutes));
+  if(youngest.length)add(youngest[0],"youngest_pool");
+  const turnover=p=>{
+    const volume=p.volumeSincePoolCreationUSD??p.volume1hUSD;
+    const liquidity=Number(p.liquidityUSDApprox);
+    const amount=Number(volume);
+    return volume==null||!Number.isFinite(amount)||!Number.isFinite(liquidity)||liquidity<=0?-1:amount/liquidity;
+  };
+  const mostActive=[...bsc].filter(p=>!selected.includes(p)).sort((a,b)=>turnover(b)-turnover(a));
+  if(mostActive.length)add(mostActive[0],"highest_turnover_to_liquidity");
+  const solana=valid.filter(p=>p.chain==="Solana"&&Number(p.ageMinutes)>=3)
+    .sort((a,b)=>Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0));
+  if(solana.length)add(solana[0],"highest_liquidity_solana");
+  return selected;
 }
 function priceRisk(p){
   const change=p.priceChange1h==null?null:Number(p.priceChange1h);
@@ -187,14 +211,13 @@ async function scan(){
     all.splice(0,all.length,...all.filter(p=>!isBlockedToken(p)));
     const ageValue=p=>p.ageMinutes==null||!Number.isFinite(Number(p.ageMinutes))?Number.POSITIVE_INFINITY:Number(p.ageMinutes);
     all.sort((a,b)=>ageValue(a)-ageValue(b));
-    // Keep public GeckoTerminal candle calls within a small per-refresh budget:
-    // at most two BSC pools and one Solana pool.
-    const historyTargets=[];
-    for(const chain of ["BSC","Solana"]){
-      const candidates=all.filter(p=>p.chain===chain&&p.pairAddress&&p.tokenAddress&&Number.isFinite(ageValue(p))&&ageValue(p)>=3);
-      candidates.sort((a,b)=>Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0));
-      historyTargets.push(...candidates.slice(0,chain==="BSC"?2:1));
-    }
+    // Keep public GeckoTerminal calls bounded: two BSC pools and one Solana pool.
+    // BSC selection is deliberately not liquidity-only: inspect the youngest pool
+    // to preserve early discovery, plus the strongest observed turnover/liquidity
+    // candidate to avoid overlooking active pools with smaller starting liquidity.
+    // Pools younger than three minutes are still queried; candle insufficiency is
+    // reported honestly by /pool-risk instead of silently skipping the earliest stage.
+    const historyTargets=selectMarketHistoryTargets(all);
     for(const p of all){
       p.marketHistoryStatus="unchecked";
       p.marketHistoryReason="本轮K线查询名额有限，尚未检查";
