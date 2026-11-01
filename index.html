@@ -319,7 +319,8 @@ async function scan(){
       const trend=p.trendScore||{};
       const trendLine=trend.status==="checked"
         ? '<div class="muted">早期走势评分：<b>'+esc(trend.score)+'/100 · '+esc(trend.label||"")+'</b> · 数据完整度 '+esc(trend.confidence)+'%</div>'+
-          '<div class="muted">走势指标：'+esc((trend.components||[]).map(x=>x.label+" "+(Number(x.value).toFixed(2))+(x.key==="volumeSurge5m"?"x":x.key==="buyPressure1h"?"%":"%")).join(" · "))+'</div>'+
+          '<div class="muted">走势指标：'+esc((trend.components||[]).map(x=>x.label+" "+(Number(x.value).toFixed(2))+(x.key==="volumeSurge5m"?"x":x.key==="poolAge"?"分钟":"%")).join(" · "))+'</div>'+
+          '<div class="muted">仅用于走势观察排序，不是安全评分或买入信号</div>'+
           ((trend.warnings||[]).length?'<div class="muted">走势提醒：'+esc(trend.warnings.join("；"))+'</div>':'')
         : '<div class="muted">早期走势评分：'+esc(trend.label||"数据不足，暂不评分")+(trend.confidence!=null?" · 数据完整度 "+esc(trend.confidence)+"%":"")+'</div>';
       return '<article class="card '+(p.blocked?"blocked-card":p.pendingReason?"review-card":"")+'">'+
