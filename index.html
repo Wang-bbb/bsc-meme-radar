@@ -63,6 +63,23 @@ function priceRisk(p){
   const liquidity15=p.liquidityChange15mPct==null?null:Number(p.liquidityChange15mPct);
   const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
   const trades=buys+sells;
+  const trend=p.trendSignals||{};
+  if(trend.pumpThenDump===true){
+    const fall=Number(trend.peakToCurrentDrawdownPct);
+    if(Number.isFinite(fall)&&fall<=-35){
+      return {level:"blocked",reason:"检测到先快速拉升后回撤"+Math.abs(fall).toFixed(1)+"%的拉高砸盘形态，已高危拦截"};
+    }
+    if(Number.isFinite(fall)&&fall<=-20){
+      return {level:"review",reason:"检测到先快速拉升后明显回落的形态（高点回撤"+Math.abs(fall).toFixed(1)+"%），暂不放行"};
+    }
+  }
+  if(trend.gradualDecline===true){
+    const net=Number(trend.trendNetChangePct);
+    if(Number.isFinite(net)&&net<=-25){
+      return {level:"blocked",reason:"检测到持续阴跌：最近"+Number(trend.trendCandleCount||0)+"根1分钟K线净跌"+Math.abs(net).toFixed(1)+"%，高危拦截"};
+    }
+    return {level:"review",reason:"检测到连续下行K线及弱势趋势，疑似持续阴跌，暂不放行"};
+  }
   if(liquidity5!==null&&Number.isFinite(liquidity5)&&liquidity5<=-40){
     return {level:"blocked",reason:"近5分钟流动性减少"+Math.abs(liquidity5).toFixed(1)+"%，触发LP快速流失拦截（阈值40%）"};
   }
@@ -199,6 +216,7 @@ async function scan(){
         if(data.status==="checked"){
           p.marketHistoryReason="";
           p.drawdownFromHighPct=data.drawdownFromHighPct;
+          p.trendSignals=data.trendSignals||null;
           if(data.priceChange5m!=null)p.priceChange5m=data.priceChange5m;
           if(data.priceChange15m!=null)p.priceChange15m=data.priceChange15m;
           if(data.priceChange1h!=null&&(p.priceChange1h==null||!Number.isFinite(Number(p.priceChange1h))))p.priceChange1h=data.priceChange1h;
