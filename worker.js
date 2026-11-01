@@ -730,21 +730,16 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
     priceChange15m: changeFromMinutes(15),
     priceChange1h: changeFromMinutes(60),
     volumeMetrics: (() => {
-      const buckets = new Map();
-      for (const candle of candles) {
-        const bucket = Math.floor(candle.timestamp / 300);
-        if (!buckets.has(bucket)) buckets.set(bucket, { volume: 0, count: 0 });
-        const entry = buckets.get(bucket);
-        entry.volume += candle.volume;
-        entry.count += 1;
-      }
-      const latestBucket = Math.floor(latest.timestamp / 300);
-      const recent = buckets.get(latestBucket);
-      const prior = [1, 2, 3].map(offset => buckets.get(latestBucket - offset));
-      const completeBuckets = !!recent && recent.count >= 3 &&
-        prior.every(bucket => bucket && bucket.count >= 3);
-      const volumeSurge5m = completeBuckets
-        ? (recent.volume / (prior.reduce((sum, bucket) => sum + bucket.volume, 0) / 3)) : null;
+      const recentCandles = candles.filter(row => latest.timestamp - row.timestamp < 5 * 60);
+      const priorCandles = candles.filter(row => {
+        const age = latest.timestamp - row.timestamp;
+        return age >= 5 * 60 && age < 20 * 60;
+      });
+      const completeBuckets = recentCandles.length >= 3 && priorCandles.length >= 9;
+      const recentVolume = recentCandles.reduce((sum, row) => sum + row.volume, 0);
+      const priorVolume = priorCandles.reduce((sum, row) => sum + row.volume, 0);
+      const volumeSurge5m = completeBuckets && priorVolume > 0
+        ? (recentVolume / (priorVolume / 3)) : null;
       const reference5m = candles.reduce((best, row) =>
         !best || Math.abs(row.timestamp - (latest.timestamp - 5 * 60)) < Math.abs(best.timestamp - (latest.timestamp - 5 * 60)) ? row : best
       , null);
@@ -763,9 +758,9 @@ async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
       return {
         volumeSurge5m: volumeSurge5m === null || !Number.isFinite(volumeSurge5m)
           ? null : Math.round(volumeSurge5m * 100) / 100,
-        recent5mVolumeUSD: recent ? Math.round(recent.volume * 100) / 100 : null,
+        recent5mVolumeUSD: completeBuckets ? Math.round(recentVolume * 100) / 100 : null,
         baselinePrevious15mAvg5mVolumeUSD: completeBuckets
-          ? Math.round((prior.reduce((sum, bucket) => sum + bucket.volume, 0) / 3) * 100) / 100 : null,
+          ? Math.round((priorVolume / 3) * 100) / 100 : null,
         priceAcceleration5mPct: priceAcceleration5mPct === null
           ? null : Math.round(priceAcceleration5mPct * 100) / 100,
         baselineBucketsComplete: completeBuckets
@@ -823,7 +818,7 @@ function calculateEarlyTrendScore(history, context, liquiditySnapshot) {
       : priceAcceleration < 12 ? 86
       : priceAcceleration <= 20 ? 68 : 48;
     if (priceAcceleration > 20) warnings.push("短周期价格加速度过高，存在追高及急速反转风险");
-    components.push({ key: "priceAcceleration5m", label: "5分钟价格加速度", score, weight: 20, value: priceAcceleration });
+    components.push({ key: "priceAcceleration5m", label: "5分钟价格加速度", score, weight: 15, value: priceAcceleration });
   }
 
   if (liquidityChange != null && Number.isFinite(Number(liquidityChange))) {
@@ -835,12 +830,25 @@ function calculateEarlyTrendScore(history, context, liquiditySnapshot) {
       : change < 15 ? 76
       : change <= 30 ? 86 : 58;
     if (change > 30) warnings.push("近5分钟流动性增长过快，需确认是否为短时注入而非持续资金流入");
-    components.push({ key: "liquidityGrowth5m", label: "5分钟流动性变化", score, weight: 20, value: change });
+    components.push({ key: "liquidityGrowth5m", label: "5分钟流动性变化", score, weight: 15, value: change });
   }
 
   if (Number.isFinite(age) && age >= 0) {
     const score = age < 3 ? 35 : age <= 10 ? 82 : age <= 30 ? 95 : age <= 60 ? 78 : 50;
-    components.push({ key: "poolAge", label: "池龄阶段", score, weight: 15, value: age });
+    components.push({ key: "poolAge", label: "池龄阶段", score, weight: 10, value: age });
+  }
+
+  const structure = history && history.trendSignals;
+  if (structure && Number.isFinite(structure.trendNetChangePct) &&
+      Number.isFinite(structure.downMoveRatio) && Number(structure.trendCandleCount) >= 6) {
+    const net = Number(structure.trendNetChangePct);
+    const downRatio = Number(structure.downMoveRatio);
+    let score = net <= -10 ? 10 : net < -3 ? 25 : net < 0 ? 40
+      : net < 3 ? 58 : net < 8 ? 76 : net < 20 ? 88 : 68;
+    if (downRatio >= 0.7) score = Math.min(score, 35);
+    if (net < -5 && downRatio >= 0.7) warnings.push("短线连续收跌，走势结构转弱，即使成交量放大也不视为健康启动");
+    components.push({ key: "trendStructure10m", label: "近10根K线结构", score, weight: 15,
+      value: net, downMoveRatio: Math.round(downRatio * 100) / 100 });
   }
 
   const availableWeight = components.reduce((sum, item) => sum + item.weight, 0);
@@ -863,7 +871,7 @@ function calculateEarlyTrendScore(history, context, liquiditySnapshot) {
     rawScore: Math.round(rawScore),
     drawdownPenalty,
     components, warnings,
-    note: "仅为早期走势质量排序，不是安全评分或买入信号；买卖笔数为索引源近1小时统计，数据缺失不按零分处理"
+    note: "仅为早期走势质量排序，不是安全评分或买入信号；买卖笔数为索引源近1小时统计，数据缺失不按零分处理。结构信号用于识别持续推进，不奖励单根暴涨"
   };
 }
 
