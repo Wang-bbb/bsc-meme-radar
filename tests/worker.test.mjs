@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
+import { classifyPriorityWatchlist } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -1795,4 +1796,72 @@ test("BSC pool timestamps are fetched with batched JSON-RPC requests to conserve
   assert.ok(source.includes("await blockTimes(v3CreationLogs.map"));
   assert.ok(source.includes("await blockTimes(creationLogs.map"));
   assert.ok(source.includes("timeCache.get(asNumber(log.blockNumber)) || 0"));
+});
+
+
+function watchlistPool(overrides = {}) {
+  return {
+    swapCountSincePoolCreation: 30,
+    tradePriceChangeSincePoolCreationPct: 12,
+    sellsSincePoolCreation: 8,
+    buySellVolumeRatioSincePoolCreation: 1.5,
+    tradeFlowStatus: "mixed_flow",
+    earlySignalScore: 70,
+    liquidityUSDApprox: 25000,
+    ...overrides
+  };
+}
+
+test("priority watchlist accepts only balanced, sufficiently active, non-chasing pools", () => {
+  const result = classifyPriorityWatchlist(watchlistPool());
+  assert.equal(result.priorityWatchlistEligible, true);
+  assert.equal(result.watchlistTier, "priority_watchlist");
+  assert.deepEqual(result.watchlistExclusionReasons, []);
+});
+
+test("priority watchlist rejects pools without sell confirmation", () => {
+  const result = classifyPriorityWatchlist(watchlistPool({
+    sellsSincePoolCreation: 0,
+    tradeFlowStatus: "buy_only_no_sell_confirmation",
+    tradePriceChangeSincePoolCreationPct: 8
+  }));
+  assert.equal(result.priorityWatchlistEligible, false);
+  assert.ok(result.watchlistExclusionReasons.some((x) => x.includes("尚无卖出成交验证")));
+});
+
+test("priority watchlist rejects strong price surges and marks them high risk", () => {
+  const result = classifyPriorityWatchlist(watchlistPool({
+    tradePriceChangeSincePoolCreationPct: 45
+  }));
+  assert.equal(result.priorityWatchlistEligible, false);
+  assert.equal(result.watchlistTier, "high_risk_review");
+  assert.ok(result.watchlistExclusionReasons.some((x) => x.includes("追高风险很高")));
+});
+
+test("priority watchlist rejects sell-dominant and severely imbalanced flow", () => {
+  const sellDominant = classifyPriorityWatchlist(watchlistPool({
+    tradeFlowStatus: "sell_volume_dominant",
+    buySellVolumeRatioSincePoolCreation: 0.7
+  }));
+  assert.equal(sellDominant.priorityWatchlistEligible, false);
+  assert.equal(sellDominant.watchlistTier, "high_risk_review");
+
+  const imbalanced = classifyPriorityWatchlist(watchlistPool({
+    tradeFlowStatus: "strong_buy_sell_imbalance",
+    buySellVolumeRatioSincePoolCreation: 4.5
+  }));
+  assert.equal(imbalanced.priorityWatchlistEligible, false);
+  assert.equal(imbalanced.watchlistTier, "high_risk_review");
+});
+
+test("priority watchlist keeps missing trade metrics out of the priority list", () => {
+  const result = classifyPriorityWatchlist(watchlistPool({
+    swapCountSincePoolCreation: null,
+    sellsSincePoolCreation: null,
+    tradeFlowStatus: "unavailable",
+    tradePriceChangeSincePoolCreationPct: null
+  }));
+  assert.equal(result.priorityWatchlistEligible, false);
+  assert.equal(result.watchlistTier, "review_only");
+  assert.ok(result.watchlistExclusionReasons.some((x) => x.includes("成交数据不可用")));
 });
