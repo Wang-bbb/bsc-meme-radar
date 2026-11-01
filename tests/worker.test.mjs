@@ -114,6 +114,29 @@ test("Solana security gate keeps elevated or incomplete reports in review", asyn
 });
 
 
+test("EVM GoPlus concentration check still blocks when Honeypot.is is unavailable", async () => {
+  const requestedHosts = [];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    requestedHosts.push(url.hostname);
+    if (url.hostname === "api.honeypot.is") return new Response("temporarily unavailable", { status: 503 });
+    if (url.hostname === "api.gopluslabs.io") {
+      return response({ code: 1, result: { "0x1111111111111111111111111111111111111111": {
+        holders: Array.from({ length: 10 }, (_, i) => ({ percent: i === 0 ? "0.84" : "0.01" }))
+      } } });
+    }
+    throw new Error("Unexpected provider " + url.hostname);
+  };
+  const res = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), env);
+  const data = await res.json();
+  assert.ok(requestedHosts.includes("api.honeypot.is"));
+  assert.ok(requestedHosts.includes("api.gopluslabs.io"));
+  assert.equal(data.top10HolderConcentrationPct, 93);
+  assert.equal(data.holderConcentrationStatus, "high");
+  assert.equal(data.status, "blocked");
+  assert.match(data.honeypotError, /HTTP 503/);
+});
+
 test("EVM top-ten concentration at or above 80 percent is blocked", async () => {
   globalThis.fetch = async (input) => {
     if (new URL(input).hostname === "api.gopluslabs.io") return response({ code: 1, result: { "0x1111111111111111111111111111111111111111": { holders: Array.from({ length: 10 }, (_, i) => ({ percent: i === 0 ? "0.75" : "0.01" })) } } });
