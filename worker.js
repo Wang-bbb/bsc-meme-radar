@@ -290,6 +290,7 @@ async function rpc(method, params, rpcUrl, networkLabel = "BSC") {
         const message = String(body.error.message || "JSON-RPC error")
           .replace(/https?:\/\/[^\s"'<>]+/gi, "[endpoint]")
           .replace(/(api[_-]?key|apikey|token)=([^&\s]+)/gi, "$1=[redacted]")
+          .replace(/\b(alch[a-z0-9_-]{8,})\b/gi, "[redacted]")
           .slice(0, 240);
         throw new Error(networkLabel + " RPC " + String(body.error.code ?? "error") + ": " + message);
       }
