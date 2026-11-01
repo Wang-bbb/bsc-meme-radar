@@ -1,5 +1,7 @@
 # 多链 Meme Radar（PWA）
 
+> BSC V2 新池的 Swap 成交额和买卖笔数按池创建至本轮扫描时刻累计，属于池龄窗口，不是完整滚动 1 小时；API 返回 `swapStatsPeriod: since_pool_creation` 和 `swapStatsWindowMinutes`。
+
 只读观察工具，用于发现 BSC、Solana、Ethereum、Base 的早期新池线索。不会自动交易，不需要钱包私钥、助记词或交易所 API Key。
 
 ## 当前功能
