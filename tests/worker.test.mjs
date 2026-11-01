@@ -463,13 +463,13 @@ test("DexPaprika caches HTTP 402 quota responses and restores the original statu
     assert.equal(firstData.chainErrors.length, 3);
     assert.ok(firstData.chainErrors.every(error => error.error.includes("HTTP 402")));
     assert.ok(firstData.chainErrors.every(error => error.error.includes("额度/套餐限制")));
-    assert.equal(paprikaCalls, 3);
+    assert.equal(paprikaCalls, 1, "the first HTTP 402 should activate provider-wide quota cooldown immediately");
 
     const second = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
     const secondData = await second.json();
     assert.equal(secondData.complete, false);
     assert.ok(secondData.chainErrors.every(error => error.error.includes("HTTP 402")));
-    assert.equal(paprikaCalls, 3, "cached 402 responses should suppress repeated provider requests");
+    assert.equal(paprikaCalls, 1, "cached 402 responses and provider cooldown should suppress repeated provider requests");
   } finally {
     if (originalCaches === undefined) delete globalThis.caches;
     else globalThis.caches = originalCaches;
