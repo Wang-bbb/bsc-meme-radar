@@ -1938,6 +1938,10 @@ test("pool history requires a previous snapshot before claiming a trend", () => 
   const result = classifyPoolHistory(historyPool(), null, 1_000_000);
   assert.equal(result.status, "insufficient");
   assert.equal(result.liquidityChangePct, null);
+  assert.equal(result.activityTrendStatus, "insufficient");
+  assert.equal(result.activityChangePct, null);
+  assert.ok(Object.hasOwn(result, "activityChangePct"));
+  assert.ok(JSON.parse(JSON.stringify(result)).hasOwnProperty("activityChangePct"));
   assert.ok(result.reasons.some(reason => reason.includes("首次观察")));
 });
 
@@ -2085,8 +2089,12 @@ test("pool history rejects observations that are too close together or too old",
     buysSincePoolCreation: 14,
     sellsSincePoolCreation: 6
   };
-  assert.equal(classifyPoolHistory(historyPool(), previous, 1_010_000).status, "insufficient");
-  assert.equal(classifyPoolHistory(historyPool(), previous, 3_000_000).status, "insufficient");
+  const tooClose = classifyPoolHistory(historyPool(), previous, 1_010_000);
+  const tooOld = classifyPoolHistory(historyPool(), previous, 3_000_000);
+  assert.equal(tooClose.status, "insufficient");
+  assert.equal(tooClose.activityChangePct, null);
+  assert.equal(tooOld.status, "insufficient");
+  assert.equal(tooOld.activityChangePct, null);
 });
 
 test("pool history still flags a liquidity collapse when the pool falls below the candidate threshold and trade metrics are unavailable", () => {

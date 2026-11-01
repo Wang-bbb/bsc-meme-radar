@@ -117,21 +117,21 @@ const POOL_HISTORY_TTL_SECONDS = 7 * 24 * 60 * 60;
 export function classifyPoolHistory(pool, previous, nowMs = Date.now()) {
   const reasons = [];
   if (!previous || !Number.isFinite(Number(previous.observedAt))) {
-    return { status: "insufficient", reasons: ["首次观察，尚无可比较的历史快照"], observationGapSeconds: null, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+    return { status: "insufficient", reasons: ["首次观察，尚无可比较的历史快照"], observationGapSeconds: null, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null, activityTrendStatus: "insufficient", activityChangePct: null };
   }
   const gapMs = nowMs - Number(previous.observedAt);
   const observationGapSeconds = Math.round(gapMs / 1000);
   if (gapMs < POOL_HISTORY_MIN_GAP_MS) {
-    return { status: "insufficient", reasons: ["两次历史观察间隔过短，尚不能确认趋势"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+    return { status: "insufficient", reasons: ["两次历史观察间隔过短，尚不能确认趋势"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null, activityTrendStatus: "insufficient", activityChangePct: null };
   }
   if (gapMs > POOL_HISTORY_MAX_GAP_MS) {
-    return { status: "insufficient", reasons: ["历史快照已过期，需要重新建立基线"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+    return { status: "insufficient", reasons: ["历史快照已过期，需要重新建立基线"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null, activityTrendStatus: "insufficient", activityChangePct: null };
   }
   const currentLiquidity = Number(pool.liquidityUSDApprox);
   const previousLiquidity = Number(previous.liquidityUSDApprox);
   const liquidityInputsPresent = pool.liquidityUSDApprox != null && pool.liquidityUSDApprox !== "" && previous.liquidityUSDApprox != null && previous.liquidityUSDApprox !== "";
   if (!liquidityInputsPresent || !Number.isFinite(currentLiquidity) || !Number.isFinite(previousLiquidity) || currentLiquidity < 0 || previousLiquidity <= 0) {
-    return { status: "insufficient", reasons: ["历史或当前流动性数据缺失，无法比较"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null };
+    return { status: "insufficient", reasons: ["历史或当前流动性数据缺失，无法比较"], observationGapSeconds, liquidityChangePct: null, newSwapCount: null, newVolumeUSD: null, activityTrendStatus: "insufficient", activityChangePct: null };
   }
   const liquidityChangePct = Math.round(((currentLiquidity - previousLiquidity) / previousLiquidity) * 10000) / 100;
   if (liquidityChangePct <= -50) reasons.push("两次观察间估算流动性骤降50%或以上");
@@ -149,11 +149,11 @@ export function classifyPoolHistory(pool, previous, nowMs = Date.now()) {
   if (rawTradeValues.some((value) => value == null || value === "") || !tradeValues.every(Number.isFinite) || currentVolume < 0 || previousVolume < 0 || ![currentSwaps, previousSwaps, currentBuys, previousBuys, currentSells, previousSells].every(Number.isInteger)) {
     const status = liquidityChangePct <= -50 ? "high_risk" : liquidityChangePct <= -30 ? "review" : "insufficient";
     if (status === "insufficient") reasons.push("成交历史指标缺失，无法验证成交趋势");
-    return { status, reasons, observationGapSeconds, liquidityChangePct, newSwapCount: null, newVolumeUSD: null };
+    return { status, reasons, observationGapSeconds, liquidityChangePct, newSwapCount: null, newVolumeUSD: null, activityTrendStatus: "insufficient", activityChangePct: null };
   }
   if (currentSwaps < previousSwaps || currentBuys < previousBuys || currentSells < previousSells || currentVolume + 0.01 < previousVolume) {
     reasons.push("累计成交笔数或成交额出现倒退，历史数据不一致");
-    return { status: liquidityChangePct <= -50 ? "high_risk" : "inconsistent", reasons, observationGapSeconds, liquidityChangePct, newSwapCount: null, newVolumeUSD: null };
+    return { status: liquidityChangePct <= -50 ? "high_risk" : "inconsistent", reasons, observationGapSeconds, liquidityChangePct, newSwapCount: null, newVolumeUSD: null, activityTrendStatus: "insufficient", activityChangePct: null };
   }
   const newSwapCount = currentSwaps - previousSwaps;
   const newVolumeUSD = Math.round((currentVolume - previousVolume) * 100) / 100;
