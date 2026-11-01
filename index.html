@@ -34,7 +34,7 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
 <b>数据说明：</b>当前稳定模式主动扫描 Solana，并保留 BSC 链上新池扫描；Ethereum / Base 暂停主动请求以避免持续限流噪声，原有代码和 RPC 配置保留，后续可逐链恢复。Solana 优先使用 GeckoTerminal 新池索引，限流时尝试 DexScreener / DexPaprika 备用源；备用名单覆盖不完整，不代表完整新池扫描。最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制，不能保证捕获所有新池。BSC 扫描已接入 DEX 的 USDT 直连池；Solana 显示报价资产，不代表钱包兑换路径已验证。
-<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、Solana 1 个候选的 1 分钟 K 线；未抽查或 K 线不足的币进入待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
+<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、Solana 1 个候选的 1 分钟 K 线；未抽查或 K 线不足的币进入待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>额外拦截：</b>用户明确列入黑名单的代币地址会直接拦截，不进入候选或待复核名单；短周期急跌、观察高点大幅回撤、LP快速流失和明显卖压继续执行现有拦截/复核规则。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
 <script>
@@ -44,6 +44,15 @@ const fmt=n=>{if(n==null||!Number.isFinite(Number(n)))return "—";n=Number(n);r
 const ageText=n=>{if(n==null||!Number.isFinite(Number(n)))return "未知";n=Number(n);return n<60?Math.max(1,Math.round(n))+" 分钟":(n/60).toFixed(1)+" 小时"};
 const pct=n=>n==null?"—":(Number(n)>0?"+":"")+Number(n).toFixed(2)+"%";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const BLOCKED_TOKEN_ADDRESSES = new Set([
+  "cnmpesvpagmdgzzxuyzydyxtye1qsy n97jnjdkftqpump".replace(/\s+/g, ""),
+  "4kfz bemqpbrbbfzn uifckczf7mwmbj9ze8itr ites3l7".replace(/\s+/g, ""),
+  "c7zxdtmrpjkshqsnqbsgvtzjbnw9w9walp236hapump"
+].map(address => address.toLowerCase()));
+function isBlockedToken(p){
+  return String(p.tokenAddress || "").trim().toLowerCase().length > 0 &&
+    BLOCKED_TOKEN_ADDRESSES.has(String(p.tokenAddress || "").trim().toLowerCase());
+}
 function priceRisk(p){
   const change=p.priceChange1h==null?null:Number(p.priceChange1h);
   const short5=p.priceChange5m==null?null:Number(p.priceChange5m);
@@ -150,6 +159,14 @@ async function scan(){
     const all=[];
     if(bsc)(bsc.pools||[]).forEach(p=>all.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl}));
     if(multi)(multi.pools||[]).forEach(p=>all.push(p));
+    const discoveredCount=all.length;
+    const denylisted=all.filter(isBlockedToken);
+    denylisted.forEach(p=>{
+      p.blocked=true;
+      p.pendingReason="命中用户明确排除的高风险代币地址黑名单，不再作为候选展示";
+      p.security={status:"blocked",provider:"Local denylist",reasons:["命中本地黑名单"]};
+    });
+    all.splice(0,all.length,...all.filter(p=>!isBlockedToken(p)));
     const ageValue=p=>p.ageMinutes==null||!Number.isFinite(Number(p.ageMinutes))?Number.POSITIVE_INFINITY:Number(p.ageMinutes);
     all.sort((a,b)=>ageValue(a)-ageValue(b));
     // Keep public GeckoTerminal candle calls within a small per-refresh budget:
@@ -191,7 +208,7 @@ async function scan(){
         p.marketHistoryReason="K线查询失败："+String(error);
       }
     }));
-    const checked=[], pending=[];
+    const checked=[], pending=denylisted.slice();
     const chainCounts={};
     const selected=all.filter(p=>{
       const key=p.chain||"未知链";
@@ -299,7 +316,7 @@ async function scan(){
       ? "Solana："+solanaPoolCount+" 个原始池"+(multi.fallbackChains?.includes("Solana")?"，已切换备用索引":"，主索引请求成功")
       : "Solana：扫描失败（"+(settled[1].reason?.message||"未知错误")+"）";
     $("status").textContent=bscStatus+"；"+solanaStatus+"。"+
-      "原始池 "+all.length+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"。"+
+      "原始池 "+discoveredCount+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"（含黑名单 "+denylisted.length+"）。"+
       "仅对每条链最早的5个候选执行本轮安全检测，未检查的币不会进入通过筛查列表。"+
       (failures.length?"；扫描异常："+failures.join("；")+"。":"")+
       (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", ")+"；失败链未返回有效数据，零结果不代表没有新池。":"")+
