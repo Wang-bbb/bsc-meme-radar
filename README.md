@@ -110,7 +110,7 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 ## PumpSwap 协议级新池解码（PR #44）
 - 在 Solana 索引源失败或没有合格池时，RPC 对 PumpSwap 最多抽样 3 笔近期交易；只识别官方 PumpSwap IDL 中的 create_pool 指令 discriminator，不把普通 buy/sell 交易当作新池。
 - 依据官方 pump-fun/pump-public-docs/idl/pump_amm.json 的账户顺序提取 pool、base/quote mint 和双侧 vault；核验交易成功、创建时间窗口、pool account owner、两个 vault 的 Token Program owner，以及 vault parsed mint 与指令 mint 完全一致。
-- 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算达到最低流动性门槛时，才加入待复核观察列表。SOL 报价池暂不估算美元流动性，避免使用未经校验的 SOL/USD 价格；因此 RPC 兜底会漏掉多数 SOL 报价池。第三方索引可返回 SOL 报价池，但索引限流、仅读取第一页、默认池龄窗口和约 $5,000 最低流动性门槛仍可能造成 0 个候选。
+- 仅当池子恰好包含一个已识别 USDC/USDT 或 wrapped-SOL 报价 Mint，且双侧 Vault/Mint 关联核验通过后，才考虑加入待复核观察列表。USDC/USDT 按报价侧储备×2估算美元流动性；wrapped-SOL 池使用 Pyth 官方 Hermes SOL/USD 价格，要求报价时间距当前不超过 120 秒、未来时间偏差不超过 15 秒且置信区间不超过 2%，再按 SOL 储备×SOL/USD×2估算。价格源不可用、过期或不确定时会跳过该候选，不会用固定 SOL 价格或未验证价格凑数。该值仍只是池子美元流动性的近似，不代表可成交深度或钱包兑换路径已验证。RPC 兜底依旧只抽样少量近期交易；第三方索引限流、只取第一页、默认池龄窗口和约 $5,000 最低流动性门槛仍可能造成 0 个候选。
 - 每轮 PumpSwap 与 Raydium CPMM 的池/Vault 账户核验总量仍共享上限 3；近期交易抽样总上限 12。provider 429/402 仍触发共享冷却。
 - 新候选的成交量、买卖笔数、K线、钱包流向、LP 赎回风险和钱包可交易/卖出能力仍未验证，必须待复核；稳定币侧储备×2只是粗略估算，不是可成交深度或真实总 TVL。
 - Pump.fun bonding curve、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍只输出活动线索，不生成候选。
