@@ -314,9 +314,9 @@ function decodeAbiString(hex) {
   } catch (_) { return ""; }
 }
 
-async function blockTime(blockNumber, cache, rpcUrl) {
+async function blockTime(blockNumber, cache, rpcUrl, networkLabel = "BSC") {
   if (cache.has(blockNumber)) return cache.get(blockNumber);
-  const block = await rpc("eth_getBlockByNumber", [hexNum(blockNumber), false], rpcUrl);
+  const block = await rpc("eth_getBlockByNumber", [hexNum(blockNumber), false], rpcUrl, networkLabel);
   const time = block ? asNumber(block.timestamp) * 1000 : 0;
   cache.set(blockNumber, time);
   return time;
@@ -583,7 +583,7 @@ async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
     const tokenAddress = quoteIs0 ? token1 : token0;
     const quote = quoteMap.get(quoteAddress);
     const createdBlock = asNumber(log.blockNumber);
-    const createdAt = await blockTime(createdBlock, timeCache, rpcUrl);
+    const createdAt = await blockTime(createdBlock, timeCache, rpcUrl, label);
     const ageMinutes = (latestTime - createdAt) / 60000;
     if (!createdAt || ageMinutes < 0 || ageMinutes > minutes) return null;
     const [reserveData, symbolHex, nameHex, decimalsHex] = await Promise.all([
