@@ -1810,8 +1810,9 @@ test("BSC pool timestamps are fetched with batched JSON-RPC requests to conserve
 function watchlistPool(overrides = {}) {
   return {
     swapCountSincePoolCreation: 30,
-    tradePriceChangeSincePoolCreationPct: 12,
+    buysSincePoolCreation: 22,
     sellsSincePoolCreation: 8,
+    tradePriceChangeSincePoolCreationPct: 12,
     buySellVolumeRatioSincePoolCreation: 1.5,
     tradeFlowStatus: "mixed_flow",
     earlySignalScore: 70,
@@ -1829,12 +1830,34 @@ test("priority watchlist accepts only balanced, sufficiently active, non-chasing
 
 test("priority watchlist rejects pools without sell confirmation", () => {
   const result = classifyPriorityWatchlist(watchlistPool({
+    buysSincePoolCreation: 30,
     sellsSincePoolCreation: 0,
     tradeFlowStatus: "buy_only_no_sell_confirmation",
     tradePriceChangeSincePoolCreationPct: 8
   }));
   assert.equal(result.priorityWatchlistEligible, false);
   assert.ok(result.watchlistExclusionReasons.some((x) => x.includes("尚无卖出成交验证")));
+});
+
+test("priority watchlist rejects inconsistent buy/sell counts", () => {
+  const result = classifyPriorityWatchlist(watchlistPool({
+    swapCountSincePoolCreation: 30,
+    buysSincePoolCreation: 27,
+    sellsSincePoolCreation: 2
+  }));
+  assert.equal(result.priorityWatchlistEligible, false);
+  assert.equal(result.watchlistTier, "review_only");
+  assert.ok(result.watchlistExclusionReasons.some((x) => x.includes("买卖笔数与总成交笔数不一致")));
+});
+
+test("priority watchlist rejects missing or invalid buy counts", () => {
+  const missing = classifyPriorityWatchlist(watchlistPool({ buysSincePoolCreation: null }));
+  assert.equal(missing.priorityWatchlistEligible, false);
+  assert.ok(missing.watchlistExclusionReasons.some((x) => x.includes("买卖笔数与总成交笔数不一致")));
+
+  const negative = classifyPriorityWatchlist(watchlistPool({ buysSincePoolCreation: -1 }));
+  assert.equal(negative.priorityWatchlistEligible, false);
+  assert.ok(negative.watchlistExclusionReasons.some((x) => x.includes("买卖笔数与总成交笔数不一致")));
 });
 
 test("priority watchlist rejects strong price surges and marks them high risk", () => {
