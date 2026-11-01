@@ -246,7 +246,7 @@ function choosePoolToken(networkId, base, quote, baseId, quoteId) {
   return { address: baseAddress, symbol: base.symbol, name: base.name, verified: false, side: "base-ambiguous" };
 }
 
-async function rpc(method, params, rpcUrl) {
+async function rpc(method, params, rpcUrl, networkLabel = "BSC") {
   let lastError;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -256,16 +256,16 @@ async function rpc(method, params, rpcUrl) {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: method, params: params })
       });
       if (response.status === 429 || response.status >= 500) {
-        lastError = new Error("BSC RPC HTTP " + response.status);
+        lastError = new Error(networkLabel + " RPC HTTP " + response.status);
         if (attempt < 3) {
           await new Promise((resolve) => setTimeout(resolve, 700 * Math.pow(2, attempt)));
           continue;
         }
         throw lastError;
       }
-      if (!response.ok) throw new Error("BSC RPC HTTP " + response.status);
+      if (!response.ok) throw new Error(networkLabel + " RPC HTTP " + response.status);
       const body = await response.json();
-      if (body.error) throw new Error("BSC RPC " + body.error.code + ": " + body.error.message);
+      if (body.error) throw new Error(networkLabel + " RPC " + body.error.code + ": " + body.error.message);
       return body.result;
     } catch (error) {
       lastError = error;
@@ -273,7 +273,7 @@ async function rpc(method, params, rpcUrl) {
       await new Promise((resolve) => setTimeout(resolve, 700 * Math.pow(2, attempt)));
     }
   }
-  throw lastError || new Error("BSC RPC request failed");
+  throw lastError || new Error(networkLabel + " RPC request failed");
 }
 
 const hexNum = (n) => "0x" + Math.max(0, n).toString(16);
@@ -314,9 +314,9 @@ function decodeAbiString(hex) {
   } catch (_) { return ""; }
 }
 
-async function blockTime(blockNumber, cache, rpcUrl) {
+async function blockTime(blockNumber, cache, rpcUrl, networkLabel = "BSC") {
   if (cache.has(blockNumber)) return cache.get(blockNumber);
-  const block = await rpc("eth_getBlockByNumber", [hexNum(blockNumber), false], rpcUrl);
+  const block = await rpc("eth_getBlockByNumber", [hexNum(blockNumber), false], rpcUrl, networkLabel);
   const time = block ? asNumber(block.timestamp) * 1000 : 0;
   cache.set(blockNumber, time);
   return time;
@@ -508,6 +508,144 @@ async function recordLiquiditySnapshot(env, network, poolAddress, liquidityUSD) 
   } catch (error) {
     return { status: "unavailable", error: "KV 快照读写失败：" + String(error) };
   }
+}
+
+
+
+const EVM_RPC_SCAN_CONFIG = {
+  eth: {
+    chain: "Ethereum",
+    envKey: "ETH_RPC_URL",
+    networkLabel: "Ethereum",
+    factory: "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f",
+    dex: "Uniswap V2",
+    dexId: "uniswap",
+    quoteAssets: [
+      { address: "0xdac17f958d2ee523a2206206994597c13d831ec7", symbol: "USDT", decimals: 6 },
+      { address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", symbol: "USDC", decimals: 6 },
+      { address: "0x6b175474e89094c44da98b954eedeac495271d0f", symbol: "DAI", decimals: 18 }
+    ]
+  },
+  base: {
+    chain: "Base",
+    envKey: "BASE_RPC_URL",
+    networkLabel: "Base",
+    factory: "0x8909dc15e40173ff4699343b6eb8132c65e18ec6",
+    dex: "Uniswap V2",
+    dexId: "uniswap",
+    quoteAssets: [
+      { address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", symbol: "USDC", decimals: 6 },
+      { address: "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca", symbol: "USDbC", decimals: 6 },
+      { address: "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", symbol: "USDT", decimals: 6 }
+    ]
+  }
+};
+
+async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
+  const label = config.networkLabel;
+  const latestHex = await rpc("eth_blockNumber", [], rpcUrl, label);
+  const latest = asNumber(latestHex);
+  const latestBlock = await rpc("eth_getBlockByNumber", [latestHex, false], rpcUrl, label);
+  if (!latestBlock || !latestBlock.timestamp) throw new Error(label + " RPC latest block timestamp unavailable");
+  const latestTime = asNumber(latestBlock.timestamp) * 1000;
+  let secondsPerBlock = 12;
+  try {
+    const sampleNumber = Math.max(0, latest - 1000);
+    const sample = await rpc("eth_getBlockByNumber", [hexNum(sampleNumber), false], rpcUrl, label);
+    const elapsed = latestTime - asNumber(sample && sample.timestamp || "0x0") * 1000;
+    if (elapsed > 0) secondsPerBlock = elapsed / 1000;
+  } catch (_) {}
+  const blockWindow = Math.min(10000, Math.max(20, Math.ceil(minutes * 60 / secondsPerBlock * 1.2) + 10));
+  const fromBlock = Math.max(0, latest - blockWindow);
+  const quoteMap = new Map(config.quoteAssets.map((asset) => [asset.address.toLowerCase(), asset]));
+  const logs = await rpc("eth_getLogs", [{
+    fromBlock: hexNum(fromBlock),
+    toBlock: latestHex,
+    address: config.factory,
+    topics: [PAIR_CREATED]
+  }], rpcUrl, label);
+  const candidates = [];
+  const seen = new Set();
+  const relevant = (logs || []).filter((log) => {
+    const token0 = fromTopic(log.topics && log.topics[1] || "");
+    const token1 = fromTopic(log.topics && log.topics[2] || "");
+    return quoteMap.has(token0) !== quoteMap.has(token1);
+  }).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber)).slice(0, 80);
+  const timeCache = new Map();
+  const enriched = await mapLimit(relevant, 4, async (log) => {
+    const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
+    if (seen.has(pair)) return null;
+    seen.add(pair);
+    const token0 = fromTopic(log.topics[1]);
+    const token1 = fromTopic(log.topics[2]);
+    const quoteIs0 = quoteMap.has(token0);
+    const quoteAddress = quoteIs0 ? token0 : token1;
+    const tokenAddress = quoteIs0 ? token1 : token0;
+    const quote = quoteMap.get(quoteAddress);
+    const createdBlock = asNumber(log.blockNumber);
+    const createdAt = await blockTime(createdBlock, timeCache, rpcUrl, label);
+    const ageMinutes = (latestTime - createdAt) / 60000;
+    if (!createdAt || ageMinutes < 0 || ageMinutes > minutes) return null;
+    const [reserveData, symbolHex, nameHex, decimalsHex] = await Promise.all([
+      rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"], rpcUrl, label),
+      rpc("eth_call", [{ to: tokenAddress, data: "0x95d89b41" }, "latest"], rpcUrl, label).catch(() => "0x"),
+      rpc("eth_call", [{ to: tokenAddress, data: "0x06fdde03" }, "latest"], rpcUrl, label).catch(() => "0x"),
+      rpc("eth_call", [{ to: tokenAddress, data: "0x313ce567" }, "latest"], rpcUrl, label).catch(() => "0x")
+    ]);
+    const reserve0 = BigInt("0x" + word(reserveData, 0));
+    const reserve1 = BigInt("0x" + word(reserveData, 1));
+    const quoteReserve = toFloat(quoteIs0 ? reserve0 : reserve1, quote.decimals);
+    const liquidityUSD = quoteReserve * 2;
+    if (!Number.isFinite(liquidityUSD) || liquidityUSD < minLiquidity) return null;
+    const tokenDecimals = decimalsHex && decimalsHex !== "0x"
+      ? Math.min(36, Math.max(0, asNumber(decimalsHex))) : 18;
+    return {
+      chain: config.chain,
+      chainId: config.dexId === "uniswap" && label === "Ethereum" ? "ethereum" : "base",
+      dex: config.dex,
+      symbol: decodeAbiString(symbolHex) || tokenAddress.slice(0, 6) + "…" + tokenAddress.slice(-4),
+      name: decodeAbiString(nameHex) || "Unknown token",
+      tokenAddress,
+      tokenSelectionVerified: true,
+      tokenSelectionNote: "",
+      quoteSymbol: quote.symbol,
+      quoteAddress,
+      pairAddress: pair,
+      poolUrl: "https://dexscreener.com/" + (label === "Ethereum" ? "ethereum" : "base") + "/" + pair,
+      dexScreenerUrl: "https://dexscreener.com/" + (label === "Ethereum" ? "ethereum" : "base") + "/" + pair,
+      createdAt: new Date(createdAt).toISOString(),
+      ageMinutes: Math.round(ageMinutes * 10) / 10,
+      liquidityUSDApprox: liquidityUSD,
+      volume1hUSD: null,
+      buys1h: null,
+      sells1h: null,
+      priceChange1h: null,
+      priceChange5m: null,
+      priceChange15m: null,
+      usdtRouteStatus: quote.symbol === "USDT" ? "direct_pool_only" : "not_verified",
+      source: label + " RPC · " + config.dex + " PairCreated",
+      marketHistoryStatus: "unavailable",
+      riskNote: "RPC 链上发现的新池；当前只覆盖配置的 V2 工厂和稳定币直连池。成交、价格历史及钱包路由未验证，必须待复核。"
+    };
+  });
+  for (const item of enriched) if (item && !item._error) candidates.push(item);
+  return {
+    pools: candidates,
+    diagnostics: {
+      chain: config.chain,
+      provider: label + " RPC",
+      status: "ok",
+      coverage: "partial",
+      factory: config.factory,
+      factoryEvents: (logs || []).length,
+      quotePoolEvents: relevant.length,
+      qualifyingPools: candidates.length,
+      fromBlock,
+      toBlock: latest,
+      blockWindow,
+      dex: config.dex
+    }
+  };
 }
 
 export default {
@@ -987,6 +1125,9 @@ export default {
                   });
                   chainPoolCount++;
                 }
+                if (chainPoolCount === 0) {
+                  throw new Error("DexPaprika returned no pools meeting age/liquidity/token filters");
+                }
                 chainSources.push({
                   chain: network.name, provider: "DexPaprika",
                   status: "fallback", coverage: "partial", pools: chainPoolCount,
@@ -1010,6 +1151,60 @@ export default {
           }
         }
       }
+      // When all indexed providers fail or return no qualifying pools, use a
+      // separately configured chain RPC to inspect recent stablecoin-quoted V2
+      // PairCreated events. This is deliberately partial coverage, not a full
+      // chain-wide DEX index.
+      const evmRpcDiagnostics = [];
+      for (const failed of failedNetworks) {
+        const network = failed.network;
+        const config = EVM_RPC_SCAN_CONFIG[network.id];
+        if (!config) continue;
+        // Do not replace a successful indexed fallback with an RPC warning.
+        if (chainSources.some((source) => source.chain === network.name &&
+          (source.status === "ok" || source.status === "fallback"))) continue;
+        const chainRpcUrl = env && env[config.envKey];
+        if (!chainRpcUrl) {
+          evmRpcDiagnostics.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC",
+            status: "not_configured",
+            requiredSecret: config.envKey,
+            note: "请在 Cloudflare Worker Settings → Variables and Secrets 中添加该 RPC Secret。"
+          });
+          continue;
+        }
+        try {
+          const scanned = await scanEvmRpcRecentPools(config, chainRpcUrl, minutes, minLiquidity);
+          results.push(...scanned.pools);
+          evmRpcDiagnostics.push(scanned.diagnostics);
+          chainSources.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC · " + config.dex,
+            status: "fallback",
+            coverage: "partial",
+            pools: scanned.pools.length,
+            diagnostics: scanned.diagnostics,
+            primaryIndexError: failed.error
+          });
+          fallbackChains.push(network.name + " RPC");
+        } catch (rpcError) {
+          const detail = config.networkLabel + " RPC fallback: " + String(rpcError);
+          evmRpcDiagnostics.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC",
+            status: "error",
+            error: String(rpcError)
+          });
+          errors.push({ chain: network.name, error: failed.error + "; " + detail });
+          chainSources.push({
+            chain: network.name,
+            provider: config.networkLabel + " RPC",
+            status: "error",
+            note: String(rpcError)
+          });
+        }
+      }
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       const responsePayload = {
         ok: true,
@@ -1027,6 +1222,7 @@ export default {
           }
         },
         chainSources,
+        evmRpcDiagnostics,
         fallbackChains,
         count: results.length,
         pools: results,
@@ -1035,8 +1231,10 @@ export default {
           "本接口首阶段接入 Solana、Ethereum、Base；BSC 继续使用原有 NodeReal 链上扫描接口。",
           "GeckoTerminal new_pools 每页最多返回20个池；本版本每条链只取第一页，不保证覆盖全部新池。",
           "GeckoTerminal 公共 API 可能限流；失败时先尝试 DexScreener 最新 Token Profile 与 Boost 名单，若也失败则尝试 DexPaprika 最近新池搜索。备用源只取有限结果且覆盖不完整，必须显示为部分覆盖，不能当作完整新池扫描；第三方 API 仍可能限流。",
+          "Ethereum/Base 在索引源失败时可选使用 ETH_RPC_URL / BASE_RPC_URL 扫描配置的 Uniswap V2 稳定币直连池；仅覆盖单一 V2 工厂，不覆盖全链 DEX，也不提供完整成交/K线数据。",
+          "RPC 新池发现结果缺少成交量、买卖次数、价格历史或钱包兑换验证时，必须进入待复核，不能视为通过安全筛查。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
-          "多链报价资产会显示其索引符号；本版本不判断 USDT 直连，也不验证钱包兑换路径。",
+          "多链报价资产会显示其索引符号；只有标记为 USDT 的池才表示池子直接以 USDT 为一侧资产，仍不代表钱包兑换路径已验证。",
           "本接口只读，不执行兑换或交易。"
         ],
         generatedAt: new Date().toISOString()

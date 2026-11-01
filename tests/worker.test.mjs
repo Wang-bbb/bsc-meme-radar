@@ -753,3 +753,78 @@ test("price risk reviews and blocks rapid liquidity drains without capping posit
   assert.equal(blocked.level, "blocked");
   assert.match(blocked.reason, /LP快速流失拦截/);
 });
+
+
+test("multiscan uses configured Ethereum and Base RPC fallback after public indexes fail", async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const token = "0x1111111111111111111111111111111111111111";
+  const pair = "0x2222222222222222222222222222222222222222";
+  const pad = (value) => value.toString(16).padStart(64, "0");
+  const bytes32 = (value) => "0x" + Buffer.from(value, "utf8").toString("hex").padEnd(64, "0");
+  const rpcFetch = async (url, body) => {
+    const method = body.method;
+    if (method === "eth_blockNumber") return response({ jsonrpc: "2.0", id: 1, result: "0x1000" });
+    if (method === "eth_getBlockByNumber") {
+      const n = body.params[0];
+      const timestamp = n === "0x0" ? nowSeconds - 12000 : nowSeconds;
+      return response({ jsonrpc: "2.0", id: 1, result: { timestamp: "0x" + timestamp.toString(16) } });
+    }
+    if (method === "eth_getLogs") {
+      const quote = url.includes("eth-rpc") 
+        ? "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        : "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+      return response({ jsonrpc: "2.0", id: 1, result: [{
+        address: "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f",
+        topics: [ "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9",
+          "0x" + quote.slice(2).padStart(64, "0"),
+          "0x" + token.slice(2).padStart(64, "0") ],
+        data: "0x" + pair.slice(2).padStart(64, "0"),
+        blockNumber: "0x1000"
+      }] });
+    }
+    if (method === "eth_call") {
+      const selector = body.params[0].data;
+      if (selector === "0x0902f1ac") return response({ jsonrpc: "2.0", id: 1, result: "0x" + pad(10_000_000_000n) + pad(1_000_000_000_000_000_000n) + pad(BigInt(nowSeconds)) });
+      if (selector === "0x95d89b41") return response({ jsonrpc: "2.0", id: 1, result: bytes32("TST") });
+      if (selector === "0x06fdde03") return response({ jsonrpc: "2.0", id: 1, result: bytes32("Test token") });
+      if (selector === "0x313ce567") return response({ jsonrpc: "2.0", id: 1, result: "0x12" });
+    }
+    throw new Error("Unexpected RPC method " + method);
+  };
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({}, 429);
+    if (url.includes("eth-rpc.invalid") || url.includes("base-rpc.invalid")) {
+      const body = JSON.parse(init.body);
+      return rpcFetch(url, body);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {
+    ETH_RPC_URL: "https://eth-rpc.invalid",
+    BASE_RPC_URL: "https://base-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Ethereum" && item.status === "ok"), JSON.stringify({ diagnostics: data.evmRpcDiagnostics, errors: data.chainErrors }));
+  assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Base" && item.status === "ok"));
+  assert.ok(data.pools.some(item => item.chain === "Ethereum" && item.source.includes("Ethereum RPC")));
+  assert.ok(data.pools.some(item => item.chain === "Base" && item.source.includes("Base RPC")));
+  assert.ok(data.pools.every(item => item.volume1hUSD === null));
+});
+
+test("multiscan explicitly reports missing Ethereum and Base RPC secrets", async () => {
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({}, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({}, 429);
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?minutes=15"), {});
+  const data = await res.json();
+  assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Ethereum" && item.requiredSecret === "ETH_RPC_URL"));
+  assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Base" && item.requiredSecret === "BASE_RPC_URL"));
+});
