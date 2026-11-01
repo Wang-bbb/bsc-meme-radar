@@ -78,6 +78,27 @@ function selectMarketHistoryTargets(all){
   if(solana.length)add(solana[0],"highest_liquidity_solana");
   return selected;
 }
+function sortCandidatesByTrendQuality(candidates){
+  const scoreOf=p=>{
+    const trend=p&&p.trendScore;
+    if(!trend||trend.status!=="checked"||!Number.isFinite(Number(trend.score))||
+      !Number.isFinite(Number(trend.confidence))||Number(trend.confidence)<60)return null;
+    return Number(trend.score);
+  };
+  return [...candidates].sort((a,b)=>{
+    const scoreA=scoreOf(a),scoreB=scoreOf(b);
+    // Valid scores rank ahead of unscored candidates; missing/low-confidence
+    // data is never converted into a numeric zero or described as a bad score.
+    if(scoreA!==null||scoreB!==null){
+      if(scoreA===null)return 1;
+      if(scoreB===null)return -1;
+      if(scoreA!==scoreB)return scoreB-scoreA;
+    }
+    const ageA=a.ageMinutes==null||!Number.isFinite(Number(a.ageMinutes))?Number.POSITIVE_INFINITY:Number(a.ageMinutes);
+    const ageB=b.ageMinutes==null||!Number.isFinite(Number(b.ageMinutes))?Number.POSITIVE_INFINITY:Number(b.ageMinutes);
+    return ageA-ageB||Number(b.volume1hUSD||0)-Number(a.volume1hUSD||0);
+  });
+}
 function priceRisk(p){
   const change=p.priceChange1h==null?null:Number(p.priceChange1h);
   const short5=p.priceChange5m==null?null:Number(p.priceChange5m);
@@ -323,11 +344,7 @@ async function scan(){
     });
     await Promise.all(workers);
     all.filter(p=>!selected.includes(p)).forEach(p=>{p.security={status:"unverified"};p.pendingReason="本轮安全检测名额有限，尚未检查";pending.push(p);});
-    checked.sort((a,b)=>{
-      const ageA=a.ageMinutes==null||!Number.isFinite(Number(a.ageMinutes))?Number.POSITIVE_INFINITY:Number(a.ageMinutes);
-      const ageB=b.ageMinutes==null||!Number.isFinite(Number(b.ageMinutes))?Number.POSITIVE_INFINITY:Number(b.ageMinutes);
-      return ageA-ageB||Number(b.volume1hUSD||0)-Number(a.volume1hUSD||0);
-    });
+    checked.splice(0,checked.length,...sortCandidatesByTrendQuality(checked));
     const renderCard=p=>{
       const quote=esc(p.quoteSymbol||"未知报价资产");
       const usdtStatus=p.chain==="BSC"?"BSC USDT 直连池":"钱包兑换路径未验证";
