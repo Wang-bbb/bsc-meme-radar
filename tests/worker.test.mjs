@@ -1764,4 +1764,6 @@ test("BSC scan includes V3 signed Swap topic and distinguishes V2/V3 swap-stat a
   assert.ok(source.includes('swapStatsPeriod: "since_pool_creation"'));
   assert.ok(source.includes('tradeFlowStatus === "buy_only_no_sell_confirmation"'));
   assert.ok(source.includes("amount0 = signedInt256(word(swap.data, 0))"));
+  assert.ok(source.includes('"not_needed_no_eligible_pools"'));
+  assert.ok(source.includes('(valid.length + v3Valid.length) === 0 ? null : !swapError && !v3SwapError'));
 });
