@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -1891,6 +1891,40 @@ function watchlistPool(overrides = {}) {
     ...overrides
   };
 }
+
+test("BSC trade microstructure metrics detect extreme early turnover and larger average sells", () => {
+  const metrics = calculateTradeMicrostructureMetrics({
+    ageMinutes: 15, volumeUSD: 500000, liquidityUSD: 20000,
+    buyVolumeUSD: 200000, sellVolumeUSD: 300000, buys: 40, sells: 20
+  });
+  assert.equal(metrics.volumeToLiquidityRatioSincePoolCreation, 25);
+  assert.equal(metrics.averageBuyTradeUSD, 5000);
+  assert.equal(metrics.averageSellTradeUSD, 15000);
+  assert.equal(metrics.sellToBuyAverageTradeSizeRatio, 3);
+  assert.equal(metrics.microstructureRiskFlags.length, 2);
+});
+
+test("microstructure warnings keep extreme turnover and large-sell pools out of priority watchlist", () => {
+  const metrics = calculateTradeMicrostructureMetrics({
+    ageMinutes: 15, volumeUSD: 500000, liquidityUSD: 20000,
+    buyVolumeUSD: 200000, sellVolumeUSD: 300000, buys: 40, sells: 20
+  });
+  const result = classifyPriorityWatchlist(watchlistPool(metrics));
+  assert.equal(result.priorityWatchlistEligible, false);
+  assert.equal(result.watchlistTier, "high_risk_review");
+  assert.ok(result.watchlistExclusionReasons.some(x => x.includes("高换手")));
+  assert.ok(result.watchlistExclusionReasons.some(x => x.includes("平均卖出单笔金额")));
+});
+
+test("microstructure metrics do not flag normal turnover or insufficient sell samples", () => {
+  const metrics = calculateTradeMicrostructureMetrics({
+    ageMinutes: 45, volumeUSD: 10000, liquidityUSD: 20000,
+    buyVolumeUSD: 6000, sellVolumeUSD: 4000, buys: 12, sells: 5
+  });
+  assert.equal(metrics.volumeToLiquidityRatioSincePoolCreation, 0.5);
+  assert.equal(metrics.sellToBuyAverageTradeSizeRatio, 1.6);
+  assert.deepEqual(metrics.microstructureRiskFlags, []);
+});
 
 test("priority watchlist accepts only balanced, sufficiently active, non-chasing pools", () => {
   const result = classifyPriorityWatchlist(watchlistPool());
