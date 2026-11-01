@@ -164,7 +164,7 @@ async function writeProviderCooldown(provider, response) {
   if (typeof caches === "undefined" || !caches.default) return;
   const status = Number(response.status || 429);
   const retryAfter = Number(response.headers.get("retry-after") || 0);
-  const baseTtl = provider === "dexpaprika" && status === 402 ? 600 : PROVIDER_COOLDOWN_SECONDS;
+  const baseTtl = status === 402 ? 600 : status >= 500 ? 60 : PROVIDER_COOLDOWN_SECONDS;
   const ttl = Math.min(900, Math.max(baseTtl, retryAfter || 0));
   const headers = new Headers({
     "x-radar-original-status": String(status),
@@ -248,6 +248,7 @@ async function fetchGeckoTerminal(endpoint) {
       break;
     }
   }
+  if (lastResponse && lastResponse.status >= 500) await writeProviderCooldown("geckoterminal", lastResponse);
   return lastResponse || new Response("GeckoTerminal request failed", { status: 502 });
 }
 
@@ -274,7 +275,7 @@ async function fetchDexPaprikaJson(endpoint) {
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
   // Cache provider-side quota/auth failures too: retrying HTTP 402 on every
   // refresh cannot restore access and only adds noise to an already partial scan.
-  if ([402, 429].includes(response.status)) await writeProviderCooldown("dexpaprika", response);
+  if ([402, 429].includes(response.status) || response.status >= 500) await writeProviderCooldown("dexpaprika", response);
   if (cache && (response.ok || [401, 402, 403, 429].includes(response.status))) {
     const headers = new Headers(response.headers);
     const shouldCacheError = !response.ok;
@@ -314,7 +315,7 @@ async function fetchDexScreenerJson(endpoint) {
   const providerCooldown = await readProviderCooldown("dexscreener");
   if (providerCooldown) return providerCooldown;
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
-  if (response.status === 429) await writeProviderCooldown("dexscreener", response);
+  if (response.status === 429 || response.status >= 500) await writeProviderCooldown("dexscreener", response);
   if (response.status === 429 && cache) {
     // Briefly cache rate-limit responses to prevent each chain fallback from
     // hammering the same shared profile/boost feeds on every refresh.
@@ -1002,6 +1003,140 @@ async function recordLiquiditySnapshot(env, network, poolAddress, liquidityUSD) 
 }
 
 
+
+const SOLANA_DISCOVERY_PROGRAMS = [
+  { name: "Pump.fun", address: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P" },
+  { name: "PumpSwap", address: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA" },
+  { name: "Raydium AMM v4", address: "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8" },
+  { name: "Raydium CPMM", address: "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C" },
+  { name: "Meteora DLMM", address: "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo" },
+  { name: "Orca Whirlpool", address: "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc" }
+];
+
+// Read-only RPC cross-check. This samples recent transactions touching known
+// launch/DEX programs and extracts explicit SPL mint-initialization evidence.
+// It deliberately does NOT manufacture pool candidates: pool address, token
+// side, liquidity and tradeability require a protocol-specific decoder.
+async function solanaRpcCall(rpcUrl, method, params) {
+  const cooldown = await readProviderCooldown("solana-rpc");
+  if (cooldown) throw new Error("Solana RPC shared cooldown HTTP " + cooldown.status);
+  const requestBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+  let response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json" },
+    body: requestBody
+  });
+  if (response.status === 429 || response.status === 402) {
+    await writeProviderCooldown("solana-rpc", response);
+    throw new Error("Solana RPC HTTP " + response.status + " (provider cooldown)");
+  }
+  if (response.status >= 500) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body: requestBody
+    });
+    if (response.status >= 500) await writeProviderCooldown("solana-rpc", response);
+  }
+  if (!response.ok) throw new Error("Solana RPC HTTP " + response.status);
+  let body;
+  try { body = await response.json(); }
+  catch (_) { throw new Error("Solana RPC returned invalid JSON"); }
+  if (body && body.error) {
+    const code = body.error.code == null ? "" : " (" + String(body.error.code).slice(0, 24) + ")";
+    throw new Error("Solana RPC JSON-RPC error" + code);
+  }
+  return body && body.result;
+}
+
+function extractSolanaTransactionHints(transaction, programName, signature, blockTime) {
+  const message = transaction && transaction.transaction && transaction.transaction.message;
+  const meta = transaction && transaction.meta;
+  const instructions = [
+    ...(Array.isArray(message && message.instructions) ? message.instructions : []),
+    ...(Array.isArray(meta && meta.innerInstructions) ? meta.innerInstructions.flatMap(row => row.instructions || []) : [])
+  ];
+  const mintHints = new Set();
+  for (const instruction of instructions) {
+    const program = String(instruction && (instruction.program || instruction.programId) || "").toLowerCase();
+    const parsed = instruction && instruction.parsed;
+    const type = String(parsed && parsed.type || "").toLowerCase();
+    const info = parsed && parsed.info || {};
+    if ((program === "spl-token" || program === "spl-token-2022" ||
+      program === SOLANA_LEGACY_TOKEN_PROGRAM.toLowerCase() ||
+      program === SOLANA_TOKEN_2022_PROGRAM.toLowerCase()) &&
+      (type === "initializemint" || type === "initializemint2") &&
+      typeof info.mint === "string") mintHints.add(info.mint);
+  }
+  const logs = Array.isArray(meta && meta.logMessages) ? meta.logMessages : [];
+  const poolInitLogHints = [...new Set(logs
+    .filter(line => /Program log: Instruction: (initialize|initialize2|initialize_pool|initialize_lb_pair|create_pool|migrate)/i.test(line))
+    .map(line => String(line).slice(0, 160)))].slice(0, 4);
+  return {
+    signature,
+    program: programName,
+    blockTime: Number.isFinite(Number(blockTime)) ? Number(blockTime) : null,
+    mintHints: [...mintHints].slice(0, 4),
+    poolInitLogHints
+  };
+}
+
+async function scanSolanaRpcActivity(rpcUrl, minutes) {
+  const diagnostics = {
+    chain: "Solana",
+    provider: "Solana JSON-RPC · Pump.fun / PumpSwap / Raydium / Meteora / Orca",
+    status: "partial",
+    coverage: "program-activity-only",
+    programsChecked: 0,
+    recentTransactions: 0,
+    sampledTransactions: 0,
+    mintHints: [],
+    poolInitLogHints: [],
+    samples: [],
+    candidatePoolsAdded: 0,
+    note: "独立 RPC 仅提供已知程序的近期交易与 Mint 初始化线索；尚未完成协议级池地址/储备解码，因此不把线索加入候选池或安全排名。"
+  };
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const cutoff = nowSeconds - minutes * 60;
+  const mintHints = new Set();
+  const poolInitLogHints = new Set();
+  try {
+    for (const program of SOLANA_DISCOVERY_PROGRAMS) {
+      const signatures = await solanaRpcCall(rpcUrl, "getSignaturesForAddress", [
+        program.address, { limit: 20, commitment: "confirmed" }
+      ]);
+      if (!Array.isArray(signatures)) throw new Error("getSignaturesForAddress returned an unexpected response");
+      diagnostics.programsChecked++;
+      const recent = signatures.filter(row => Number(row && row.blockTime) >= cutoff &&
+        Number(row && row.blockTime) <= nowSeconds);
+      diagnostics.recentTransactions += recent.length;
+      // One transaction sample per program bounds RPC use to at most 12 calls
+      // per scan (six signature queries plus six transaction lookups).
+      if (!recent.length) continue;
+      const row = recent[0];
+      const transaction = await solanaRpcCall(rpcUrl, "getTransaction", [
+        row.signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }
+      ]);
+      if (!transaction) continue;
+      diagnostics.sampledTransactions++;
+      const hints = extractSolanaTransactionHints(transaction, program.name, row.signature, row.blockTime);
+      hints.mintHints.forEach(value => mintHints.add(value));
+      hints.poolInitLogHints.forEach(value => poolInitLogHints.add(program.name + ": " + value));
+      if (diagnostics.samples.length < 8) diagnostics.samples.push(hints);
+    }
+    diagnostics.mintHints = [...mintHints].slice(0, 20);
+    diagnostics.poolInitLogHints = [...poolInitLogHints].slice(0, 20);
+    diagnostics.status = "ok";
+    diagnostics.note = "RPC 活动扫描成功，但交易线索不等于已验证新池；未完成协议级池地址、创建时间、储备/流动性与可交易性解码，因此 candidatePoolsAdded=0。";
+  } catch (error) {
+    diagnostics.status = diagnostics.programsChecked > 0 ? "partial" : "error";
+    diagnostics.error = String(error);
+    diagnostics.mintHints = [...mintHints].slice(0, 20);
+    diagnostics.poolInitLogHints = [...poolInitLogHints].slice(0, 20);
+  }
+  return diagnostics;
+}
 
 const EVM_RPC_SCAN_CONFIG = {
   eth: {
@@ -1866,6 +2001,31 @@ export default {
           }
         }
       }
+      const solanaRpcDiagnostics = [];
+      const failedSolana = failedNetworks.find(item => item.network.id === "solana");
+      if (failedSolana && networks.some(item => item.id === "solana")) {
+        const solanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+        if (!/^https:\/\//i.test(solanaRpcUrl) || /\s/.test(solanaRpcUrl)) {
+          solanaRpcDiagnostics.push({
+            chain: "Solana", provider: "Solana JSON-RPC", status: "error",
+            error: "SOLANA_RPC_URL must be a valid HTTPS endpoint"
+          });
+        } else {
+          const scanned = await scanSolanaRpcActivity(solanaRpcUrl, minutes);
+          solanaRpcDiagnostics.push(scanned);
+          chainSources.push({
+            chain: "Solana", provider: "Solana RPC program activity",
+            status: scanned.status === "error" ? "error" : "partial",
+            coverage: "program-activity-only",
+            pools: 0,
+            recentTransactions: scanned.recentTransactions,
+            mintHints: scanned.mintHints.length,
+            note: scanned.note,
+            error: scanned.error || null
+          });
+        }
+      }
+
       // When all indexed providers fail or return no qualifying pools, use a
       // separately configured chain RPC to inspect recent stablecoin-quoted V2
       // PairCreated events. This is deliberately partial coverage, not a full
@@ -1947,6 +2107,7 @@ export default {
         },
         chainSources,
         evmRpcDiagnostics,
+        solanaRpcDiagnostics,
         fallbackChains,
         count: results.length,
         pools: results,
@@ -1959,6 +2120,8 @@ export default {
           "RPC 新池发现结果缺少成交量、买卖次数、价格历史或钱包兑换验证时，必须进入待复核，不能视为通过安全筛查。",
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；只有标记为 USDT 的池才表示池子直接以 USDT 为一侧资产，仍不代表钱包兑换路径已验证。",
+          "Solana RPC 独立交叉检查仅抽样已知 Pump.fun、PumpSwap、Raydium、Meteora、Orca 程序的近期交易和 SPL Mint 初始化线索；不是完整新池索引，未解码协议级池地址/储备，不会生成候选池。",
+          "公共索引和 RPC 的 429/402 使用共享冷却；5xx 最多重试一次并进入短冷却。冷却和缓存是尽力而为的 Cloudflare 边缘级治理，不代表上游配额已恢复。",
           "本接口只读，不执行兑换或交易。"
         ],
         generatedAt: new Date().toISOString()
