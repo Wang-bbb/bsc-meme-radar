@@ -2764,6 +2764,9 @@ export default {
           if (sells1h === 0 && swapCount >= 8) {
             earlySignalScore -= 15;
             earlyRiskFlags.push("尚无卖出成交验证");
+            // A one-sided pool is not validated demand. Keep its score below
+            // watchlist eligibility until at least one sell has been observed.
+            earlySignalScore = Math.min(earlySignalScore, 49);
           }
           if (sellVolume1hUSD > buyVolume1hUSD) {
             earlySignalScore -= 20;
@@ -2773,7 +2776,10 @@ export default {
             earlySignalScore -= 10;
             earlyRiskFlags.push("买卖成交额严重失衡");
           }
-          if (priceChangeSincePoolCreationPct != null && priceChangeSincePoolCreationPct >= 25) {
+          if (priceChangeSincePoolCreationPct != null && priceChangeSincePoolCreationPct >= 40) {
+            earlySignalScore -= 20;
+            earlyRiskFlags.push("建池以来首末成交价暴涨，追高风险很高");
+          } else if (priceChangeSincePoolCreationPct != null && priceChangeSincePoolCreationPct >= 25) {
             earlySignalScore -= 10;
             earlyRiskFlags.push("建池以来首末成交价涨幅过快，警惕追高");
           }
@@ -2784,7 +2790,7 @@ export default {
           earlySignalScore = Math.max(0, Math.min(100, Math.round(earlySignalScore)));
         }
         const earlySignalGrade = swapError ? "insufficient_data"
-          : earlyRiskFlags.some(flag => flag.includes("明显下跌") || flag.includes("卖出成交额高于买入")) ? "high_risk_review"
+          : earlyRiskFlags.some(flag => flag.includes("明显下跌") || flag.includes("卖出成交额高于买入") || flag.includes("暴涨")) ? "high_risk_review"
           : earlyRiskFlags.length > 0 ? "caution"
           : earlySignalScore >= 65 ? "watchlist_candidate" : "watch";
         return {
@@ -2820,7 +2826,7 @@ export default {
           earlySignalGrade,
           earlySignalReasons,
           earlyRiskFlags,
-          earlySignalScoreVersion: "heuristic-v1",
+          earlySignalScoreVersion: "heuristic-v2",
           buys1h: swapError ? null : buys1h,
           sells1h: swapError ? null : sells1h,
           // Deprecated compatibility alias; value is first-to-last trade price change since pool creation.
