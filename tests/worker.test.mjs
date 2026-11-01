@@ -1056,6 +1056,13 @@ test("BSC scan uses a timestamp-bounded window and recognizes the canonical USDT
   const pancakeV2 = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
   globalThis.fetch = async (input, init = {}) => {
     const body = JSON.parse(init.body);
+    if (Array.isArray(body)) {
+      return response(body.map((item) => {
+        const n = parseInt(item.params[0], 16);
+        const timestamp = Math.floor(nowSeconds - (latest - n) * 0.45);
+        return { jsonrpc: "2.0", id: item.id, result: { timestamp: "0x" + timestamp.toString(16) } };
+      }));
+    }
     const method = body.method;
     if (method === "eth_blockNumber") {
       return response({ jsonrpc: "2.0", id: 1, result: "0x" + latest.toString(16) });
