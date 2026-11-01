@@ -214,6 +214,8 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
       pool.historicalNewSwapCount = null;
       pool.historicalNewVolumeUSD = null;
       pool.historicalObservationGapSeconds = null;
+      pool.historicalActivityTrendStatus = "insufficient";
+      pool.historicalActivityChangePct = null;
     }
     return { status, trackedPoolCount: 0, reason };
   };
@@ -247,6 +249,8 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
     for (const pool of pools) {
       const address = String(pool.pairAddress || pool.pair || "").toLowerCase();
       if (!address) continue;
+      const previous = storedPools[address] || null;
+      const history = classifyPoolHistory(pool, previous, nowMs);
       nextPools[address] = {
         observedAt: nowMs,
         liquidityUSDApprox: pool.liquidityUSDApprox == null ? null : Number(pool.liquidityUSDApprox),
