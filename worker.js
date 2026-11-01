@@ -1327,6 +1327,61 @@ const SOLANA_STABLE_QUOTES = [
   { address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", symbol: "USDC" },
   { address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT" }
 ];
+const SOLANA_WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+const PYTH_SOL_USD_FEED_ID = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+
+// Parse only fresh, positive SOL/USD prices with a bounded confidence interval.
+// Fail closed: a stale or uncertain oracle value must never create a liquidity-qualified candidate.
+export function parsePythSolUsdPrice(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const rows = payload && Array.isArray(payload.parsed) ? payload.parsed : [];
+  const row = rows.find(item => String(item && item.id || "").replace(/^0x/i, "").toLowerCase() === PYTH_SOL_USD_FEED_ID);
+  const raw = row && row.price;
+  if (!raw) return { ok: false, reason: "Pyth SOL/USD price is missing" };
+  const exponent = Number(raw.expo);
+  const mantissa = Number(raw.price);
+  const confidence = Number(raw.conf);
+  const publishTime = Number(raw.publish_time);
+  if (![exponent, mantissa, confidence, publishTime].every(Number.isFinite)) {
+    return { ok: false, reason: "Pyth SOL/USD price fields are invalid" };
+  }
+  const price = mantissa * Math.pow(10, exponent);
+  const confidenceUsd = confidence * Math.pow(10, exponent);
+  const ageSeconds = nowSeconds - publishTime;
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(confidenceUsd) || confidenceUsd < 0) {
+    return { ok: false, reason: "Pyth SOL/USD price is not positive and finite" };
+  }
+  if (ageSeconds < -15 || ageSeconds > 120) {
+    return { ok: false, reason: "Pyth SOL/USD price is stale or timestamp is in the future" };
+  }
+  const confidencePct = confidenceUsd / price * 100;
+  if (!Number.isFinite(confidencePct) || confidencePct > 2) {
+    return { ok: false, reason: "Pyth SOL/USD confidence interval exceeds 2%" };
+  }
+  return { ok: true, priceUsd: price, confidencePct, publishTime, ageSeconds };
+}
+
+export function calculateSolanaQuoteLiquidityUSD(quoteSymbol, quoteReserve, solUsdPrice = null) {
+  const reserve = Number(quoteReserve);
+  if (!Number.isFinite(reserve) || reserve < 0) return null;
+  if (quoteSymbol === "USDC" || quoteSymbol === "USDT") return reserve * 2;
+  if (quoteSymbol === "SOL" && Number.isFinite(Number(solUsdPrice)) && Number(solUsdPrice) > 0) {
+    return reserve * 2 * Number(solUsdPrice);
+  }
+  return null;
+}
+
+async function fetchPythSolUsdPrice() {
+  const endpoint = "https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=" +
+    PYTH_SOL_USD_FEED_ID + "&parsed=true";
+  const response = await fetch(endpoint, { headers: { accept: "application/json" } });
+  if (!response.ok) throw new Error("Pyth SOL/USD HTTP " + response.status);
+  let payload;
+  try { payload = await response.json(); }
+  catch (_) { throw new Error("Pyth SOL/USD returned invalid JSON"); }
+  const parsed = parsePythSolUsdPrice(payload);
+  if (!parsed.ok) throw new Error(parsed.reason);
+  return parsed;
+}
 const SOLANA_TOKEN_PROGRAMS = new Set([
   SOLANA_LEGACY_TOKEN_PROGRAM,
   SOLANA_TOKEN_2022_PROGRAM
@@ -1453,16 +1508,23 @@ async function decodePumpSwapPool(rpcUrl, instruction, blockTime, nowSeconds, mi
   if (!baseVault || !quoteVault) {
     return { status: "skipped", reason: "vault owner, parsed token data, or mint association could not be verified" };
   }
-  const baseQuote = SOLANA_STABLE_QUOTES.find(asset => asset.address === baseMint);
-  const quoteQuote = SOLANA_STABLE_QUOTES.find(asset => asset.address === quoteMint);
+  const quoteForMint = mint => SOLANA_STABLE_QUOTES.find(asset => asset.address === mint) ||
+    (mint === SOLANA_WRAPPED_SOL_MINT ? { address: SOLANA_WRAPPED_SOL_MINT, symbol: "SOL" } : null);
+  const baseQuote = quoteForMint(baseMint);
+  const quoteQuote = quoteForMint(quoteMint);
   if (Boolean(baseQuote) === Boolean(quoteQuote)) {
-    return { status: "skipped", reason: "pool does not contain exactly one supported stablecoin quote mint" };
+    return { status: "skipped", reason: "pool does not contain exactly one supported USDC/USDT/wrapped-SOL quote mint" };
   }
   const quote = baseQuote || quoteQuote;
   const quoteReserve = baseQuote ? baseVault.amount : quoteVault.amount;
-  const liquidityUSDApprox = quoteReserve * 2;
+  let solUsdPrice = null;
+  if (quote.symbol === "SOL") {
+    try { solUsdPrice = (await fetchPythSolUsdPrice()).priceUsd; }
+    catch (error) { return { status: "skipped", reason: "SOL quote liquidity not estimated: " + String(error) }; }
+  }
+  const liquidityUSDApprox = calculateSolanaQuoteLiquidityUSD(quote.symbol, quoteReserve, solUsdPrice);
   if (!Number.isFinite(liquidityUSDApprox) || liquidityUSDApprox < minLiquidity) {
-    return { status: "skipped", reason: "verified stablecoin-side reserve is below the liquidity threshold" };
+    return { status: "skipped", reason: "verified quote-side reserve is below the USD liquidity threshold" };
   }
   const tokenAddress = baseQuote ? quoteMint : baseMint;
   return {
@@ -1482,7 +1544,7 @@ async function decodePumpSwapPool(rpcUrl, instruction, blockTime, nowSeconds, mi
       usdtRouteStatus: quote.symbol === "USDT" ? "direct_pool_only" : "not_verified",
       source: "Solana RPC · PumpSwap create_pool + pool/vault account verification",
       marketHistoryStatus: "unavailable",
-      riskNote: "已核对 PumpSwap create_pool 指令、池账户程序归属、双侧 Vault Token 程序及 Mint 关联；流动性按稳定币侧储备×2估算，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。"
+      riskNote: quote.symbol === "SOL" ? "已核对 PumpSwap create_pool 指令、池账户程序归属、双侧 Vault Token 程序及 Mint 关联；SOL 侧储备按 Pyth SOL/USD 新鲜报价估算美元流动性，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。" : "已核对 PumpSwap create_pool 指令、池账户程序归属、双侧 Vault Token 程序及 Mint 关联；稳定币侧储备×2估算美元流动性，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。"
     }
   };
 }
@@ -1563,16 +1625,23 @@ async function decodeRaydiumCpmmPool(rpcUrl, instruction, blockTime, nowSeconds,
   const vault0 = parseSolanaTokenVault(vault0Account, token0Mint);
   const vault1 = parseSolanaTokenVault(vault1Account, token1Mint);
   if (!vault0 || !vault1) return { status: "skipped", reason: "vault owner, parsed token data, or mint association could not be verified" };
-  const quote0 = SOLANA_STABLE_QUOTES.find(asset => asset.address === token0Mint);
-  const quote1 = SOLANA_STABLE_QUOTES.find(asset => asset.address === token1Mint);
+  const quoteForMint = mint => SOLANA_STABLE_QUOTES.find(asset => asset.address === mint) ||
+    (mint === SOLANA_WRAPPED_SOL_MINT ? { address: SOLANA_WRAPPED_SOL_MINT, symbol: "SOL" } : null);
+  const quote0 = quoteForMint(token0Mint);
+  const quote1 = quoteForMint(token1Mint);
   if (Boolean(quote0) === Boolean(quote1)) {
-    return { status: "skipped", reason: "pool does not contain exactly one supported stablecoin quote mint" };
+    return { status: "skipped", reason: "pool does not contain exactly one supported USDC/USDT/wrapped-SOL quote mint" };
   }
   const quote = quote0 || quote1;
   const quoteReserve = quote0 ? vault0.amount : vault1.amount;
-  const liquidityUSDApprox = quoteReserve * 2;
+  let solUsdPrice = null;
+  if (quote.symbol === "SOL") {
+    try { solUsdPrice = (await fetchPythSolUsdPrice()).priceUsd; }
+    catch (error) { return { status: "skipped", reason: "SOL quote liquidity not estimated: " + String(error) }; }
+  }
+  const liquidityUSDApprox = calculateSolanaQuoteLiquidityUSD(quote.symbol, quoteReserve, solUsdPrice);
   if (!Number.isFinite(liquidityUSDApprox) || liquidityUSDApprox < minLiquidity) {
-    return { status: "skipped", reason: "verified stablecoin-side reserve is below the liquidity threshold" };
+    return { status: "skipped", reason: "verified quote-side reserve is below the USD liquidity threshold" };
   }
   const tokenAddress = quote0 ? token1Mint : token0Mint;
   return {
@@ -1603,7 +1672,7 @@ async function decodeRaydiumCpmmPool(rpcUrl, instruction, blockTime, nowSeconds,
       usdtRouteStatus: quote.symbol === "USDT" ? "direct_pool_only" : "not_verified",
       source: "Solana RPC · Raydium CPMM initialize + pool/vault account verification",
       marketHistoryStatus: "unavailable",
-      riskNote: "已核对 Raydium CPMM 初始化指令、池账户归属、Vault 所属 Token 程序及 Mint 对应关系；流动性按稳定币侧储备×2估算，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。"
+      riskNote: quote.symbol === "SOL" ? "已核对 Raydium CPMM 初始化指令、池账户归属、Vault Token 程序及 Mint 对应关系；SOL 侧储备按 Pyth SOL/USD 新鲜报价估算美元流动性，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。" : "已核对 Raydium CPMM 初始化指令、池账户归属、Vault Token 程序及 Mint 对应关系；稳定币侧储备×2估算美元流动性，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。"
     }
   };
 }
