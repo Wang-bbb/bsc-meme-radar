@@ -643,6 +643,21 @@ const REGRESSION_SAMPLE_MINTS = [
 
 
 
+
+function loadDashboardTradePeriodLabel() {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const match = html.match(/function tradeStatsPeriodLabel\(pool\)\{[\s\S]*?\n\}/);
+  assert.ok(match, "dashboard trade-period label helper should exist");
+  return vm.runInNewContext("(" + match[0] + ")");
+}
+
+test("dashboard labels pool-lifetime BSC swap statistics separately from rolling one-hour statistics", () => {
+  const label = loadDashboardTradePeriodLabel();
+  assert.equal(label({swapStatsPeriod:"since_pool_creation"}), "建池以来");
+  assert.equal(label({swapStatsPeriod:"rolling_1h"}), "近1小时");
+  assert.equal(label({}), "近1小时");
+});
+
 function loadDashboardTradeSizeSummary() {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const match = html.match(/function tradeSizeRiskSummary\(pool\)\{[\s\S]*?\n\}/);
