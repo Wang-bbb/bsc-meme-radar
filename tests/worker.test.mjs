@@ -669,7 +669,7 @@ test("dashboard history sampling covers the youngest BSC pool and highest turnov
 
 function loadDashboardTrendSorter() {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  const match = html.match(/function sortCandidatesByTrendQuality\(candidates\)\{[\\s\\S]*?\\n\}/);
+  const match = html.match(/function sortCandidatesByTrendQuality\(candidates\)\{[\s\S]*?\n\}/);
   assert.ok(match, "dashboard trend-score sorter should exist");
   return vm.runInNewContext("(" + match[0] + ")");
 }
