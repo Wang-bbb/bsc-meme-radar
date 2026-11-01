@@ -1731,4 +1731,8 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   assert.ok(source.includes("missingLiquidity: inspected.filter"));
   assert.ok(source.includes("const pairDataRaw = await mapLimit"));
   assert.ok(source.includes("const v3ReadRaw = await mapLimit"));
+  assert.ok(source.includes("async function enrichTokenMetadata(pool, rpcUrl)"));
+  assert.ok(source.includes("const validByLiquidity = pairData.filter"));
+  assert.ok(source.includes("const v3ValidByLiquidity = v3Read.filter"));
+  assert.ok(source.includes("Token metadata is deferred until after the liquidity"));
 });
