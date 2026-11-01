@@ -214,6 +214,15 @@ async function scan(){
         p.marketHistoryStatus=data.status||"unavailable";
         p.marketHistoryReason=data.error||"K线数据不足";
         p.trendScore=data.trendScore||null;
+        try{
+          const walletResponse=await fetch(base+"/wallet-flow?"+new URLSearchParams({
+            chain,pool:p.pairAddress,token:p.tokenAddress
+          }).toString());
+          const walletData=await walletResponse.json();
+          p.walletFlow=walletData.walletFlow||{status:"unavailable",error:walletData.error||"钱包样本不可用"};
+        }catch(walletError){
+          p.walletFlow={status:"unavailable",error:"钱包样本查询失败："+String(walletError)};
+        }
         const snapshot=data.liquiditySnapshot||{};
         p.liquiditySnapshotStatus=snapshot.status||"unavailable";
         p.liquiditySnapshotReason=snapshot.error||"流动性历史快照尚未积累足够数据";
@@ -323,6 +332,11 @@ async function scan(){
           '<div class="muted">仅用于走势观察排序，不是安全评分或买入信号</div>'+
           ((trend.warnings||[]).length?'<div class="muted">走势提醒：'+esc(trend.warnings.join("；"))+'</div>':'')
         : '<div class="muted">早期走势评分：'+esc(trend.label||"数据不足，暂不评分")+(trend.confidence!=null?" · 数据完整度 "+esc(trend.confidence)+"%":"")+'</div>';
+      const wallet=p.walletFlow||{};
+      const walletLine=wallet.status==="checked"
+        ? '<div class="muted">早期钱包样本：买家 '+esc(wallet.uniqueBuyers)+' · 卖家 '+esc(wallet.uniqueSellers)+' · 重复买家 '+esc(wallet.repeatBuyerWallets)+' · 前三大买家成交额占比 '+(wallet.top3BuySharePct==null?"—":esc(wallet.top3BuySharePct)+"%")+' · 样本 '+esc(wallet.sampleTrades)+' 笔</div>'+
+          ((wallet.warnings||[]).length?'<div class="muted">钱包行为提醒：'+esc(wallet.warnings.join("；"))+'</div>':'')
+        : '<div class="muted">早期钱包样本：'+esc(wallet.error||"样本不足或索引暂不可用")+'；不作健康判断</div>';
       return '<article class="card '+(p.blocked?"blocked-card":p.pendingReason?"review-card":"")+'">'+
         '<div class="row"><div><div class="name">'+esc(p.name)+' ('+esc(p.symbol)+')</div><div class="muted">'+esc(p.chain)+' · '+esc(p.dex||"DEX")+'</div></div><span class="badge">'+ageText(p.ageMinutes)+'</span></div>'+
         '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
@@ -335,6 +349,7 @@ async function scan(){
         '<div class="muted">观察区间高点回撤（'+esc(p.marketHistoryCandleCount==null?'—':p.marketHistoryCandleCount)+'根）：'+(p.drawdownFromHighPct==null?"—":pct(p.drawdownFromHighPct))+' · K线：'+esc(p.marketHistoryStatus||"未检查")+'</div>'+
         '<div class="muted">流动性变化：5分钟 '+(p.liquidityChange5mPct==null?"—":pct(p.liquidityChange5mPct))+' · 15分钟 '+(p.liquidityChange15mPct==null?"—":pct(p.liquidityChange15mPct))+' · 快照：'+esc(p.liquiditySnapshotStatus||"未检查")+'（'+esc(p.liquiditySnapshotCount==null?'0':p.liquiditySnapshotCount)+'条）</div>'+
         trendLine+
+        walletLine+
         '<div class="muted">报价资产：'+quote+' · '+esc(usdtStatus)+'</div>'+
         '<div class="muted">安全检测：'+esc(sec.status||"unverified")+' · '+esc(secInfo)+'</div>'+
         '<div class="muted">持币集中度：'+esc(holderInfo)+'</div>'+
