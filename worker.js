@@ -723,6 +723,7 @@ export default {
       // provider for the remaining chains in this invocation. The provider
       // cooldown is shared, so repeating the same fallback only repeats errors.
       let dexPaprikaRateLimited = false;
+      let dexPaprikaRateLimitError = "";
       for (const network of networks) {
         try {
           const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
@@ -880,7 +881,7 @@ export default {
               // providers above fail. Its free endpoint returns one page without a key.
               // If it has already rate-limited this invocation, do not call it again.
               if (dexPaprikaRateLimited) {
-                errors.push({ chain: network.name, error: failed.error + "; DexScreener fallback: " + String(fallbackError) + "; DexPaprika fallback skipped: shared provider already returned HTTP 429 for this scan" });
+                errors.push({ chain: network.name, error: failed.error + "; DexScreener fallback: " + String(fallbackError) + "; DexPaprika fallback skipped after shared provider rate limit (" + dexPaprikaRateLimitError + ")" });
                 chainSources.push({ chain: network.name, provider: "GeckoTerminal + DexScreener + DexPaprika", status: "error", note: "DexPaprika fallback skipped after provider rate limit" });
                 continue;
               }
@@ -955,7 +956,10 @@ export default {
                 });
                 fallbackChains.push(network.name);
               } catch (dexPaprikaError) {
-                if (/HTTP 429|Too Many Requests/i.test(String(dexPaprikaError))) dexPaprikaRateLimited = true;
+                if (/HTTP 429|Too Many Requests/i.test(String(dexPaprikaError))) {
+                  dexPaprikaRateLimited = true;
+                  dexPaprikaRateLimitError = String(dexPaprikaError);
+                }
                 errors.push({ chain: network.name, error: failed.error + "; DexScreener fallback: " + String(fallbackError) + "; DexPaprika fallback: " + String(dexPaprikaError) });
                 chainSources.push({ chain: network.name, provider: "GeckoTerminal + DexScreener + DexPaprika", status: "error" });
               }
