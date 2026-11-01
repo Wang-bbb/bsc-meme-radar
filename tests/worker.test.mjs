@@ -645,7 +645,7 @@ const REGRESSION_SAMPLE_MINTS = [
 
 function loadDashboardTradeSizeSummary() {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  const match = html.match(/function tradeSizeRiskSummary\(pool\)\{[\\s\\S]*?\\n\}/);
+  const match = html.match(/function tradeSizeRiskSummary\(pool\)\{[\s\S]*?\n\}/);
   assert.ok(match, "dashboard trade-size summary helper should exist");
   return vm.runInNewContext("(" + match[0] + ")");
 }
