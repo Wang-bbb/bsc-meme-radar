@@ -583,22 +583,35 @@ async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
     const elapsed = latestTime - asNumber(sample && sample.timestamp || "0x0") * 1000;
     if (elapsed > 0) secondsPerBlock = elapsed / 1000;
   } catch (_) {}
-  const blockWindow = Math.min(10000, Math.max(20, Math.ceil(minutes * 60 / secondsPerBlock * 1.2) + 10));
-  const fromBlock = Math.max(0, latest - blockWindow);
+  const requestedBlockWindow = Math.min(10000, Math.max(20, Math.ceil(minutes * 60 / secondsPerBlock * 1.2) + 10));
+  const requestedFromBlock = Math.max(0, latest - requestedBlockWindow);
+  // Alchemy Free allows at most 10 blocks per eth_getLogs request.
+  // Bound the number of chunks to protect Cloudflare Worker subrequest limits;
+  // when the requested lookback is larger, scan the newest blocks and report partial coverage.
+  const chunkSize = 10;
+  const maxChunks = 28;
+  const chunks = [];
+  for (let end = latest; end >= requestedFromBlock && chunks.length < maxChunks; end -= chunkSize) {
+    chunks.push({ fromBlock: Math.max(requestedFromBlock, end - chunkSize + 1), toBlock: end });
+  }
+  chunks.reverse();
+  const scannedFromBlock = chunks.length ? chunks[0].fromBlock : latest;
+  const truncated = scannedFromBlock > requestedFromBlock;
   const quoteMap = new Map(config.quoteAssets.map((asset) => [asset.address.toLowerCase(), asset]));
-  const logs = await rpc("eth_getLogs", [{
-    fromBlock: hexNum(fromBlock),
-    toBlock: latestHex,
+  const logBatches = await mapLimit(chunks, 3, async (chunk) => rpc("eth_getLogs", [{
+    fromBlock: hexNum(chunk.fromBlock),
+    toBlock: hexNum(chunk.toBlock),
     address: config.factory,
     topics: [PAIR_CREATED]
-  }], rpcUrl, label);
+  }], rpcUrl, label));
+  const logs = logBatches.flat();
   const candidates = [];
   const seen = new Set();
-  const relevant = (logs || []).filter((log) => {
+  const relevant = logs.filter((log) => {
     const token0 = fromTopic(log.topics && log.topics[1] || "");
     const token1 = fromTopic(log.topics && log.topics[2] || "");
     return quoteMap.has(token0) !== quoteMap.has(token1);
-  }).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber)).slice(0, 80);
+  }).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber)).slice(0, 3);
   const timeCache = new Map();
   const enriched = await mapLimit(relevant, 4, async (log) => {
     const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
@@ -663,14 +676,21 @@ async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
       chain: config.chain,
       provider: label + " RPC",
       status: "ok",
-      coverage: "partial",
+      coverage: truncated ? "partial" : "full",
+      requestedFromBlock,
+      scannedFromBlock,
+      toBlock: latest,
+      requestedBlockWindow,
+      chunkSize,
+      chunksScanned: chunks.length,
+      chunksTotal: Math.ceil((latest - requestedFromBlock + 1) / chunkSize),
+      truncated,
       factory: config.factory,
-      factoryEvents: (logs || []).length,
+      factoryEvents: logs.length,
       quotePoolEvents: relevant.length,
       qualifyingPools: candidates.length,
-      fromBlock,
-      toBlock: latest,
-      blockWindow,
+      fromBlock: scannedFromBlock,
+      blockWindow: latest - scannedFromBlock,
       dex: config.dex
     }
   };
