@@ -1767,3 +1767,13 @@ test("BSC scan includes V3 signed Swap topic and distinguishes V2/V3 swap-stat a
   assert.ok(source.includes('"not_needed_no_eligible_pools"'));
   assert.ok(source.includes('(valid.length + v3Valid.length) === 0 ? null : !swapError && !v3SwapError'));
 });
+
+
+test("BSC pool timestamps are fetched with batched JSON-RPC requests to conserve Worker subrequests", () => {
+  const source = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
+  assert.ok(source.includes("async function blockTimes(blockNumbers, cache, rpcUrl, networkLabel = \"BSC\")"));
+  assert.ok(source.includes("body: JSON.stringify(requests)"));
+  assert.ok(source.includes("await blockTimes(v3CreationLogs.map"));
+  assert.ok(source.includes("await blockTimes(creationLogs.map"));
+  assert.ok(source.includes("timeCache.get(asNumber(log.blockNumber)) || 0"));
+});
