@@ -785,7 +785,8 @@ function calculateEarlyTrendScore(history, context, liquiditySnapshot) {
   const buys = Number(context && context.buys);
   const sells = Number(context && context.sells);
   const trades = buys + sells;
-  const age = Number(context && context.ageMinutes);
+  const ageRaw = context && context.ageMinutes;
+  const age = ageRaw == null || ageRaw === "" ? null : Number(ageRaw);
   const liquidityChange = liquiditySnapshot && liquiditySnapshot.liquidityChange5mPct;
   const components = [];
   const warnings = [];
@@ -825,7 +826,7 @@ function calculateEarlyTrendScore(history, context, liquiditySnapshot) {
     components.push({ key: "priceAcceleration5m", label: "5分钟价格加速度", score, weight: 20, value: priceAcceleration });
   }
 
-  if (Number.isFinite(Number(liquidityChange))) {
+  if (liquidityChange != null && Number.isFinite(Number(liquidityChange))) {
     const change = Number(liquidityChange);
     const score = change <= -30 ? 0
       : change <= -15 ? 15
@@ -1108,7 +1109,9 @@ export default {
       try {
         const history = await getPoolMarketHistory(network, poolAddress, tokenAddress);
         const parseMetric = (key) => {
-          const value = Number(url.searchParams.get(key));
+          const raw = url.searchParams.get(key);
+          if (raw == null || raw.trim() === "") return null;
+          const value = Number(raw);
           return Number.isFinite(value) && value >= 0 ? value : null;
         };
         const trendScore = history.status === "checked" ? calculateEarlyTrendScore(history, {
