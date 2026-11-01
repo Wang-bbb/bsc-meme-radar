@@ -1717,3 +1717,13 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("strong_buy_sell_imbalance"));
   assert.ok(source.includes("swapStatsStatus: swapError ? \"unavailable\" : \"available\""));
 });
+
+
+test("BSC scan exposes candidate filter rejection counts and respects the per-scan inspection cap", () => {
+  const source = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
+  assert.ok(source.includes("candidateFilterDiagnostics: candidateFilterDiagnostics"));
+  assert.ok(source.includes("notInspectedWithinPerScanCap: Math.max(0, freshRows.length - inspected.length)"));
+  assert.ok(source.includes("readErrors: inspected.filter((p) => p && p._error).length"));
+  assert.ok(source.includes("eligibleAfterLiquidityFilter: eligible.length"));
+  assert.ok(source.includes("Number.isFinite(p.liquidityUSD)"));
+});

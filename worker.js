@@ -2579,7 +2579,7 @@ export default {
         pool.dexId = x.log._dexId;
         return pool;
       });
-      const v3Valid = v3Read.filter((p) => !p._error && p.liquidityUSD >= minLiquidity);
+      const v3Valid = v3Read.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
 
       const creationLogs = Array.from(logMap.values()).sort((a, b) => asNumber(b.blockNumber) - asNumber(a.blockNumber));
       const withTimes = await mapLimit(creationLogs, 3, async (log) => ({
@@ -2594,7 +2594,20 @@ export default {
         p.createdAt = x.createdAt;
         return p;
       });
-      const valid = pairData.filter((p) => !p._error && p.liquidityUSD >= minLiquidity);
+      const valid = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
+      const summarizeFilterStage = (events, freshRows, inspected, eligible) => ({
+        usdtPoolEvents: events,
+        freshWithinWindow: freshRows.length,
+        inspected: inspected.length,
+        notInspectedWithinPerScanCap: Math.max(0, freshRows.length - inspected.length),
+        readErrors: inspected.filter((p) => p && p._error).length,
+        belowMinLiquidity: inspected.filter((p) => !p._error && (!Number.isFinite(p.liquidityUSD) || p.liquidityUSD < minLiquidity)).length,
+        eligibleAfterLiquidityFilter: eligible.length
+      });
+      const candidateFilterDiagnostics = {
+        v2: summarizeFilterStage(creationLogs.length, fresh, pairData, valid),
+        v3: summarizeFilterStage(v3CreationLogs.length, v3Fresh, v3Read, v3Valid)
+      };
 
       let swapError = null;
       let swapLogs = [];
@@ -2769,6 +2782,7 @@ export default {
         },
         createdPairsFound: creationLogs.length + v3CreationLogs.length,
         freshPairsFound: fresh.length + v3Fresh.length,
+        candidateFilterDiagnostics: candidateFilterDiagnostics,
         count: pools.length,
         pairs: pairs,
         pools: pools,
