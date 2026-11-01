@@ -770,6 +770,9 @@ test("multiscan uses configured Ethereum and Base RPC fallback after public inde
       return response({ jsonrpc: "2.0", id: 1, result: { timestamp: "0x" + timestamp.toString(16) } });
     }
     if (method === "eth_getLogs") {
+      const filter = body.params[0];
+      const rangeSize = parseInt(filter.toBlock, 16) - parseInt(filter.fromBlock, 16) + 1;
+      assert.ok(rangeSize <= 10, "Alchemy Free eth_getLogs range must not exceed 10 blocks");
       const quote = url.includes("eth-rpc") 
         ? "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
         : "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
@@ -810,6 +813,7 @@ test("multiscan uses configured Ethereum and Base RPC fallback after public inde
   assert.equal(data.ok, true);
   assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Ethereum" && item.status === "ok"), JSON.stringify({ diagnostics: data.evmRpcDiagnostics, errors: data.chainErrors }));
   assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Base" && item.status === "ok"));
+  assert.ok(data.evmRpcDiagnostics.filter(item => ["Ethereum", "Base"].includes(item.chain)).every(item => item.chunkSize === 10 && item.chunksScanned > 0));
   assert.ok(data.pools.some(item => item.chain === "Ethereum" && item.source.includes("Ethereum RPC")));
   assert.ok(data.pools.some(item => item.chain === "Base" && item.source.includes("Base RPC")));
   assert.ok(data.pools.every(item => item.volume1hUSD === null));
