@@ -8,7 +8,7 @@
 - 默认最低流动性：约 5,000 USD。
 - 排序：优先池龄最新；同等池龄参考成交量。
 - BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
-- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源；当索引源失败或没有合格池时，使用 Solana JSON-RPC 做独立交叉检查。当前仅对 Raydium CPMM initialize 指令实现协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；其他已知协议仍只输出活动线索，不生成候选。
+- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源；当索引源失败或没有合格池时，使用 Solana JSON-RPC 做独立交叉检查。当前对 PumpSwap create_pool 和 Raydium CPMM initialize 指令实现协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；其他已知协议仍只输出活动线索，不生成候选。
 - Ethereum / Base：优先使用 GeckoTerminal 索引；索引源无合格池或失败时，可选使用独立 RPC 扫描配置的 Uniswap V2 工厂稳定币直连池（Ethereum: USDT/USDC/DAI；Base: USDC/USDbC/USDT）。该 RPC 兜底仅覆盖一个 V2 工厂，不是全链新池索引。
 - 其他链索引结果显示报价资产符号，但**不代表钱包兑换路径已验证**。
 - 前端合并 BSC 与其他三链结果，并按池龄排序。
@@ -103,3 +103,12 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 - 新候选的成交量、买卖笔数、K线、钱包流向和卖出能力仍标记为不可用/待复核；不会因为链上池账户解码成功就进入安全通过名单。
 - Pump.fun bonding curve、PumpSwap、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍未生成 RPC 候选；不能把它们的程序活动日志或 Mint 初始化线索冒充真实池。
 - 依据：[Raydium 官方 CPMM IDL](https://github.com/raydium-io/raydium-idl/blob/master/raydium_cpmm/raydium_cp_swap.json)、[Raydium CPMM 初始化源码](https://github.com/raydium-io/raydium-cp-swap/blob/master/programs/cp-swap/src/instructions/initialize.rs)。本项目只按其公开接口解码链上数据，不复制其实现代码。
+
+## PumpSwap 协议级新池解码（PR #44）
+- 在 Solana 索引源失败或没有合格池时，RPC 对 PumpSwap 最多抽样 3 笔近期交易；只识别官方 PumpSwap IDL 中的 create_pool 指令 discriminator，不把普通 buy/sell 交易当作新池。
+- 依据官方 pump-fun/pump-public-docs/idl/pump_amm.json 的账户顺序提取 pool、base/quote mint 和双侧 vault；核验交易成功、创建时间窗口、pool account owner、两个 vault 的 Token Program owner，以及 vault parsed mint 与指令 mint 完全一致。
+- 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算达到最低流动性门槛时，才加入待复核观察列表。SOL 报价池暂不估算美元流动性，避免使用未经校验的 SOL/USD 价格；因此当前 PumpSwap RPC 兜底会漏掉多数 SOL 报价池，覆盖不完整。
+- 每轮 PumpSwap 与 Raydium CPMM 的池/Vault 账户核验总量仍共享上限 3；近期交易抽样总上限 12。provider 429/402 仍触发共享冷却。
+- 新候选的成交量、买卖笔数、K线、钱包流向、LP 赎回风险和钱包可交易/卖出能力仍未验证，必须待复核；稳定币侧储备×2只是粗略估算，不是可成交深度或真实总 TVL。
+- Pump.fun bonding curve、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍只输出活动线索，不生成候选。
+- 官方参考：[PumpSwap 文档](https://github.com/pump-fun/pump-public-docs/blob/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22/docs/PUMP_SWAP_README.md)、[PumpSwap IDL](https://github.com/pump-fun/pump-public-docs/blob/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22/idl/pump_amm.json)。本项目仅按公开 IDL 解码链上数据，不复制其实现代码。
