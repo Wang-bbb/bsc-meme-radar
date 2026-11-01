@@ -808,7 +808,7 @@ test("multiscan uses configured Ethereum and Base RPC fallback after public inde
   });
   const data = await res.json();
   assert.equal(data.ok, true);
-  assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Ethereum" && item.status === "ok"));
+  assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Ethereum" && item.status === "ok"), JSON.stringify({ diagnostics: data.evmRpcDiagnostics, errors: data.chainErrors }));
   assert.ok(data.evmRpcDiagnostics.some(item => item.chain === "Base" && item.status === "ok"));
   assert.ok(data.pools.some(item => item.chain === "Ethereum" && item.source.includes("Ethereum RPC")));
   assert.ok(data.pools.some(item => item.chain === "Base" && item.source.includes("Base RPC")));
