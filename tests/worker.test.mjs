@@ -1963,6 +1963,76 @@ test("pool history identifies stable observations only with sufficient time and 
   assert.equal(result.newVolumeUSD, 250);
 });
 
+test("pool history detects a sharp decline in normalized activity rate without changing liquidity thresholds", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6,
+    lastIntervalSwapCount: 10,
+    lastIntervalVolumeUSD: 500,
+    lastIntervalGapSeconds: 60
+  };
+  const result = classifyPoolHistory(historyPool({
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1020,
+    swapCountSincePoolCreation: 21,
+    buysSincePoolCreation: 15,
+    sellsSincePoolCreation: 6
+  }), previous, 1_060_000);
+  assert.equal(result.activityTrendStatus, "sharp_decline");
+  assert.equal(result.activityChangePct, -96);
+  assert.equal(result.status, "review");
+  assert.ok(result.reasons.some(reason => reason.includes("成交持续性预警")));
+});
+
+test("pool history marks a previously active pool as stalled when the next interval has no swaps", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6,
+    lastIntervalSwapCount: 8,
+    lastIntervalVolumeUSD: 300,
+    lastIntervalGapSeconds: 60
+  };
+  const result = classifyPoolHistory(historyPool({
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  }), previous, 1_060_000);
+  assert.equal(result.activityTrendStatus, "stalled");
+  assert.equal(result.status, "review");
+  assert.ok(result.reasons.some(reason => reason.includes("上一观察区间有持续成交")));
+});
+
+test("pool history does not infer activity decay without a sufficiently active prior interval", () => {
+  const previous = {
+    observedAt: 1_000_000,
+    liquidityUSDApprox: 20000,
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6,
+    lastIntervalSwapCount: 2,
+    lastIntervalVolumeUSD: 20,
+    lastIntervalGapSeconds: 60
+  };
+  const result = classifyPoolHistory(historyPool({
+    volumeSincePoolCreationUSD: 1000,
+    swapCountSincePoolCreation: 20,
+    buysSincePoolCreation: 14,
+    sellsSincePoolCreation: 6
+  }), previous, 1_060_000);
+  assert.equal(result.activityTrendStatus, "insufficient");
+  assert.equal(result.activityChangePct, null);
+});
+
 test("pool history marks large liquidity drops as high risk", () => {
   const previous = {
     observedAt: 1_000_000,

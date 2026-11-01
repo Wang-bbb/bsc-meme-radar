@@ -157,11 +157,52 @@ export function classifyPoolHistory(pool, previous, nowMs = Date.now()) {
   }
   const newSwapCount = currentSwaps - previousSwaps;
   const newVolumeUSD = Math.round((currentVolume - previousVolume) * 100) / 100;
-  if (newSwapCount === 0 && newVolumeUSD <= 0.01) reasons.push("两次观察间没有新增成交活动");
+
+  // Compare activity rates between consecutive observation intervals, not raw
+  // deltas: scan gaps can vary. Only alert when the preceding interval had a
+  // meaningful sample; a sparse/unknown baseline must remain insufficient.
+  const priorIntervalSwaps = Number(previous.lastIntervalSwapCount);
+  const priorIntervalVolume = Number(previous.lastIntervalVolumeUSD);
+  const priorIntervalGap = Number(previous.lastIntervalGapSeconds);
+  const priorActivityBaselinePresent =
+    previous.lastIntervalSwapCount != null && previous.lastIntervalVolumeUSD != null &&
+    previous.lastIntervalGapSeconds != null &&
+    Number.isInteger(priorIntervalSwaps) && priorIntervalSwaps >= 4 &&
+    Number.isFinite(priorIntervalVolume) && priorIntervalVolume >= 100 &&
+    Number.isFinite(priorIntervalGap) && priorIntervalGap >= 60;
+  let activityTrendStatus = "insufficient";
+  let activityChangePct = null;
+  if (priorActivityBaselinePresent && observationGapSeconds >= 60) {
+    const previousSwapRate = priorIntervalSwaps / priorIntervalGap;
+    const previousVolumeRate = priorIntervalVolume / priorIntervalGap;
+    const currentSwapRate = newSwapCount / observationGapSeconds;
+    const currentVolumeRate = Math.max(0, newVolumeUSD) / observationGapSeconds;
+    const activityRatio = Math.min(
+      previousSwapRate > 0 ? currentSwapRate / previousSwapRate : 1,
+      previousVolumeRate > 0 ? currentVolumeRate / previousVolumeRate : 1
+    );
+    activityChangePct = Math.round((activityRatio - 1) * 10000) / 100;
+    activityTrendStatus = activityRatio <= 0.25 ? "sharp_decline"
+      : activityRatio <= 0.5 ? "declining" : "stable";
+    if (activityTrendStatus === "sharp_decline") reasons.push("成交持续性预警：新增成交笔数或成交额速率较上一有效观察区间下降75%或以上");
+    else if (activityTrendStatus === "declining") reasons.push("成交持续性提示：新增成交笔数或成交额速率较上一有效观察区间下降50%或以上");
+  }
+
+  if (newSwapCount === 0 && newVolumeUSD <= 0.01) {
+    reasons.push(priorActivityBaselinePresent
+      ? "成交衰退预警：上一观察区间有持续成交，本区间没有新增成交"
+      : "两次观察间没有新增成交活动");
+    if (priorActivityBaselinePresent) activityTrendStatus = "stalled";
+  }
   const status = liquidityChangePct <= -50 ? "high_risk"
-    : liquidityChangePct <= -30 || (newSwapCount === 0 && newVolumeUSD <= 0.01) ? "review"
+    : liquidityChangePct <= -30 || activityTrendStatus === "sharp_decline" ||
+      activityTrendStatus === "declining" || activityTrendStatus === "stalled" ||
+      (newSwapCount === 0 && newVolumeUSD <= 0.01) ? "review"
     : reasons.length ? "review" : "stable";
-  return { status, reasons, observationGapSeconds, liquidityChangePct, newSwapCount, newVolumeUSD };
+  return {
+    status, reasons, observationGapSeconds, liquidityChangePct, newSwapCount, newVolumeUSD,
+    activityTrendStatus, activityChangePct
+  };
 }
 async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
   const kv = env && env.RADAR_KV;
@@ -173,6 +214,8 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
       pool.historicalNewSwapCount = null;
       pool.historicalNewVolumeUSD = null;
       pool.historicalObservationGapSeconds = null;
+      pool.historicalActivityTrendStatus = "insufficient";
+      pool.historicalActivityChangePct = null;
     }
     return { status, trackedPoolCount: 0, reason };
   };
@@ -193,6 +236,8 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
     pool.historicalNewSwapCount = history.newSwapCount;
     pool.historicalNewVolumeUSD = history.newVolumeUSD;
     pool.historicalObservationGapSeconds = history.observationGapSeconds;
+    pool.historicalActivityTrendStatus = history.activityTrendStatus || "insufficient";
+    pool.historicalActivityChangePct = history.activityChangePct;
   }
   const lastWriteAt = Number(document && document.updatedAt) || 0;
   const shouldWrite = !document || nowMs - lastWriteAt >= POOL_HISTORY_WRITE_INTERVAL_MS;
@@ -204,13 +249,18 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
     for (const pool of pools) {
       const address = String(pool.pairAddress || pool.pair || "").toLowerCase();
       if (!address) continue;
+      const previous = storedPools[address] || null;
+      const history = classifyPoolHistory(pool, previous, nowMs);
       nextPools[address] = {
         observedAt: nowMs,
         liquidityUSDApprox: pool.liquidityUSDApprox == null ? null : Number(pool.liquidityUSDApprox),
         volumeSincePoolCreationUSD: pool.volumeSincePoolCreationUSD == null ? null : Number(pool.volumeSincePoolCreationUSD),
         swapCountSincePoolCreation: pool.swapCountSincePoolCreation == null ? null : Number(pool.swapCountSincePoolCreation),
         buysSincePoolCreation: pool.buysSincePoolCreation == null ? null : Number(pool.buysSincePoolCreation),
-        sellsSincePoolCreation: pool.sellsSincePoolCreation == null ? null : Number(pool.sellsSincePoolCreation)
+        sellsSincePoolCreation: pool.sellsSincePoolCreation == null ? null : Number(pool.sellsSincePoolCreation),
+        lastIntervalSwapCount: history.newSwapCount,
+        lastIntervalVolumeUSD: history.newVolumeUSD,
+        lastIntervalGapSeconds: history.observationGapSeconds
       };
     }
     const sortedEntries = Object.entries(nextPools).sort((a, b) => Number(b[1].observedAt) - Number(a[1].observedAt)).slice(0, 500);
