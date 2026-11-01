@@ -915,7 +915,7 @@ export default {
       if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
       // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
       const scanKv = env && env.RADAR_KV;
-      const scanCacheKey = "multiscan:solana-stable-v1:" + minutes + ":" + minLiquidity;
+      const scanCacheKey = "multiscan:scope-v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
       if (scanKv && typeof scanKv.get === "function") {
         try {
           const cachedScan = await scanKv.get(scanCacheKey, "json");
@@ -926,11 +926,20 @@ export default {
           }
         } catch (_) {}
       }
-      // Stable mode: keep the multi-chain code and RPC fallbacks available,
-      // but actively query Solana only until Ethereum/Base providers are reliable.
-      const networks = [
-        { id: "solana", name: "Solana", dexChain: "solana" }
+      // Keep every chain available for future restoration, while allowing the
+      // client to request a reduced stable scan scope (for example chains=solana).
+      const availableNetworks = [
+        { id: "solana", name: "Solana", dexChain: "solana" },
+        { id: "eth", name: "Ethereum", dexChain: "ethereum" },
+        { id: "base", name: "Base", dexChain: "base" }
       ];
+      const requestedChains = String(url.searchParams.get("chains") || "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
+      const networks = requestedChains.length
+        ? availableNetworks.filter(network => requestedChains.includes(network.id))
+        : availableNetworks;
+      if (requestedChains.length && networks.length === 0) {
+        return json({ ok: false, error: "chains must include a supported chain: solana, eth, base" }, 400);
+      }
       const results = [];
       const errors = [];
       const chainSources = [];
