@@ -8,7 +8,7 @@
 - 默认最低流动性：约 5,000 USD。
 - 排序：优先池龄最新；同等池龄参考成交量。
 - BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
-- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源。
+- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源；当索引源失败或没有合格池时，使用 Solana JSON-RPC 对 Pump.fun、PumpSwap、Raydium AMM v4/CPMM、Meteora DLMM、Orca Whirlpool 的近期程序交易做只读交叉检查。RPC 线索不等于已验证新池，不会直接进入候选排名。
 - Ethereum / Base：优先使用 GeckoTerminal 索引；索引源无合格池或失败时，可选使用独立 RPC 扫描配置的 Uniswap V2 工厂稳定币直连池（Ethereum: USDT/USDC/DAI；Base: USDC/USDbC/USDT）。该 RPC 兜底仅覆盖一个 V2 工厂，不是全链新池索引。
 - 其他链索引结果显示报价资产符号，但**不代表钱包兑换路径已验证**。
 - 前端合并 BSC 与其他三链结果，并按池龄排序。
@@ -83,3 +83,13 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 - 前三大买家占买入额至少 60%、样本只有买入没有卖出、或重复买家占比较高时给出观察提醒。
 - 不将钱包地址相同解释为同一控制人，不猜测开发者钱包或关联钱包；识别关联资金需要额外链上资金流证据。
 - 索引数据有限、可能限流或缺失；钱包行为指标只作为走势质量补充，不覆盖合约安全门槛，也不触发自动交易。
+
+
+## Solana RPC 独立活动交叉检查（PR #42）
+- 当 GeckoTerminal 没有返回符合条件的池或请求失败时，Worker 会使用 `SOLANA_RPC_URL`（未配置时使用 Solana 公共主网 RPC）抽样检查 Pump.fun、PumpSwap、Raydium AMM v4、Raydium CPMM、Meteora DLMM 和 Orca Whirlpool 程序的近期交易。
+- 每个程序最多查询最近 20 条签名，并最多抽样读取 1 笔交易；单轮最多约 12 次 RPC 请求。诊断会显示扫描程序数、窗口内交易数、抽样交易数、SPL Mint 初始化线索和池初始化日志线索。
+- 这不是完整 Solana 新池索引：目前没有完成各协议的账户布局/指令解码、池地址与 token side 识别、创建时间核验、vault 储备/流动性计算。因此 `candidatePoolsAdded` 固定为 0，Mint/日志线索只用于诊断，不进入原始池数、候选排名或安全通过列表。
+- 要把 RPC 交易线索升级成真实候选，必须逐协议实现并测试池创建指令解码、池账户归属、mint/vault 关联和链上储备读取；未完成前不能用交易签名或 Mint 初始化事件伪装成新池。
+- Solana RPC 429/402 触发共享边缘冷却，避免连续刷新重复请求；5xx 最多重试一次，仍失败则进入短冷却。DexScreener/DexPaprika/GeckoTerminal 的 5xx 也会进入冷却。冷却是限流保护，不代表上游服务恢复。
+- 推荐在 Cloudflare Worker Secret 中配置自己的 `SOLANA_RPC_URL`，以减少公共节点限流；不要把含密钥的 RPC URL 提交到仓库或聊天中。
+- 已知程序 ID 参考：[Raydium 官方程序地址文档](https://github.com/raydium-io/raydium-docs-v1/blob/main/reference/program-addresses.mdx)、[Solana DEX/Launchpad 指令与程序目录](https://github.com/mahfuz67/solana-stream-skill/blob/main/skill/resources.md)。上线前仍需复核官方地址与指令版本。

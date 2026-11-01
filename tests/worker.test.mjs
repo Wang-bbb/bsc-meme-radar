@@ -1327,3 +1327,102 @@ test("early trend score penalizes persistent red-candle structure", async () => 
   assert.ok(data.trendScore.warnings.some(item => item.includes("短线连续收跌")));
   assert.equal(data.trendScore.confidence, 85);
 });
+
+
+test("multiscan cross-checks Solana program activity over RPC without promoting unverified mint hints to pools", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const mint = "So11111111111111111111111111111111111111112";
+  let rpcCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      rpcCalls++;
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") {
+        return response({ jsonrpc: "2.0", id: 1, result: [{
+          signature: "5".repeat(80),
+          blockTime: now - 30,
+          err: null
+        }] });
+      }
+      if (body.method === "getTransaction") {
+        return response({ jsonrpc: "2.0", id: 1, result: {
+          transaction: { message: { instructions: [{
+            program: "spl-token",
+            parsed: { type: "initializeMint", info: { mint } }
+          }] } },
+          meta: {
+            innerInstructions: [],
+            logMessages: ["Program log: Instruction: InitializePool"]
+          }
+        } });
+      }
+      throw new Error("Unexpected Solana RPC method " + body.method);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.pools.length, 0, "RPC transaction hints must not become verified pool candidates");
+  assert.equal(data.solanaRpcDiagnostics.length, 1);
+  const diagnostics = data.solanaRpcDiagnostics[0];
+  assert.equal(diagnostics.status, "ok");
+  assert.equal(diagnostics.coverage, "program-activity-only");
+  assert.equal(diagnostics.candidatePoolsAdded, 0);
+  assert.ok(diagnostics.programsChecked > 0);
+  assert.ok(diagnostics.recentTransactions > 0);
+  assert.ok(diagnostics.mintHints.includes(mint));
+  assert.equal(rpcCalls, 12, "six program signature scans plus at most six transaction samples");
+});
+
+test("Solana RPC discovery stops immediately on HTTP 429 and reports unavailable evidence", async () => {
+  let rpcCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      rpcCalls++;
+      return response({ error: "rate limited" }, 429);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.pools.length, 0);
+  assert.equal(data.solanaRpcDiagnostics[0].status, "error");
+  assert.match(data.solanaRpcDiagnostics[0].error, /HTTP 429/);
+  assert.equal(rpcCalls, 1, "do not hammer the RPC after its first 429");
+});
+
+
+test("Solana RPC applies cooldown when a 5xx retry is followed by HTTP 429", async () => {
+  let rpcCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      rpcCalls++;
+      return response({ error: "upstream unavailable" }, rpcCalls === 1 ? 503 : 429);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.solanaRpcDiagnostics[0].status, "error");
+  assert.match(data.solanaRpcDiagnostics[0].error, /HTTP 429/);
+  assert.equal(rpcCalls, 2, "retry only once, then stop on rate limit");
+});
