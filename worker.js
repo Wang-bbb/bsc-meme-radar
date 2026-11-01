@@ -2925,6 +2925,7 @@ export default {
         createdPairsFound: creationLogs.length + v3CreationLogs.length,
         freshPairsFound: fresh.length + v3Fresh.length,
         candidateFilterDiagnostics: candidateFilterDiagnostics,
+        earlySignalScoreVersion: "heuristic-v2",
         count: pools.length,
         pairs: pairs,
         pools: pools,
