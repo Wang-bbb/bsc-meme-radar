@@ -1724,7 +1724,7 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("旧 *1h 字段仅为兼容保留"));
   assert.ok(source.includes("buy_only_no_sell_confirmation"));
   assert.ok(source.includes("strong_buy_sell_imbalance"));
-  assert.ok(source.includes("swapStatsStatus: swapError || v3SwapError ? \"partial_or_unavailable\" : \"available\""));
+  assert.ok(source.includes("swapStatsStatus: (valid.length + v3Valid.length) === 0 ? \\"not_needed_no_eligible_pools\\""));
   assert.ok(source.includes("swapStatsByDexVersion"));
   assert.ok(source.includes('earlySignalScoreVersion: "heuristic-v2"'));
   assert.ok(source.includes("earlySignalScore = Math.min(earlySignalScore, 49)"));
