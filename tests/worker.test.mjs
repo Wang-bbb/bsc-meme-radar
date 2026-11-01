@@ -1698,3 +1698,14 @@ test("PumpSwap decoder rejects vaults whose parsed mint does not match create_po
   assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.pumpSwap.skipped, 1);
 });
 
+
+
+test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query failure", () => {
+  const source = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
+  assert.ok(!source.includes("await mapLimit(allSwapBlocks"),
+    "swap history must not trigger one block-time RPC request per distinct swap block");
+  assert.ok(source.includes("volume1hUSD: swapError ? null : volume1hUSD"));
+  assert.ok(source.includes("buys1h: swapError ? null : buys1h"));
+  assert.ok(source.includes("sells1h: swapError ? null : sells1h"));
+  assert.ok(source.includes("swapStatsStatus: swapError ? \"unavailable\" : \"available\""));
+});
