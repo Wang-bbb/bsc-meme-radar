@@ -69,6 +69,16 @@ export function classifyPriorityWatchlist(pool) {
     watchlistExclusionReasons: eligible ? [] : reasons.length ? reasons : ["尚未满足优先观察名单的全部条件"]
   };
 }
+// Explain liquidity rejection without conflating a successful zero-reserve read
+// with an RPC failure. This is diagnostic only; it does not relax the liquidity gate.
+export function classifyLiquidityDiagnostic(pool, minLiquidity = 5000) {
+  if (pool && pool._error) return "read_error";
+  if (!pool || !Number.isFinite(pool.liquidityUSD) || !Number.isFinite(pool.usdtReserve)) return "missing_liquidity";
+  if (pool.usdtReserve <= 0) return "zero_usdt_reserve";
+  if (pool.liquidityUSD >= minLiquidity) return "eligible";
+  return "below_min_liquidity";
+}
+
 // GoPlus responses are cached per chain/token to reduce public API rate limits.
 // Successful security records live for 5 minutes; rate-limit responses cool down for 2 minutes.
 async function fetchGoPlusCached(env, endpoint, cacheKey) {
@@ -2782,9 +2792,10 @@ export default {
         freshWithinWindow: freshRows.length,
         inspected: inspected.length,
         notInspectedWithinPerScanCap: Math.max(0, freshRows.length - inspected.length),
-        readErrors: inspected.filter((p) => p && p._error).length,
-        belowMinLiquidity: inspected.filter((p) => p && !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD < minLiquidity).length,
-        missingLiquidity: inspected.filter((p) => p && !p._error && !Number.isFinite(p.liquidityUSD)).length,
+        readErrors: inspected.filter((p) => classifyLiquidityDiagnostic(p, minLiquidity) === "read_error").length,
+        zeroUsdtReserve: inspected.filter((p) => classifyLiquidityDiagnostic(p, minLiquidity) === "zero_usdt_reserve").length,
+        belowMinLiquidity: inspected.filter((p) => classifyLiquidityDiagnostic(p, minLiquidity) === "below_min_liquidity").length,
+        missingLiquidity: inspected.filter((p) => classifyLiquidityDiagnostic(p, minLiquidity) === "missing_liquidity").length,
         eligibleAfterLiquidityFilter: eligible.length,
         inspectedPools: inspected.slice(0, 20).map((p) => ({
           dex: p && p.dex || null,
@@ -2793,9 +2804,7 @@ export default {
           symbol: p && p.symbol || null,
           liquidityUSD: p && Number.isFinite(p.liquidityUSD) ? p.liquidityUSD : null,
           usdtReserve: p && Number.isFinite(p.usdtReserve) ? p.usdtReserve : null,
-          status: p && p._error ? "read_error"
-            : p && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity ? "eligible"
-            : p && Number.isFinite(p.liquidityUSD) ? "below_min_liquidity" : "missing_liquidity",
+          status: classifyLiquidityDiagnostic(p, minLiquidity),
           error: p && p._error ? String(p._error).slice(0, 240) : null
         }))
       });
