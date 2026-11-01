@@ -34,6 +34,7 @@ export function classifyPriorityWatchlist(pool) {
   const reasons = [];
   const swapCount = pool.swapCountSincePoolCreation;
   const priceChange = pool.tradePriceChangeSincePoolCreationPct;
+  const buyCount = pool.buysSincePoolCreation;
   const sellCount = pool.sellsSincePoolCreation;
   const ratio = pool.buySellVolumeRatioSincePoolCreation;
 
@@ -41,6 +42,16 @@ export function classifyPriorityWatchlist(pool) {
     reasons.push("成交数据不可用或不完整");
   } else if (swapCount < 8) {
     reasons.push("成交样本不足8笔");
+  }
+  // Count integrity is a data-quality gate: a candidate cannot be promoted if
+  // buy/sell counts are missing, negative, non-integers, or do not sum to swaps.
+  if (swapCount != null && (
+    !Number.isInteger(buyCount) || buyCount < 0 ||
+    !Number.isInteger(sellCount) || sellCount < 0 ||
+    !Number.isInteger(swapCount) || swapCount < 0 ||
+    buyCount + sellCount !== swapCount
+  )) {
+    reasons.push("买卖笔数与总成交笔数不一致或数据不完整");
   }
   if (sellCount === 0) reasons.push("尚无卖出成交验证");
   if (pool.tradeFlowStatus === "sell_volume_dominant") reasons.push("卖出成交额高于买入");
