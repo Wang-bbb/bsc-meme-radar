@@ -99,6 +99,9 @@ function sortCandidatesByTrendQuality(candidates){
     return ageA-ageB||Number(b.volume1hUSD||0)-Number(a.volume1hUSD||0);
   });
 }
+function tradeStatsPeriodLabel(pool){
+  return pool&&pool.swapStatsPeriod==="since_pool_creation"?"建池以来":"近1小时";
+}
 function tradeSizeRiskSummary(pool){
   const metrics=[];
   const add=(label,value,suffix)=>{
@@ -378,6 +381,7 @@ async function scan(){
         :"";
       const goPlusError=sec.holderProviderMessage?"GoPlus返回信息："+sec.holderProviderMessage:"";
       const honeypotBody=sec.honeypotResponseBody?"Honeypot响应正文："+sec.honeypotResponseBody:"";
+      const tradePeriodLabel=tradeStatsPeriodLabel(p);
       const tradeSizeSummary=tradeSizeRiskSummary(p);
       const tradeSizeLine=tradeSizeSummary.metrics.length
         ? '<div class="muted">成交结构（建池以来）：'+esc(tradeSizeSummary.metrics.join(" · "))+'</div>' : "";
@@ -400,9 +404,9 @@ async function scan(){
         '<div class="muted" style="margin-top:6px;word-break:break-all">'+esc(p.tokenAddress||"合约地址暂缺")+'</div>'+
         '<div class="stats">'+
         '<div class="stat"><small>估算流动性 USD</small><strong>$'+fmt(p.liquidityUSDApprox)+'</strong></div>'+
-        '<div class="stat"><small>近1小时成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
-        '<div class="stat"><small>买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
-        '<div class="stat"><small>价格变化</small><strong>'+price+'</strong></div></div>'+
+        '<div class="stat"><small>'+tradePeriodLabel+'成交量 USD</small><strong>$'+fmt(p.volume1hUSD)+'</strong></div>'+
+        '<div class="stat"><small>'+tradePeriodLabel+'买入 / 卖出次数</small><strong>'+(p.buys1h==null?"—":fmt(p.buys1h)+" / "+fmt(p.sells1h))+'</strong></div>'+
+        '<div class="stat"><small>'+(p.swapStatsPeriod==="since_pool_creation"?"建池以来首末成交价变化":"近1小时价格变化")+'</small><strong>'+price+'</strong></div></div>'+
         '<div class="muted">短周期价格变化：5分钟 '+(p.priceChange5m==null?"—":pct(p.priceChange5m))+' · 15分钟 '+(p.priceChange15m==null?"—":pct(p.priceChange15m))+'</div>'+
         tradeSizeLine+tradeSizeWarnings+
         '<div class="muted">观察区间高点回撤（'+esc(p.marketHistoryCandleCount==null?'—':p.marketHistoryCandleCount)+'根）：'+(p.drawdownFromHighPct==null?"—":pct(p.drawdownFromHighPct))+' · K线：'+esc(p.marketHistoryStatus||"未检查")+'</div>'+
