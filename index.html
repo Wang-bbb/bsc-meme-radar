@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101827">
 <link rel="manifest" href="./manifest.json">
-<title>多链 Meme Radar</title>
+<title>Solana + BSC Meme Radar</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#edf4ff;font:15px system-ui,-apple-system,sans-serif}
 header{padding:22px 16px;background:#14233a;border-bottom:1px solid #2b3b52}h1{margin:0 0 5px;font-size:23px}header p,.muted{color:#9aabc4;font-size:13px}
@@ -23,18 +23,18 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 </style>
 </head>
 <body>
-<header><h1>🛰️ 多链 Meme Radar</h1><p>只读观察 · BSC / Solana / Ethereum / Base · 早期新池优先</p></header>
+<header><h1>🛰️ Meme Radar</h1><p>稳定模式 · Solana 主扫描 / BSC 保留 · 只读观察</p></header>
 <main>
 <div class="bar">
 <button id="refresh">↻ 刷新扫描</button>
 <select id="age"><option value="15">最近 15 分钟</option><option value="30">最近 30 分钟</option><option value="60">最近 60 分钟</option></select>
 <button id="notify">开启通知权限</button>
 </div>
-<div id="status" class="status">数据源：BSC 链上扫描 + Solana / Ethereum / Base 第三方新池索引。点击刷新开始扫描。</div>
+<div id="status" class="status">数据源：Solana 第三方新池索引 + BSC 链上扫描。Ethereum / Base 暂停主动扫描，后续恢复。点击刷新开始扫描。</div>
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
-<b>数据说明：</b>BSC 使用已接入 DEX 的链上新池扫描；Solana、Ethereum、Base 优先使用 GeckoTerminal 新池索引。若 GeckoTerminal 限流，则备用使用 DexScreener 最新 Token Profile 名单反查交易池，并核验池龄与流动性；该备用名单覆盖不完整，不代表完整新池扫描。按池龄从新到旧排序，最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制；不能保证捕获所有新池。BSC 旧接口扫描 BSC USDT 直连池；Solana、Ethereum、Base 仅展示报价资产符号，不判断 USDT 直连，也不验证钱包兑换路径。
-<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、其他链各 1 个候选的 1 分钟 K 线；未抽查或 K 线不足的币进入待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
+<b>数据说明：</b>当前稳定模式主动扫描 Solana，并保留 BSC 链上新池扫描；Ethereum / Base 暂停主动请求以避免持续限流噪声，原有代码和 RPC 配置保留，后续可逐链恢复。Solana 优先使用 GeckoTerminal 新池索引，限流时尝试 DexScreener / DexPaprika 备用源；备用名单覆盖不完整，不代表完整新池扫描。最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制，不能保证捕获所有新池。BSC 扫描已接入 DEX 的 USDT 直连池；Solana 显示报价资产，不代表钱包兑换路径已验证。
+<br><b>行情风控：</b>每轮最多抽查 BSC 2 个、Solana 1 个候选的 1 分钟 K 线；未抽查或 K 线不足的币进入待复核。观察区间高点回撤达到20%转复核，达到35%拦截。该回撤基于池子已存在的K线区间，不保证覆盖完整60分钟。<br><b>风险提示：</b>发现新池不代表代币安全。请自行核实合约权限、持币集中度、卖出限制及流动性变化。不会自动交易，不需要钱包私钥或助记词。
 </div>
 </main>
 <script>
@@ -127,7 +127,7 @@ async function scan(){
   lastScanStartedAt=now;
   $("refresh").disabled=true;
   $("age").disabled=true;
-  $("status").textContent="正在扫描四条链并进行安全检测…";
+  $("status").textContent="正在扫描 Solana 和 BSC，并进行安全检测…";
   $("cards").innerHTML='<div class="empty">扫描中…</div>';
   $("review-cards").innerHTML="";
   $("blocked-cards").innerHTML="";
@@ -142,7 +142,7 @@ async function scan(){
     const bsc=settled[0].status==="fulfilled"?settled[0].value:null;
     const multi=settled[1].status==="fulfilled"?settled[1].value:null;
     if(!bsc)failures.push("BSC："+(settled[0].reason?.message||"扫描失败"));
-    if(!multi)failures.push("Solana/Ethereum/Base："+(settled[1].reason?.message||"扫描失败"));
+    if(!multi)failures.push("Solana："+(settled[1].reason?.message||"扫描失败"));
     else if(multi.complete===false){
       (multi.chainErrors||[]).forEach(x=>failures.push((x.chain||"多链")+"："+(x.error||"索引请求失败")));
       if(!(multi.chainErrors||[]).length)failures.push("Solana/Ethereum/Base：返回了不完整数据");
@@ -153,9 +153,9 @@ async function scan(){
     const ageValue=p=>p.ageMinutes==null||!Number.isFinite(Number(p.ageMinutes))?Number.POSITIVE_INFINITY:Number(p.ageMinutes);
     all.sort((a,b)=>ageValue(a)-ageValue(b));
     // Keep public GeckoTerminal candle calls within a small per-refresh budget:
-    // at most two BSC pools and one pool per other chain.
+    // at most two BSC pools and one Solana pool.
     const historyTargets=[];
-    for(const chain of ["BSC","Solana","Ethereum","Base"]){
+    for(const chain of ["BSC","Solana"]){
       const candidates=all.filter(p=>p.chain===chain&&p.pairAddress&&p.tokenAddress&&Number.isFinite(ageValue(p))&&ageValue(p)>=3);
       candidates.sort((a,b)=>Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0));
       historyTargets.push(...candidates.slice(0,chain==="BSC"?2:1));
@@ -284,7 +284,7 @@ async function scan(){
       try{await navigator.clipboard.writeText(value);a.textContent="已复制";}catch(_){a.textContent="复制失败";}
     }));
     const unverified=review.length;
-    $("status").textContent=(failures.length?"部分链扫描失败："+failures.join("；")+"。":(multi?.fallbackChains?.length?"部分链已切换备用索引。":"四链扫描完成。"))+
+    $("status").textContent=(failures.length?"部分链扫描失败："+failures.join("；")+"。":(multi?.fallbackChains?.length?"Solana 已切换备用索引。":"Solana + BSC 扫描完成。"))+
       " 原始池 "+all.length+"；通过安全筛查 "+checked.length+"；待复核 "+unverified+"；高危剔除 "+blocked.length+"。"+
       "仅对每条链最早的5个候选执行本轮安全检测，未检查的币不会进入通过筛查列表。"+
       (multi?.chainErrors?.length?"；索引错误："+multi.chainErrors.map(x=>x.chain).join(", ")+"；失败链未返回有效数据，零结果不代表没有新池。":"")+
