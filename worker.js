@@ -1126,7 +1126,8 @@ function findRaydiumCpmmInitializeInstructions(transaction) {
   return instructions.filter(instruction => {
     if (solanaInstructionProgramId(instruction, keys) !== SOLANA_RAYDIUM_CPMM_PROGRAM) return false;
     const data = decodeSolanaBase58(instruction && instruction.data);
-    return Array.isArray(data) && SOLANA_RAYDIUM_CPMM_INITIALIZE_DISCRIMINATOR.every((byte, index) => data[index] === byte);
+    return Array.isArray(data) && data.length >= 32 &&
+      SOLANA_RAYDIUM_CPMM_INITIALIZE_DISCRIMINATOR.every((byte, index) => data[index] === byte);
   }).map(instruction => ({
     programId: SOLANA_RAYDIUM_CPMM_PROGRAM,
     accounts: solanaInstructionAccountKeys(instruction, keys)
