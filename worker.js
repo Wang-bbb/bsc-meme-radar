@@ -27,6 +27,42 @@ const HEADERS = {
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
 
+export function calculateTradeSizeRiskMetrics(input) {
+  const finiteNonNegative = (value) => value != null && value !== "" &&
+    Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+  const ageMinutes = finiteNonNegative(input && input.ageMinutes);
+  const liquidityUSD = finiteNonNegative(input && input.liquidityUSD);
+  const volumeUSD = finiteNonNegative(input && input.volumeUSD);
+  const buyVolumeUSD = finiteNonNegative(input && input.buyVolumeUSD);
+  const sellVolumeUSD = finiteNonNegative(input && input.sellVolumeUSD);
+  const buys = finiteNonNegative(input && input.buys);
+  const sells = finiteNonNegative(input && input.sells);
+  const volumeToLiquidityRatio = volumeUSD != null && liquidityUSD > 0
+    ? volumeUSD / liquidityUSD : null;
+  const averageBuyTradeUSD = buyVolumeUSD != null && buys > 0 ? buyVolumeUSD / buys : null;
+  const averageSellTradeUSD = sellVolumeUSD != null && sells > 0 ? sellVolumeUSD / sells : null;
+  const sellToBuyAverageTradeSizeRatio = averageBuyTradeUSD > 0 && averageSellTradeUSD != null
+    ? averageSellTradeUSD / averageBuyTradeUSD : null;
+  const flags = [];
+  if (ageMinutes != null && ageMinutes <= 30 && volumeToLiquidityRatio != null &&
+      volumeToLiquidityRatio >= 20) {
+    flags.push("建池30分钟内累计成交额达到估算流动性的20倍，高换手需复核");
+  }
+  if (buys != null && sells != null && buys >= 20 && sells >= 10 &&
+      sellToBuyAverageTradeSizeRatio != null && sellToBuyAverageTradeSizeRatio >= 2.5) {
+    flags.push("平均卖出单笔金额达到平均买入的2.5倍以上，存在大额卖出压力需复核");
+  }
+  return {
+    volumeToLiquidityRatioSincePoolCreation: volumeToLiquidityRatio == null
+      ? null : Math.round(volumeToLiquidityRatio * 100) / 100,
+    averageBuyTradeUSD: averageBuyTradeUSD == null ? null : Math.round(averageBuyTradeUSD * 100) / 100,
+    averageSellTradeUSD: averageSellTradeUSD == null ? null : Math.round(averageSellTradeUSD * 100) / 100,
+    sellToBuyAverageTradeSizeRatio: sellToBuyAverageTradeSizeRatio == null
+      ? null : Math.round(sellToBuyAverageTradeSizeRatio * 100) / 100,
+    flags
+  };
+}
+
 // Conservative priority-watchlist gate. Keep all liquidity-qualified pools in
 // the diagnostic result, but only promote candidates with adequate two-way
 // trade evidence and no obvious chase/sell-pressure flags.
@@ -67,6 +103,17 @@ export function classifyPriorityWatchlist(pool) {
   }
   if (sellCount === 0) reasons.push("尚无卖出成交验证");
   if (pool.tradeFlowStatus === "sell_volume_dominant") reasons.push("卖出成交额高于买入");
+  const ageMinutes = pool.ageMinutes == null ? null : Number(pool.ageMinutes);
+  const turnoverRatio = pool.volumeToLiquidityRatioSincePoolCreation;
+  if (ageMinutes != null && Number.isFinite(ageMinutes) && ageMinutes <= 30 &&
+      turnoverRatio != null && Number.isFinite(Number(turnoverRatio)) && Number(turnoverRatio) >= 20) {
+    reasons.push("建池30分钟内累计成交额达到估算流动性的20倍，高换手需复核");
+  }
+  const avgSellRatio = pool.sellToBuyAverageTradeSizeRatio;
+  if (Number(buyCount) >= 20 && Number(sellCount) >= 10 &&
+      avgSellRatio != null && Number.isFinite(Number(avgSellRatio)) && Number(avgSellRatio) >= 2.5) {
+    reasons.push("平均卖出单笔金额达到平均买入的2.5倍以上，存在大额卖出压力需复核");
+  }
   if (ratio != null && ratio >= 4 && sellCount > 0) reasons.push("买卖成交额严重失衡");
 
   if (priceChange == null || !Number.isFinite(Number(priceChange))) {
@@ -3177,11 +3224,17 @@ export default {
           : sells1h === 0 ? "buy_only_no_sell_confirmation"
           : buySellVolumeRatio >= 4 ? "strong_buy_sell_imbalance"
           : sellVolume1hUSD > buyVolume1hUSD ? "sell_volume_dominant" : "mixed_flow";
+        const tradeSizeRisk = calculateTradeSizeRiskMetrics({
+          ageMinutes: (latestTime - p.createdAt) / 60000,
+          liquidityUSD: p.liquidityUSD, volumeUSD: volume1hUSD,
+          buyVolumeUSD: buyVolume1hUSD, sellVolumeUSD: sellVolume1hUSD,
+          buys: buys1h, sells: sells1h
+        });
 
         // Heuristic triage only: this is not a security audit or a buy signal.
         // Keep unavailable chain metrics unknown instead of treating them as zero.
         const earlySignalReasons = [];
-        const earlyRiskFlags = [];
+        const earlyRiskFlags = [...tradeSizeRisk.flags];
         let earlySignalScore = swapError ? null : 50;
         if (!swapError) {
           const swapCount = buys1h + sells1h;
@@ -3241,6 +3294,10 @@ export default {
           buyVolumeSincePoolCreationUSD: swapError ? null : buyVolume1hUSD,
           sellVolumeSincePoolCreationUSD: swapError ? null : sellVolume1hUSD,
           buySellVolumeRatioSincePoolCreation: swapError ? null : buySellVolumeRatio,
+          volumeToLiquidityRatioSincePoolCreation: swapError ? null : tradeSizeRisk.volumeToLiquidityRatioSincePoolCreation,
+          averageBuyTradeUSD: swapError ? null : tradeSizeRisk.averageBuyTradeUSD,
+          averageSellTradeUSD: swapError ? null : tradeSizeRisk.averageSellTradeUSD,
+          sellToBuyAverageTradeSizeRatio: swapError ? null : tradeSizeRisk.sellToBuyAverageTradeSizeRatio,
           buysSincePoolCreation: swapError ? null : buys1h,
           sellsSincePoolCreation: swapError ? null : sells1h,
           swapCountSincePoolCreation: swapError ? null : buys1h + sells1h,
@@ -3332,8 +3389,14 @@ export default {
           : buySellVolumeRatioSincePoolCreation != null && buySellVolumeRatioSincePoolCreation >= 4
             ? "strong_buy_sell_imbalance"
           : sellVolumeSincePoolCreationUSD > buyVolumeSincePoolCreationUSD ? "sell_volume_dominant" : "mixed_flow";
+        const tradeSizeRisk = calculateTradeSizeRiskMetrics({
+          ageMinutes: (latestTime - p.createdAt) / 60000,
+          liquidityUSD: p.liquidityUSD, volumeUSD: volumeSincePoolCreationUSD,
+          buyVolumeUSD: buyVolumeSincePoolCreationUSD, sellVolumeUSD: sellVolumeSincePoolCreationUSD,
+          buys: buysSincePoolCreation, sells: sellsSincePoolCreation
+        });
         const earlySignalReasons = [];
-        const earlyRiskFlags = [];
+        const earlyRiskFlags = [...tradeSizeRisk.flags];
         let earlySignalScore = v3SwapError ? null : 50;
         if (!v3SwapError) {
           if (swapCount >= 8) { earlySignalScore += 5; earlySignalReasons.push("至少观测到8笔池级成交"); }
@@ -3385,6 +3448,10 @@ export default {
           buyVolumeSincePoolCreationUSD: metric(buyVolumeSincePoolCreationUSD),
           sellVolumeSincePoolCreationUSD: metric(sellVolumeSincePoolCreationUSD),
           buySellVolumeRatioSincePoolCreation: metric(buySellVolumeRatioSincePoolCreation),
+          volumeToLiquidityRatioSincePoolCreation: metric(tradeSizeRisk.volumeToLiquidityRatioSincePoolCreation),
+          averageBuyTradeUSD: metric(tradeSizeRisk.averageBuyTradeUSD),
+          averageSellTradeUSD: metric(tradeSizeRisk.averageSellTradeUSD),
+          sellToBuyAverageTradeSizeRatio: metric(tradeSizeRisk.sellToBuyAverageTradeSizeRatio),
           buysSincePoolCreation: metric(buysSincePoolCreation),
           sellsSincePoolCreation: metric(sellsSincePoolCreation),
           swapCountSincePoolCreation: metric(swapCount),
