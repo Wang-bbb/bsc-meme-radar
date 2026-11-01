@@ -1067,7 +1067,8 @@ test("BSC scan uses a timestamp-bounded window and recognizes the canonical USDT
     }
     if (method === "eth_getLogs") {
       const filter = body.params[0];
-      if (filter.address.toLowerCase() === pancakeV2 && filter.topics[0] === "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9") {
+      const filterAddresses = Array.isArray(filter.address) ? filter.address.map((x) => x.toLowerCase()) : [String(filter.address).toLowerCase()];
+      if (filterAddresses.includes(pancakeV2) && filter.topics[0] === "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9") {
         const pairLog = (quote, token, tx) => ({
           address: pancakeV2,
           topics: [
