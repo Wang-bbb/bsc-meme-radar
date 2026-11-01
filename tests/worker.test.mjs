@@ -854,7 +854,7 @@ test("multiscan explicitly reports missing Ethereum and Base RPC secrets", async
 });
 
 
-test("BSC scan uses a timestamp-bounded window and reports non-USDT quotes diagnostically only", async () => {
+test("BSC scan uses a timestamp-bounded window and recognizes the canonical USDT contract", async () => {
   const latest = 10000;
   const nowSeconds = Math.floor(Date.now() / 1000);
   const wbnb = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
@@ -875,19 +875,27 @@ test("BSC scan uses a timestamp-bounded window and reports non-USDT quotes diagn
     if (method === "eth_getLogs") {
       const filter = body.params[0];
       if (filter.address.toLowerCase() === pancakeV2 && filter.topics[0] === "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9") {
-        return response({ jsonrpc: "2.0", id: 1, result: [{
+        const pairLog = (quote, token, tx) => ({
           address: pancakeV2,
           topics: [
             "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9",
-            padTopic(wbnb), padTopic(meme)
+            padTopic(quote), padTopic(token)
           ],
           data: "0x" + "0".repeat(64) + "0".repeat(64),
           blockNumber: "0x" + latest.toString(16),
-          transactionHash: "0x" + "1".repeat(64),
+          transactionHash: "0x" + tx.repeat(64),
           logIndex: "0x0"
-        }] });
+        });
+        const usdt = "0x55d398326f99059ff775485246999027b3197955";
+        return response({ jsonrpc: "2.0", id: 1, result: [
+          pairLog(wbnb, meme, "1"),
+          pairLog(usdt, meme, "2")
+        ] });
       }
       return response({ jsonrpc: "2.0", id: 1, result: [] });
+    }
+    if (method === "eth_call") {
+      return response({ jsonrpc: "2.0", id: 1, result: "0x" });
     }
     if (method === "eth_getCode") {
       return response({ jsonrpc: "2.0", id: 1, result: "0x6000" });
@@ -898,10 +906,11 @@ test("BSC scan uses a timestamp-bounded window and reports non-USDT quotes diagn
   const data = await res.json();
   assert.equal(data.ok, true);
   assert.equal(data.minutes, 15);
-  assert.equal(data.usdtPoolEventsFound.v2["PancakeSwap V2"], 0);
+  assert.equal(data.usdtPoolEventsFound.v2["PancakeSwap V2"], 1,
+    "the canonical BSC USDT contract must be recognized in PairCreated topics");
   assert.equal(data.quoteAssetDiagnostics.WBNB.total, 1);
-  assert.equal(data.quoteAssetDiagnostics.USDT.total, 0);
-  assert.equal(data.count, 0, "non-USDT diagnostic pools must not enter candidates");
+  assert.equal(data.quoteAssetDiagnostics.USDT.total, 1);
+  assert.equal(data.count, 0, "zero-liquidity pools must not enter candidates");
   assert.ok(data.actualWindowSeconds >= 900);
   assert.ok(data.actualWindowSeconds < 901);
   assert.equal(data.requestedWindowSeconds, 900);
