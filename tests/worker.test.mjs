@@ -1207,13 +1207,16 @@ test("Solana complete legacy mint evidence can complement a complete RugCheck re
 });
 
 
-function makeOhlcvRows() {
+function makeOhlcvRows(options = {}) {
   // End at the final minute of a completed 5-minute bucket so all four
   // comparison buckets have enough observations regardless of wall-clock minute.
   const latest = Math.floor(Date.now() / 300000) * 300 - 60;
   return Array.from({ length: 60 }, (_, index) => {
     const timestamp = latest - (59 - index) * 60;
-    const price = 1 + index * 0.0005 + index * index * 0.000002;
+    const basePrice = 1 + index * 0.0005 + index * index * 0.000002;
+    const price = options.declining && index >= 50
+      ? (1 + 49 * 0.0005 + 49 * 49 * 0.000002) * (1 - (index - 49) * 0.02)
+      : basePrice;
     const volume = index >= 55 ? 30 : 10;
     return [timestamp, price, price * 1.002, price * 0.998, price, volume];
   }).reverse();
