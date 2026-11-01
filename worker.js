@@ -913,6 +913,7 @@ export default {
       const minutes = Number(url.searchParams.get("minutes") || 15);
       const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
       if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
+      const requestedChains = String(url.searchParams.get("chains") || "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
       // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
       const scanKv = env && env.RADAR_KV;
       const scanCacheKey = "multiscan:scope-v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
@@ -933,7 +934,6 @@ export default {
         { id: "eth", name: "Ethereum", dexChain: "ethereum" },
         { id: "base", name: "Base", dexChain: "base" }
       ];
-      const requestedChains = String(url.searchParams.get("chains") || "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
       const networks = requestedChains.length
         ? availableNetworks.filter(network => requestedChains.includes(network.id))
         : availableNetworks;
