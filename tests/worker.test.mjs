@@ -1373,7 +1373,7 @@ test("multiscan cross-checks Solana program activity over RPC without promoting 
   assert.equal(data.solanaRpcDiagnostics.length, 1);
   const diagnostics = data.solanaRpcDiagnostics[0];
   assert.equal(diagnostics.status, "ok");
-  assert.equal(diagnostics.coverage, "raydium-cpmm-initialize-only");
+  assert.equal(diagnostics.coverage, "pumpswap-create-pool-and-raydium-cpmm-initialize");
   assert.equal(diagnostics.candidatePoolsAdded, 0);
   assert.ok(diagnostics.programsChecked > 0);
   assert.ok(diagnostics.recentTransactions > 0);
@@ -1581,3 +1581,120 @@ test("Raydium CPMM pool decoder rejects mismatched vault mint associations", asy
   assert.equal(data.solanaRpcDiagnostics[0].candidatePoolsAdded, 0);
   assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.raydiumCpmm.skipped, 1);
 });
+
+test("Solana RPC adds a PumpSwap pool only after create_pool, pool owner, vault owner, and mint checks", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const pool = "B".repeat(32);
+  const tokenMint = "C".repeat(32);
+  const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const baseVault = "D".repeat(32);
+  const quoteVault = "E".repeat(32);
+  const pumpSwap = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+  const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const keys = Array.from({ length: 19 }, () => "11111111111111111111111111111111");
+  keys[0] = pool; keys[3] = tokenMint; keys[4] = usdc;
+  keys[9] = baseVault; keys[10] = quoteVault; keys[18] = pumpSwap;
+  let rpcCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      rpcCalls++;
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") {
+        return response({ jsonrpc: "2.0", id: 1, result: body.params[0] === pumpSwap
+          ? [{ signature: "7".repeat(80), blockTime: now - 30, err: null }] : [] });
+      }
+      if (body.method === "getTransaction") return response({ jsonrpc: "2.0", id: 1, result: {
+        transaction: { message: { accountKeys: keys.map(pubkey => ({ pubkey })), instructions: [{
+          programIdIndex: 18, accounts: Array.from({ length: 18 }, (_, index) => index),
+          data: "g4xRkfehbgF"
+        }] } }, meta: { err: null, innerInstructions: [], logMessages: ["Program log: Instruction: CreatePool"] }
+      } });
+      if (body.method === "getMultipleAccounts") {
+        assert.deepEqual(body.params[0], [pool, baseVault, quoteVault]);
+        return response({ jsonrpc: "2.0", id: 1, result: { value: [
+          { owner: pumpSwap, data: ["", "base64"] },
+          { owner: tokenProgram, data: { program: "spl-token", parsed: { type: "account", info: {
+            mint: tokenMint, tokenAmount: { amount: "1000000000", decimals: 6, uiAmountString: "1000" }
+          } } } },
+          { owner: tokenProgram, data: { program: "spl-token", parsed: { type: "account", info: {
+            mint: usdc, tokenAmount: { amount: "3000000000", decimals: 6, uiAmountString: "3000" }
+          } } } }
+        ] } });
+      }
+      throw new Error("Unexpected Solana RPC method " + body.method);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.pools.length, 1);
+  const candidate = data.pools[0];
+  assert.equal(candidate.dex, "PumpSwap");
+  assert.equal(candidate.pairAddress, pool);
+  assert.equal(candidate.tokenAddress, tokenMint);
+  assert.equal(candidate.quoteSymbol, "USDC");
+  assert.equal(candidate.liquidityUSDApprox, 6000);
+  assert.equal(candidate.tokenSelectionVerified, true);
+  assert.equal(candidate.marketHistoryStatus, "unavailable");
+  assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.pumpSwap.accountChecks, 1);
+  assert.equal(data.solanaRpcDiagnostics[0].candidatePoolsAdded, 1);
+  assert.equal(rpcCalls, 8, "six program signature scans, one transaction lookup, and one pool/vault account lookup");
+});
+
+test("PumpSwap decoder rejects vaults whose parsed mint does not match create_pool", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const pool = "B".repeat(32);
+  const tokenMint = "C".repeat(32);
+  const wrongMint = "F".repeat(32);
+  const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const baseVault = "D".repeat(32);
+  const quoteVault = "E".repeat(32);
+  const pumpSwap = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+  const tokenProgram = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const keys = Array.from({ length: 19 }, () => "11111111111111111111111111111111");
+  keys[0] = pool; keys[3] = tokenMint; keys[4] = usdc;
+  keys[9] = baseVault; keys[10] = quoteVault; keys[18] = pumpSwap;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-rpc.invalid")) {
+      const body = JSON.parse(init.body);
+      if (body.method === "getSignaturesForAddress") return response({ jsonrpc: "2.0", id: 1, result:
+        body.params[0] === pumpSwap ? [{ signature: "8".repeat(80), blockTime: now - 20, err: null }] : [] });
+      if (body.method === "getTransaction") return response({ jsonrpc: "2.0", id: 1, result: {
+        transaction: { message: { accountKeys: keys.map(pubkey => ({ pubkey })), instructions: [{
+          programIdIndex: 18, accounts: Array.from({ length: 18 }, (_, index) => index),
+          data: "g4xRkfehbgF"
+        }] } }, meta: { err: null, innerInstructions: [], logMessages: [] }
+      } });
+      if (body.method === "getMultipleAccounts") return response({ jsonrpc: "2.0", id: 1, result: { value: [
+        { owner: pumpSwap, data: ["", "base64"] },
+        { owner: tokenProgram, data: { parsed: { type: "account", info: {
+          mint: wrongMint, tokenAmount: { amount: "1000000000", decimals: 6, uiAmountString: "1000" }
+        } } } },
+        { owner: tokenProgram, data: { parsed: { type: "account", info: {
+          mint: usdc, tokenAmount: { amount: "3000000000", decimals: 6, uiAmountString: "3000" }
+        } } } }
+      ] } });
+      throw new Error("Unexpected Solana RPC method " + body.method);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-rpc.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.pools.length, 0, "mismatched vault mint must never become a candidate");
+  assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.pumpSwap.candidatesAdded, 0);
+  assert.equal(data.solanaRpcDiagnostics[0].protocolDecoders.pumpSwap.skipped, 1);
+});
+

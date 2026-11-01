@@ -1055,6 +1055,8 @@ async function solanaRpcCall(rpcUrl, method, params) {
 }
 
 
+const SOLANA_PUMPSWAP_CREATE_POOL_DISCRIMINATOR = [233, 146, 209, 142, 207, 104, 64, 188];
+const SOLANA_PUMPSWAP_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const SOLANA_RAYDIUM_CPMM_INITIALIZE_DISCRIMINATOR = [175, 175, 109, 31, 13, 152, 155, 237];
 const SOLANA_RAYDIUM_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 const SOLANA_STABLE_QUOTES = [
@@ -1132,6 +1134,93 @@ function findRaydiumCpmmInitializeInstructions(transaction) {
     programId: SOLANA_RAYDIUM_CPMM_PROGRAM,
     accounts: solanaInstructionAccountKeys(instruction, keys)
   }));
+}
+
+
+function findPumpSwapCreatePoolInstructions(transaction) {
+  if (!transaction || !transaction.meta || transaction.meta.err) return [];
+  const message = transaction.transaction && transaction.transaction.message;
+  const keys = solanaTransactionAccountKeys(transaction);
+  const instructions = [
+    ...(Array.isArray(message && message.instructions) ? message.instructions : []),
+    ...(Array.isArray(transaction.meta.innerInstructions)
+      ? transaction.meta.innerInstructions.flatMap(row => row.instructions || []) : [])
+  ];
+  return instructions.filter(instruction => {
+    if (solanaInstructionProgramId(instruction, keys) !== SOLANA_PUMPSWAP_PROGRAM) return false;
+    const data = decodeSolanaBase58(instruction && instruction.data);
+    return Array.isArray(data) && data.length >= 8 &&
+      SOLANA_PUMPSWAP_CREATE_POOL_DISCRIMINATOR.every((byte, index) => data[index] === byte);
+  }).map(instruction => ({
+    programId: SOLANA_PUMPSWAP_PROGRAM,
+    accounts: solanaInstructionAccountKeys(instruction, keys)
+  }));
+}
+
+async function decodePumpSwapPool(rpcUrl, instruction, blockTime, nowSeconds, minutes, minLiquidity) {
+  // Official PumpSwap create_pool account order: pool=0, base_mint=3,
+  // quote_mint=4, pool_base_token_account=9, pool_quote_token_account=10.
+  const accounts = instruction && instruction.accounts;
+  if (!Array.isArray(accounts) || accounts.length < 18) return { status: "skipped", reason: "create_pool account list is incomplete" };
+  const [poolAddress, baseMint, quoteMint, baseVaultAddress, quoteVaultAddress] =
+    [accounts[0], accounts[3], accounts[4], accounts[9], accounts[10]];
+  if (![poolAddress, baseMint, quoteMint, baseVaultAddress, quoteVaultAddress].every(value =>
+    typeof value === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value))) {
+    return { status: "skipped", reason: "create_pool account keys are invalid" };
+  }
+  const ageMinutes = (nowSeconds - Number(blockTime)) / 60;
+  if (!Number.isFinite(ageMinutes) || ageMinutes < 0 || ageMinutes > minutes) {
+    return { status: "skipped", reason: "pool creation timestamp is outside the requested window" };
+  }
+  const rows = await solanaRpcCall(rpcUrl, "getMultipleAccounts", [
+    [poolAddress, baseVaultAddress, quoteVaultAddress],
+    { encoding: "jsonParsed", commitment: "confirmed" }
+  ]);
+  const values = rows && rows.value;
+  if (!Array.isArray(values) || values.length !== 3 || values.some(value => !value)) {
+    return { status: "skipped", reason: "pool or vault account data is unavailable" };
+  }
+  const [poolAccount, baseVaultAccount, quoteVaultAccount] = values;
+  if (poolAccount.owner !== SOLANA_PUMPSWAP_PROGRAM) {
+    return { status: "skipped", reason: "pool account owner does not match PumpSwap" };
+  }
+  const baseVault = parseSolanaTokenVault(baseVaultAccount, baseMint);
+  const quoteVault = parseSolanaTokenVault(quoteVaultAccount, quoteMint);
+  if (!baseVault || !quoteVault) {
+    return { status: "skipped", reason: "vault owner, parsed token data, or mint association could not be verified" };
+  }
+  const baseQuote = SOLANA_STABLE_QUOTES.find(asset => asset.address === baseMint);
+  const quoteQuote = SOLANA_STABLE_QUOTES.find(asset => asset.address === quoteMint);
+  if (Boolean(baseQuote) === Boolean(quoteQuote)) {
+    return { status: "skipped", reason: "pool does not contain exactly one supported stablecoin quote mint" };
+  }
+  const quote = baseQuote || quoteQuote;
+  const quoteReserve = baseQuote ? baseVault.amount : quoteVault.amount;
+  const liquidityUSDApprox = quoteReserve * 2;
+  if (!Number.isFinite(liquidityUSDApprox) || liquidityUSDApprox < minLiquidity) {
+    return { status: "skipped", reason: "verified stablecoin-side reserve is below the liquidity threshold" };
+  }
+  const tokenAddress = baseQuote ? quoteMint : baseMint;
+  return {
+    status: "candidate",
+    pool: {
+      chain: "Solana", chainId: "solana", dex: "PumpSwap",
+      symbol: tokenAddress.slice(0, 5) + "…" + tokenAddress.slice(-4),
+      name: "Unknown token", tokenAddress, tokenSelectionVerified: true, tokenSelectionNote: "",
+      quoteSymbol: quote.symbol, quoteAddress: quote.address,
+      pairAddress: poolAddress,
+      poolUrl: "https://dexscreener.com/solana/" + poolAddress,
+      dexScreenerUrl: "https://dexscreener.com/solana/" + poolAddress,
+      createdAt: new Date(Number(blockTime) * 1000).toISOString(),
+      ageMinutes: Math.round(ageMinutes * 10) / 10,
+      liquidityUSDApprox, volume1hUSD: null, buys1h: null, sells1h: null,
+      priceChange1h: null, priceChange5m: null, priceChange15m: null,
+      usdtRouteStatus: quote.symbol === "USDT" ? "direct_pool_only" : "not_verified",
+      source: "Solana RPC · PumpSwap create_pool + pool/vault account verification",
+      marketHistoryStatus: "unavailable",
+      riskNote: "已核对 PumpSwap create_pool 指令、池账户程序归属、双侧 Vault Token 程序及 Mint 关联；流动性按稳定币侧储备×2估算，成交/K线/钱包路由/卖出能力尚未验证，必须待复核。"
+    }
+  };
 }
 
 function extractSolanaTransactionHints(transaction, programName, signature, blockTime) {
@@ -1260,7 +1349,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     chain: "Solana",
     provider: "Solana JSON-RPC · Pump.fun / PumpSwap / Raydium / Meteora / Orca",
     status: "partial",
-    coverage: "raydium-cpmm-initialize-only",
+    coverage: "pumpswap-create-pool-and-raydium-cpmm-initialize",
     programsChecked: 0,
     recentTransactions: 0,
     sampledTransactions: 0,
@@ -1269,6 +1358,13 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     samples: [],
     candidatePoolsAdded: 0,
     protocolDecoders: {
+      pumpSwap: {
+        status: "limited",
+        createPoolInstructions: 0,
+        accountChecks: 0,
+        candidatesAdded: 0,
+        skipped: 0
+      },
       raydiumCpmm: {
         status: "limited",
         initializeInstructions: 0,
@@ -1277,7 +1373,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
         skipped: 0
       }
     },
-    note: "仅将通过 Raydium CPMM 初始化指令、池账户归属和双侧 Vault/Mint 关联核验的新池加入待复核候选；其他协议目前仍只做活动线索诊断。"
+    note: "仅将通过 PumpSwap create_pool 或 Raydium CPMM initialize 指令、池账户归属和双侧 Vault/Mint 关联核验的新池加入待复核候选；其他协议目前仍只做活动线索诊断。"
   };
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoff = nowSeconds - minutes * 60;
@@ -1295,12 +1391,13 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
       const recent = signatures.filter(row => Number(row && row.blockTime) >= cutoff &&
         Number(row && row.blockTime) <= nowSeconds);
       diagnostics.recentTransactions += recent.length;
-      // Other programs remain one transaction sample each. Raydium CPMM is
-      // decoded for up to four recent transactions; pool account checks are
-      // globally capped at three to stay within Worker subrequest budgets.
-      const sampleRows = program.address === SOLANA_RAYDIUM_CPMM_PROGRAM ? recent.slice(0, 4) : recent.slice(0, 1);
+      // PumpSwap is sampled up to three transactions and Raydium CPMM up to
+      // four; other programs remain one sample each. Pool/vault checks stay
+      // globally capped at three to protect Worker subrequest budgets.
+      const sampleRows = program.address === SOLANA_RAYDIUM_CPMM_PROGRAM ? recent.slice(0, 4)
+        : program.address === SOLANA_PUMPSWAP_PROGRAM ? recent.slice(0, 3) : recent.slice(0, 1);
       for (const row of sampleRows) {
-        if (diagnostics.sampledTransactions >= 9) break;
+        if (diagnostics.sampledTransactions >= 12) break;
         const transaction = await solanaRpcCall(rpcUrl, "getTransaction", [
           row.signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }
         ]);
@@ -1310,6 +1407,30 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
         hints.mintHints.forEach(value => mintHints.add(value));
         hints.poolInitLogHints.forEach(value => poolInitLogHints.add(program.name + ": " + value));
         if (diagnostics.samples.length < 8) diagnostics.samples.push(hints);
+        if (program.address === SOLANA_PUMPSWAP_PROGRAM) {
+          const createPoolInstructions = findPumpSwapCreatePoolInstructions(transaction);
+          for (const instruction of createPoolInstructions) {
+            diagnostics.protocolDecoders.pumpSwap.createPoolInstructions++;
+            const poolAddress = instruction.accounts[0];
+            if (poolAddress && seenPools.has(poolAddress)) continue;
+            if (poolAddress) seenPools.add(poolAddress);
+            if (diagnostics.protocolDecoders.pumpSwap.accountChecks +
+              diagnostics.protocolDecoders.raydiumCpmm.accountChecks >= 3) {
+              diagnostics.protocolDecoders.pumpSwap.skipped++;
+              continue;
+            }
+            diagnostics.protocolDecoders.pumpSwap.accountChecks++;
+            const decoded = await decodePumpSwapPool(
+              rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity
+            );
+            if (decoded.status === "candidate") {
+              candidates.push(decoded.pool);
+              diagnostics.protocolDecoders.pumpSwap.candidatesAdded++;
+            } else {
+              diagnostics.protocolDecoders.pumpSwap.skipped++;
+            }
+          }
+        }
         if (program.address === SOLANA_RAYDIUM_CPMM_PROGRAM) {
           const initializeInstructions = findRaydiumCpmmInitializeInstructions(transaction);
           for (const instruction of initializeInstructions) {
@@ -1339,7 +1460,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     diagnostics.poolInitLogHints = [...poolInitLogHints].slice(0, 20);
     diagnostics.status = "ok";
     diagnostics.candidatePoolsAdded = candidates.length;
-    diagnostics.note = "Raydium CPMM 候选仅在初始化指令、池账户程序归属、Vault Token 程序及 Vault Mint 关联均通过链上核验后生成；其他协议线索不会进入候选。成交量、价格历史和钱包可交易路径仍未验证，候选继续进入待复核。";
+    diagnostics.note = "PumpSwap 候选仅在 create_pool 指令、池账户程序归属、双侧 Vault Token 程序及 Mint 关联均通过链上核验后生成；Raydium CPMM 使用对应 initialize 指令核验；其他协议线索不会进入候选。成交量、价格历史和钱包可交易路径仍未验证，候选继续进入待复核。";
   } catch (error) {
     diagnostics.status = diagnostics.programsChecked > 0 ? "partial" : "error";
     diagnostics.error = String(error);
