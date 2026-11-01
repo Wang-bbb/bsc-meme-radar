@@ -634,6 +634,74 @@ async function readPair(log, rpcUrl) {
   };
 }
 
+
+function summarizePoolWalletFlow(body, tokenAddress) {
+  const rows=Array.isArray(body&&body.data)?body.data:[];
+  const token=String(tokenAddress||"").toLowerCase();
+  const wallets=new Map();
+  let parsedTrades=0,totalBuyUsd=0,totalSellUsd=0,oldestTimestamp=null,newestTimestamp=null;
+  for(const row of rows){
+    const a=row&&row.attributes||{};
+    const wallet=String(a.tx_from||a.from_address||"").toLowerCase();
+    if(!/^0x[a-f0-9]{40}$/.test(wallet)&&!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet))continue;
+    const fromToken=String(a.from_token_address||"").toLowerCase();
+    const toToken=String(a.to_token_address||"").toLowerCase();
+    const kind=String(a.kind||"").toLowerCase();
+    let side=null;
+    if(toToken===token&&fromToken!==token)side="buy";
+    else if(fromToken===token&&toToken!==token)side="sell";
+    else if(kind==="buy"||kind==="sell")side=kind;
+    if(!side)continue;
+    const rawVolume=Number(a.volume_in_usd);
+    const volume=Number.isFinite(rawVolume)&&rawVolume>0?rawVolume:0;
+    const timestamp=Date.parse(a.block_timestamp||a.timestamp||"");
+    if(Number.isFinite(timestamp)){
+      oldestTimestamp=oldestTimestamp==null?timestamp:Math.min(oldestTimestamp,timestamp);
+      newestTimestamp=newestTimestamp==null?timestamp:Math.max(newestTimestamp,timestamp);
+    }
+    const item=wallets.get(wallet)||{buys:0,sells:0,buyUsd:0,sellUsd:0};
+    if(side==="buy"){item.buys++;item.buyUsd+=volume;totalBuyUsd+=volume;}
+    else{item.sells++;item.sellUsd+=volume;totalSellUsd+=volume;}
+    wallets.set(wallet,item);parsedTrades++;
+  }
+  const entries=Array.from(wallets.entries()).map(([address,value])=>({address,...value}));
+  const buyers=entries.filter(x=>x.buys>0),sellers=entries.filter(x=>x.sells>0);
+  const repeatBuyers=buyers.filter(x=>x.buys>=2);
+  const topBuyers=buyers.slice().sort((a,b)=>b.buyUsd-a.buyUsd).slice(0,3);
+  const top3BuySharePct=totalBuyUsd>0?Math.round(topBuyers.reduce((sum,x)=>sum+x.buyUsd,0)/totalBuyUsd*10000)/100:null;
+  const overlapWallets=entries.filter(x=>x.buys>0&&x.sells>0).length;
+  const coverageMinutes=oldestTimestamp!=null&&newestTimestamp!=null?Math.max(0,Math.round((newestTimestamp-oldestTimestamp)/60000)):null;
+  const status=parsedTrades>=8?"checked":"insufficient";
+  const warnings=[];
+  if(status==="checked"&&top3BuySharePct!=null&&top3BuySharePct>=60)warnings.push("前三大买入钱包贡献了至少60%的样本买入额，买盘集中度偏高");
+  if(status==="checked"&&buyers.length>=5&&sellers.length===0)warnings.push("样本中未观察到卖出钱包，退出流动性尚未得到验证");
+  if(status==="checked"&&buyers.length>=4&&repeatBuyers.length/buyers.length>=0.6)warnings.push("买入活动集中在少数重复交易钱包，需排查重复刷量或关联行为");
+  return {
+    status,source:"GeckoTerminal pool trades",sampleTrades:parsedTrades,
+    uniqueBuyers:buyers.length,uniqueSellers:sellers.length,repeatBuyerWallets:repeatBuyers.length,
+    walletsBuyingAndSelling:overlapWallets,totalBuyVolumeUSD:Math.round(totalBuyUsd*100)/100,
+    totalSellVolumeUSD:Math.round(totalSellUsd*100)/100,top3BuySharePct,coverageMinutes,warnings,
+    limitations:[
+      "仅统计索引源返回的有限交易样本，不代表完整链上钱包全集。",
+      "钱包地址相同不等于同一控制人；本结果不推断钱包关联、开发者身份或内幕身份。",
+      "样本不足、方向字段缺失或索引源限流时，不输出健康结论。"
+    ]
+  };
+}
+async function getPoolWalletFlow(network,poolAddress,tokenAddress){
+  const endpoint="https://api.geckoterminal.com/api/v2/networks/"+encodeURIComponent(network)+
+    "/pools/"+encodeURIComponent(poolAddress)+"/trades";
+  const response=await fetchGeckoTerminal(endpoint);
+  if(!response.ok)return{status:"unavailable",source:"GeckoTerminal pool trades",
+    error:"GeckoTerminal trades HTTP "+response.status,sampleTrades:0,
+    warnings:["钱包交易样本暂不可用；不能据此判断买盘质量"]};
+  let body;
+  try{body=await response.json();}
+  catch(_){return{status:"unavailable",source:"GeckoTerminal pool trades",
+    error:"交易样本响应不是有效JSON",sampleTrades:0,warnings:["钱包样本无法解析"]};}
+  return summarizePoolWalletFlow(body,tokenAddress);
+}
+
 async function getPoolMarketHistory(network, poolAddress, tokenAddress) {
   const params = new URLSearchParams({
     aggregate: "1",
@@ -1101,6 +1169,17 @@ export default {
     }
     if (url.pathname === "/" || url.pathname === "/health") {
       return json({ ok: true, service: "BSC Meme Radar API", worker: "running", chain: "BSC", dataSource: "NodeReal BSC RPC + multiple BSC DEX factories", supportedMinutes: [15, 30, 60], note: "只读监控；扫描已接入的 BSC DEX USDT 池" });
+    }
+    if (url.pathname === "/wallet-flow") {
+      const network=url.searchParams.get("chain")||"";
+      const poolAddress=url.searchParams.get("pool")||"";
+      const tokenAddress=url.searchParams.get("token")||"";
+      if(!["bsc","solana","eth","base"].includes(network))
+        return json({ok:false,status:"unavailable",error:"Unsupported GeckoTerminal network"},400);
+      if(!poolAddress||!tokenAddress||poolAddress.length>160||tokenAddress.length>160)
+        return json({ok:false,status:"unavailable",error:"pool and token are required"},400);
+      const walletFlow=await getPoolWalletFlow(network,poolAddress,tokenAddress);
+      return json({ok:true,chain:network,poolAddress,tokenAddress,walletFlow});
     }
     if (url.pathname === "/pool-risk") {
       const network = url.searchParams.get("chain") || "";
