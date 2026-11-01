@@ -41,7 +41,7 @@ function restoreCachedResponse(cached) {
   return new Response(cached.body, { status: originalStatus, statusText, headers });
 }
 
-const PROVIDER_COOLDOWN_SECONDS = 60;
+const PROVIDER_COOLDOWN_SECONDS = 300;
 function providerCooldownKey(provider) {
   return new Request("https://radar-cache.invalid/provider-cooldown/" + provider);
 }
@@ -49,16 +49,26 @@ async function readProviderCooldown(provider) {
   if (typeof caches === "undefined" || !caches.default) return null;
   try {
     const cached = await caches.default.match(providerCooldownKey(provider));
-    return cached ? restoreCachedResponse(cached) : null;
+    if (!cached) return null;
+    const restored = restoreCachedResponse(cached);
+    const headers = new Headers(restored.headers);
+    headers.set("x-radar-provider-state", "shared-cooldown");
+    headers.set("x-radar-provider", provider);
+    return new Response(restored.body, { status: restored.status, statusText: restored.statusText, headers });
   } catch (_) { return null; }
 }
 async function writeProviderCooldown(provider, response) {
   if (typeof caches === "undefined" || !caches.default) return;
+  const status = Number(response.status || 429);
   const retryAfter = Number(response.headers.get("retry-after") || 0);
-  const ttl = Math.min(180, Math.max(PROVIDER_COOLDOWN_SECONDS, retryAfter || 0));
-  const headers = new Headers({ "x-radar-original-status": "429", "cache-control": "public, max-age=" + ttl });
+  const baseTtl = provider === "dexpaprika" && status === 402 ? 600 : PROVIDER_COOLDOWN_SECONDS;
+  const ttl = Math.min(900, Math.max(baseTtl, retryAfter || 0));
+  const headers = new Headers({
+    "x-radar-original-status": String(status),
+    "cache-control": "public, max-age=" + ttl
+  });
   try {
-    await caches.default.put(providerCooldownKey(provider), new Response("Provider rate limited", { status: 200, headers }));
+    await caches.default.put(providerCooldownKey(provider), new Response("Provider cooldown", { status: 200, headers }));
   } catch (_) {}
 }
 
@@ -144,7 +154,16 @@ async function fetchDexPaprikaJson(endpoint) {
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return restoreCachedResponse(cached);
+      if (cached) {
+        const restored = restoreCachedResponse(cached);
+        if (restored.status >= 400) {
+          const headers = new Headers(restored.headers);
+          headers.set("x-radar-provider-state", "cached-provider-error");
+          headers.set("x-radar-provider", "DexPaprika");
+          return new Response(restored.body, { status: restored.status, statusText: restored.statusText, headers });
+        }
+        return restored;
+      }
     } catch (_) {}
   }
   const providerCooldown = await readProviderCooldown("dexpaprika");
@@ -152,7 +171,7 @@ async function fetchDexPaprikaJson(endpoint) {
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
   // Cache provider-side quota/auth failures too: retrying HTTP 402 on every
   // refresh cannot restore access and only adds noise to an already partial scan.
-  if (response.status === 429) await writeProviderCooldown("dexpaprika", response);
+  if ([402, 429].includes(response.status)) await writeProviderCooldown("dexpaprika", response);
   if (cache && (response.ok || [401, 402, 403, 429].includes(response.status))) {
     const headers = new Headers(response.headers);
     const shouldCacheError = !response.ok;
@@ -177,7 +196,16 @@ async function fetchDexScreenerJson(endpoint) {
   if (cache) {
     try {
       const cached = await cache.match(cacheKey);
-      if (cached) return restoreCachedResponse(cached);
+      if (cached) {
+        const restored = restoreCachedResponse(cached);
+        if (restored.status >= 400) {
+          const headers = new Headers(restored.headers);
+          headers.set("x-radar-provider-state", "cached-provider-error");
+          headers.set("x-radar-provider", "DexScreener");
+          return new Response(restored.body, { status: restored.status, statusText: restored.statusText, headers });
+        }
+        return restored;
+      }
     } catch (_) {}
   }
   const providerCooldown = await readProviderCooldown("dexscreener");
@@ -1037,7 +1065,10 @@ export default {
           const feedResults = await Promise.all(feedSpecs.map(async (feed) => {
             try {
               const response = await fetchDexScreenerJson(feed.url);
-              if (!response.ok) throw new Error("HTTP " + response.status);
+              if (!response.ok) {
+                const state = response.headers.get("x-radar-provider-state");
+                throw new Error("HTTP " + response.status + (state === "shared-cooldown" ? "（数据源冷却中）" : state === "cached-provider-error" ? "（缓存的限流错误）" : ""));
+              }
               const items = await response.json();
               if (!Array.isArray(items)) throw new Error("unexpected response");
               return { name: feed.name, items, error: null };
@@ -1059,7 +1090,10 @@ export default {
               }
               const endpoint = "https://api.dexscreener.com/tokens/v1/" + network.dexChain + "/" + addresses.map(encodeURIComponent).join(",");
               const pairResponse = await fetchDexScreenerJson(endpoint);
-              if (!pairResponse.ok) throw new Error("DexScreener token pairs HTTP " + pairResponse.status);
+              if (!pairResponse.ok) {
+                const state = pairResponse.headers.get("x-radar-provider-state");
+                throw new Error("DexScreener token pairs HTTP " + pairResponse.status + (state === "shared-cooldown" ? "（数据源冷却中）" : state === "cached-provider-error" ? "（缓存的限流错误）" : ""));
+              }
               const pairs = await pairResponse.json();
               if (!Array.isArray(pairs)) throw new Error("DexScreener token pairs returned an unexpected response");
               let chainPoolCount = 0;
@@ -1128,7 +1162,12 @@ export default {
                 });
                 const searchUrl = "https://api.dexpaprika.com/networks/" + network.dexChain + "/pools/search?" + query.toString();
                 const searchResponse = await fetchDexPaprikaJson(searchUrl);
-                if (!searchResponse.ok) throw new Error("DexPaprika pool search HTTP " + searchResponse.status + (searchResponse.status === 402 ? "（额度/套餐限制，备用源暂不可用）" : ""));
+                if (!searchResponse.ok) {
+                  const cooldownLabel = searchResponse.headers.get("x-radar-provider-state") === "shared-cooldown"
+                    ? "（数据源冷却中）"
+                    : searchResponse.headers.get("x-radar-provider-state") === "cached-provider-error" ? "（缓存的额度/限流错误）" : "";
+                  throw new Error("DexPaprika pool search HTTP " + searchResponse.status + cooldownLabel + (searchResponse.status === 402 ? "（额度/套餐限制，备用源暂不可用）" : ""));
+                }
                 const searchBody = await searchResponse.json();
                 if (!Array.isArray(searchBody.results)) throw new Error("DexPaprika returned an unexpected response");
                 let chainPoolCount = 0;
@@ -1274,8 +1313,17 @@ export default {
         coverage: fallbackChains.length ? "partial" : "primary-index",
         providerDiagnostics: {
           geckoTerminal: {
-            note: "shared-cooldown 表示本轮请求未再次访问上游，而是命中之前由上游429触发的共享冷却；upstream-rate-limit 表示本次请求实际收到上游429。",
+            note: "shared-cooldown 表示命中本 Worker 所在 Cloudflare 边缘数据中心的冷却缓存；upstream-rate-limit 表示本次请求实际收到上游429。",
             cooldownSeconds: PROVIDER_COOLDOWN_SECONDS
+          },
+          dexScreener: {
+            note: "HTTP 429 后进入5分钟冷却；冷却期间不会重复请求该公共 Feed。",
+            cooldownSeconds: PROVIDER_COOLDOWN_SECONDS
+          },
+          dexPaprika: {
+            note: "HTTP 402 额度/套餐错误后进入10分钟冷却；HTTP 429 后进入5分钟冷却。",
+            quotaCooldownSeconds: 600,
+            rateLimitCooldownSeconds: PROVIDER_COOLDOWN_SECONDS
           }
         },
         chainSources,
