@@ -1124,6 +1124,9 @@ export default {
                   });
                   chainPoolCount++;
                 }
+                if (chainPoolCount === 0) {
+                  throw new Error("DexPaprika returned no pools meeting age/liquidity/token filters");
+                }
                 chainSources.push({
                   chain: network.name, provider: "DexPaprika",
                   status: "fallback", coverage: "partial", pools: chainPoolCount,
