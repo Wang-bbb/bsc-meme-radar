@@ -301,8 +301,11 @@ async function scan(){
         :"RugCheck 风险分："+(sec.riskScore==null?"未知":sec.riskScore)+" · LP锁定："+(sec.lpLockedPct==null?"未知":sec.lpLockedPct+"%");
       const holderInfo="前十大持币合计："+(sec.top10HolderConcentrationPct==null?"未知":Number(sec.top10HolderConcentrationPct).toFixed(2)+"%")+" · 状态："+(sec.holderConcentrationStatus||"unknown");
       const cacheLabel={miss:"未命中（本次请求）",hit:"命中成功缓存", "rate-limit-cooldown":"命中限流冷却缓存"}[sec.goPlusCacheStatus]||sec.goPlusCacheStatus||"未返回";
+      const cacheScopeLabel={provider:"全局数据源",token:"单个代币",none:"未缓存"}[sec.goPlusCacheScope]||sec.goPlusCacheScope||"未知";
+      const kvStoreLabel={"read-hit":"KV读取命中","provider-cooldown-stored":"KV已写入全局冷却","token-result-stored":"KV已写入代币结果","read-ok":"KV可读，未命中","read-failed":"KV读取失败","write-failed":"KV写入失败","not-configured":"KV未配置","not-cacheable":"响应未缓存"}[sec.goPlusKvStoreStatus]||sec.goPlusKvStoreStatus||"未知";
+      const cooldownLabel=sec.goPlusCooldownSeconds>0?" · 冷却剩余约"+sec.goPlusCooldownSeconds+"秒":"";
       const providerInfo=sec.provider&&sec.provider.includes("Honeypot")
-        ?"安全数据源：Honeypot "+(sec.honeypotHttpStatus==null?"未返回":"HTTP "+sec.honeypotHttpStatus)+" · GoPlus "+(sec.holderProviderStatus||"unknown")+(sec.holderProviderHttpStatus?" HTTP "+sec.holderProviderHttpStatus:"")+" · 持币记录 "+(sec.holderCountChecked??0)+" · GoPlus缓存："+cacheLabel
+        ?"安全数据源：Honeypot "+(sec.honeypotHttpStatus==null?"未返回":"HTTP "+sec.honeypotHttpStatus)+" · GoPlus "+(sec.holderProviderStatus||"unknown")+(sec.holderProviderHttpStatus?" HTTP "+sec.holderProviderHttpStatus:"")+" · 持币记录 "+(sec.holderCountChecked??0)+" · GoPlus缓存："+cacheLabel+" · 范围："+cacheScopeLabel+" · KV："+kvStoreLabel+cooldownLabel
         :"";
       const goPlusError=sec.holderProviderMessage?"GoPlus返回信息："+sec.holderProviderMessage:"";
       const honeypotBody=sec.honeypotResponseBody?"Honeypot响应正文："+sec.honeypotResponseBody:"";

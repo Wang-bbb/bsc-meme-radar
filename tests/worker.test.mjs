@@ -1065,3 +1065,44 @@ test("BSC scan uses a timestamp-bounded window and recognizes the canonical USDT
   assert.equal(data.requestedWindowSeconds, 900);
   assert.ok(data.windowStartBlock < data.latestBlock);
 });
+
+
+test("GoPlus provider-wide rate-limit cooldown prevents requests for other token addresses", async () => {
+  const values = new Map();
+  const kv = {
+    async get(key) {
+      const value = values.get(key);
+      return value == null ? null : JSON.parse(value);
+    },
+    async put(key, value) {
+      values.set(key, value);
+    }
+  };
+  const envWithKv = { ...env, RADAR_KV: kv };
+  let goPlusCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.honeypot.is") return new Response("pair not found", { status: 404 });
+    if (url.hostname === "api.gopluslabs.io") {
+      goPlusCalls += 1;
+      return response({ code: 0, message: "too many requests" });
+    }
+    throw new Error("Unexpected provider " + url.hostname);
+  };
+
+  const first = await worker.fetch(request("/security-check?chain=bsc&address=0x1111111111111111111111111111111111111111"), envWithKv);
+  const firstData = await first.json();
+  assert.equal(firstData.goPlusCacheStatus, "miss");
+  assert.equal(firstData.goPlusCacheScope, "provider");
+  assert.equal(firstData.goPlusKvStoreStatus, "provider-cooldown-stored");
+  assert.equal(firstData.holderProviderStatus, "api_error");
+
+  const second = await worker.fetch(request("/security-check?chain=bsc&address=0x2222222222222222222222222222222222222222"), envWithKv);
+  const secondData = await second.json();
+  assert.equal(secondData.goPlusCacheStatus, "rate-limit-cooldown");
+  assert.equal(secondData.goPlusCacheScope, "provider");
+  assert.equal(secondData.goPlusKvStoreStatus, "read-hit");
+  assert.ok(secondData.goPlusCooldownSeconds > 0);
+  assert.equal(goPlusCalls, 1);
+  assert.equal(secondData.status, "review");
+});

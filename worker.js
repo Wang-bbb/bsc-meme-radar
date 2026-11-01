@@ -29,24 +29,66 @@ const json = (data, status) => new Response(JSON.stringify(data), { status: stat
 // Successful security records live for 5 minutes; rate-limit responses cool down for 2 minutes.
 async function fetchGoPlusCached(env, endpoint, cacheKey) {
   const kv = env && env.RADAR_KV;
+  const providerCooldownKey = "security:goplus:provider-cooldown:v1";
+  let kvStoreStatus = kv && typeof kv.get === "function" ? "read-ok" : "not-configured";
+
+  // GoPlus rate limits can apply across different token addresses. Check a
+  // provider-wide cooldown before making another request for any token.
   if (kv && typeof kv.get === "function") {
+    try {
+      const providerCooldown = await kv.get(providerCooldownKey, "json");
+      if (providerCooldown && providerCooldown.expiresAt > Date.now()) {
+        const remainingSeconds = Math.max(1, Math.ceil((providerCooldown.expiresAt - Date.now()) / 1000));
+        return new Response(JSON.stringify({ code: 0, message: "too many requests (cached provider cooldown)" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-radar-goplus-cache": "rate-limit-cooldown",
+            "x-radar-goplus-cache-scope": "provider",
+            "x-radar-goplus-kv-store": "read-hit",
+            "x-radar-goplus-cooldown-seconds": String(remainingSeconds)
+          }
+        });
+      }
+    } catch (_) {
+      kvStoreStatus = "read-failed";
+    }
+
     try {
       const cached = await kv.get(cacheKey, "json");
       if (cached && cached.expiresAt > Date.now()) {
         if (cached.rateLimited) {
-          return new Response(JSON.stringify({ code: 0, message: "too many requests (cached cooldown)" }), {
-            status: 200, headers: { "content-type": "application/json", "x-radar-goplus-cache": "rate-limit-cooldown" }
+          return new Response(JSON.stringify({ code: 0, message: "too many requests (cached token cooldown)" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "x-radar-goplus-cache": "rate-limit-cooldown",
+              "x-radar-goplus-cache-scope": "token",
+              "x-radar-goplus-kv-store": "read-hit",
+              "x-radar-goplus-cooldown-seconds": String(Math.max(1, Math.ceil((cached.expiresAt - Date.now()) / 1000)))
+            }
           });
         }
         if (cached.body) {
           return new Response(JSON.stringify(cached.body), {
-            status: 200, headers: { "content-type": "application/json", "x-radar-goplus-cache": "hit" }
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "x-radar-goplus-cache": "hit",
+              "x-radar-goplus-cache-scope": "token",
+              "x-radar-goplus-kv-store": "read-hit"
+            }
           });
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      kvStoreStatus = "read-failed";
+    }
   }
+
   const response = await fetch(endpoint, { headers: { "accept": "application/json" } });
+  let cacheStatus = "miss";
+  let cacheScope = "none";
   if (response.ok && kv && typeof kv.put === "function") {
     try {
       const body = await response.clone().json();
@@ -54,15 +96,38 @@ async function fetchGoPlusCached(env, endpoint, cacheKey) {
       const isRateLimited = body && body.code != null && String(body.code) !== "1" &&
         (message.includes("too many requests") || message.includes("rate limit") || message.includes("频率"));
       if (isRateLimited) {
-        await kv.put(cacheKey, JSON.stringify({ rateLimited: true, expiresAt: Date.now() + 120000 }), { expirationTtl: 120 });
+        const expiresAt = Date.now() + 300000;
+        await kv.put(providerCooldownKey, JSON.stringify({
+          rateLimited: true,
+          expiresAt,
+          message: "GoPlus provider-wide rate limit"
+        }), { expirationTtl: 300 });
+        cacheScope = "provider";
+        kvStoreStatus = "provider-cooldown-stored";
       } else if (body && (body.code == null || String(body.code) === "1") && body.result) {
         await kv.put(cacheKey, JSON.stringify({ body, expiresAt: Date.now() + 300000 }), { expirationTtl: 300 });
+        cacheScope = "token";
+        kvStoreStatus = "token-result-stored";
+      } else {
+        kvStoreStatus = "not-cacheable";
       }
-    } catch (_) {}
+    } catch (_) {
+      kvStoreStatus = "write-failed";
+    }
+  } else if (!kv || typeof kv.put !== "function") {
+    kvStoreStatus = "not-configured";
   }
-  return response;
-}
 
+  const headers = new Headers(response.headers);
+  headers.set("x-radar-goplus-cache", cacheStatus);
+  headers.set("x-radar-goplus-cache-scope", cacheScope);
+  headers.set("x-radar-goplus-kv-store", kvStoreStatus);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
 
 // Cache API may reject caching upstream 429 responses. Store them as synthetic
 // 200 responses with the original status in a header, then restore 429 on read.
@@ -1025,6 +1090,9 @@ export default {
         let holderProviderCode = null;
         let holderProviderMessage = null;
         let goPlusCacheStatus = "miss";
+        let goPlusCacheScope = "none";
+        let goPlusKvStoreStatus = "unknown";
+        let goPlusCooldownSeconds = null;
         let goPlusOpenSource = null;
         try {
           const holderCacheKey = "security:goplus:v1:" + chainID + ":" + address.toLowerCase();
@@ -1032,6 +1100,10 @@ export default {
             "https://api.gopluslabs.io/api/v1/token_security/" + chainID + "?contract_addresses=" + encodeURIComponent(address),
             holderCacheKey);
           goPlusCacheStatus = holderResponse.headers.get("x-radar-goplus-cache") || "miss";
+          goPlusCacheScope = holderResponse.headers.get("x-radar-goplus-cache-scope") || "none";
+          goPlusKvStoreStatus = holderResponse.headers.get("x-radar-goplus-kv-store") || "unknown";
+          const cooldownHeader = holderResponse.headers.get("x-radar-goplus-cooldown-seconds");
+          goPlusCooldownSeconds = cooldownHeader ? Number(cooldownHeader) : null;
           holderProviderHttpStatus = holderResponse.status;
           if (!holderResponse.ok) {
             holderProviderStatus = "http_error";
@@ -1083,6 +1155,9 @@ export default {
           holderConcentrationStatus, holderCountChecked,
           holderProviderStatus, holderProviderHttpStatus, holderProviderCode, holderProviderMessage, goPlusOpenSource,
           goPlusCacheStatus,
+          goPlusCacheScope,
+          goPlusKvStoreStatus,
+          goPlusCooldownSeconds,
           honeypotHttpStatus: honeypotResponseStatus,
           honeypotResponseBody,
           simulationSuccess: report.simulationSuccess === true,
