@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -1761,7 +1761,7 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   assert.ok(source.includes("eligibleAfterLiquidityFilter: eligible.length"));
   assert.ok(source.includes("Number.isFinite(p.liquidityUSD)"));
   assert.ok(source.includes("inspectedPools: inspected.slice(0, 20).map"));
-  assert.ok(source.includes('status: p && p._error ? "read_error"'));
+  assert.ok(source.includes("status: classifyLiquidityDiagnostic(p, minLiquidity)"));
   assert.ok(source.includes("missingLiquidity: inspected.filter"));
   assert.ok(source.includes("const v2ToInspect = fresh.slice(0, 40)"));
   assert.ok(source.includes("const calls = v2ToInspect.map"));
@@ -1775,6 +1775,14 @@ test("BSC scan exposes candidate filter rejection counts and respects the per-sc
   assert.ok(source.includes("Token metadata is deferred until after the liquidity"));
 });
 
+
+test("liquidity diagnostics distinguish zero reserves from low liquidity and RPC errors", () => {
+  assert.equal(classifyLiquidityDiagnostic({ usdtReserve: 0, liquidityUSD: 0 }, 5000), "zero_usdt_reserve");
+  assert.equal(classifyLiquidityDiagnostic({ usdtReserve: 12, liquidityUSD: 24 }, 5000), "below_min_liquidity");
+  assert.equal(classifyLiquidityDiagnostic({ usdtReserve: 3000, liquidityUSD: 6000 }, 5000), "eligible");
+  assert.equal(classifyLiquidityDiagnostic({ _error: "RPC timeout" }, 5000), "read_error");
+  assert.equal(classifyLiquidityDiagnostic({ usdtReserve: null, liquidityUSD: null }, 5000), "missing_liquidity");
+});
 
 test("BSC scan includes V3 signed Swap topic and distinguishes V2/V3 swap-stat availability", async () => {
   const source = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
