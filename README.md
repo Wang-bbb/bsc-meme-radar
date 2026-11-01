@@ -8,7 +8,9 @@
 - 默认最低流动性：约 5,000 USD。
 - 排序：优先池龄最新；同等池龄参考成交量。
 - BSC：使用 NodeReal RPC 扫描已配置的 V2/V3 DEX 工厂，仅筛选 BSC USDT 直连池。
-- Solana / Ethereum / Base：使用 GeckoTerminal public API 的 new_pools 索引；显示索引提供的报价资产符号，但**不判断 USDT 直连，也不验证钱包兑换路径**。
+- Solana：使用 GeckoTerminal public API 的 new_pools 索引，并以 DexScreener / DexPaprika 作为有限备用源。
+- Ethereum / Base：优先使用 GeckoTerminal 索引；索引源无合格池或失败时，可选使用独立 RPC 扫描配置的 Uniswap V2 工厂稳定币直连池（Ethereum: USDT/USDC/DAI；Base: USDC/USDbC/USDT）。该 RPC 兜底仅覆盖一个 V2 工厂，不是全链新池索引。
+- 其他链索引结果显示报价资产符号，但**不代表钱包兑换路径已验证**。
 - 前端合并 BSC 与其他三链结果，并按池龄排序。
 - 每条链每轮最多对最早的 5 个候选执行安全检查；通过的进入候选列表，明确高危的进入拦截区，检测失败或信息不完整的进入待复核区。未检查的候选不会进入通过筛查列表。
 
@@ -28,8 +30,10 @@
 
 ## 部署说明
 1. Cloudflare Worker 使用仓库中的 `worker.js`，并在 Cloudflare Secret 中配置 `NODEREAL_RPC_URL`。
-2. GitHub Pages 发布仓库根目录的 `index.html`。
-3. 手机浏览器打开 Pages 地址，可添加到主屏幕。
+2. 为启用 Ethereum / Base 链上兜底扫描，可在 Cloudflare Dashboard → Workers & Pages → `younbsc-meme-radar` → Settings → Variables and Secrets 中分别添加 Secret：`ETH_RPC_URL`、`BASE_RPC_URL`。两者可分别配置，建议使用支持对应链 `eth_getLogs` 的 RPC 服务；不要把 RPC URL 或 API Key 提交到 GitHub 仓库或聊天中。
+3. 未配置对应 Secret 时，该链仍尝试公共索引源，并在扫描诊断中明确标记 RPC fallback 未配置。
+4. GitHub Pages 发布仓库根目录的 `index.html`。
+5. 手机浏览器打开 Pages 地址，可添加到主屏幕。
 
 Worker 和网页均可能公开访问；不得把私钥、助记词或交易密钥放入仓库、网页或 Worker 响应。
 
