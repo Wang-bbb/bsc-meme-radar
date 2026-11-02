@@ -2905,7 +2905,8 @@ export default {
         minutes,
         minLiquidityUSD: minLiquidity,
         dataSource: "GeckoTerminal primary; DexScreener profiles/boosts fallback; DexPaprika independent fallback when both fail",
-        coverage: fallbackChains.length ? "partial" : "primary-index",
+        scanStatus: results.length === 0 && errors.length > 0 ? "provider_unavailable" : (errors.length > 0 || fallbackChains.length > 0 ? "partial" : "ok"),
+        coverage: results.length === 0 && errors.length > 0 ? "unavailable" : (fallbackChains.length > 0 || errors.length > 0 ? "partial" : "primary-index"),
         providerDiagnostics: {
           geckoTerminal: {
             note: "shared-cooldown 表示命中本 Worker 所在 Cloudflare 边缘数据中心的冷却缓存；upstream-rate-limit 表示本次请求实际收到上游429。",
