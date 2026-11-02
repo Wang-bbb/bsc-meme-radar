@@ -2840,17 +2840,46 @@ export default {
       // extra RPC work after a fallback already found pools; HTTP 200 with an
       // empty first page is still not proof that no recent pools exist.
       if (indexedSolanaPoolCount === 0 && networks.some(item => item.id === "solana")) {
-        const solanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
-        if (!/^https:\/\//i.test(solanaRpcUrl) || /\s/.test(solanaRpcUrl)) {
+        const primarySolanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+        const fallbackSolanaRpcUrl = String(env && env.SOLANA_RPC_FALLBACK_URL || "").trim();
+        const validRpcUrl = value => /^https:\/\//i.test(value) && !/\s/.test(value);
+        if (!validRpcUrl(primarySolanaRpcUrl)) {
           solanaRpcDiagnostics.push({
-            chain: "Solana", provider: "Solana JSON-RPC", status: "error",
-            error: "SOLANA_RPC_URL must be a valid HTTPS endpoint"
+            chain: "Solana", provider: "Solana JSON-RPC primary", status: "error",
+            error: "SOLANA_RPC_URL must be a valid HTTPS endpoint",
+            errorCategory: "invalid_endpoint",
+            recoveryHint: "在 Cloudflare Worker Settings → Variables and Secrets 中配置有效的 SOLANA_RPC_URL。"
           });
         } else {
-          const scanned = await scanSolanaRpcActivity(solanaRpcUrl, minutes, minLiquidity);
-          results.push(...scanned.pools);
-          const { pools: _decodedPools, ...diagnostics } = scanned;
-          solanaRpcDiagnostics.push(diagnostics);
+          const primaryScan = await scanSolanaRpcActivity(primarySolanaRpcUrl, minutes, minLiquidity);
+          const { pools: primaryPools, ...primaryDiagnostics } = primaryScan;
+          primaryDiagnostics.role = "primary";
+          const shouldTryFallback = primaryDiagnostics.status === "error" &&
+            primaryDiagnostics.programsChecked === 0 &&
+            fallbackSolanaRpcUrl &&
+            fallbackSolanaRpcUrl !== primarySolanaRpcUrl;
+          if (shouldTryFallback && validRpcUrl(fallbackSolanaRpcUrl)) {
+            solanaRpcDiagnostics.push(primaryDiagnostics);
+            const fallbackScan = await scanSolanaRpcActivity(fallbackSolanaRpcUrl, minutes, minLiquidity);
+            const { pools: fallbackPools, ...fallbackDiagnostics } = fallbackScan;
+            fallbackDiagnostics.role = "fallback";
+            fallbackDiagnostics.primaryRpcError = primaryDiagnostics.error || "primary RPC unavailable";
+            fallbackDiagnostics.note = (fallbackDiagnostics.note || "") +
+              " 已在主 RPC 首次请求失败时切换到备用 RPC；备用扫描仍为有限协议抽样，不是全链完整索引。";
+            results.push(...fallbackPools);
+            solanaRpcDiagnostics.push(fallbackDiagnostics);
+          } else {
+            results.push(...primaryPools);
+            solanaRpcDiagnostics.push(primaryDiagnostics);
+            if (shouldTryFallback && fallbackSolanaRpcUrl && !validRpcUrl(fallbackSolanaRpcUrl)) {
+              solanaRpcDiagnostics.push({
+                chain: "Solana", provider: "Solana JSON-RPC fallback", status: "error",
+                error: "SOLANA_RPC_FALLBACK_URL must be a valid HTTPS endpoint",
+                errorCategory: "invalid_endpoint",
+                recoveryHint: "备用 RPC 地址必须是有效 HTTPS URL；请勿把 API Key 写入公开代码。"
+              });
+            }
+          }
         }
       }
 
@@ -2918,8 +2947,12 @@ export default {
         minutes,
         minLiquidityUSD: minLiquidity,
         dataSource: "GeckoTerminal primary; DexScreener profiles/boosts fallback; DexPaprika independent fallback when both fail",
-        scanStatus: results.length === 0 && errors.length > 0 ? "provider_unavailable" : (errors.length > 0 || fallbackChains.length > 0 ? "partial" : "ok"),
-        coverage: results.length === 0 && errors.length > 0 ? "unavailable" : (fallbackChains.length > 0 || errors.length > 0 ? "partial" : "primary-index"),
+        scanStatus: results.length === 0 && errors.length > 0 &&
+          !solanaRpcDiagnostics.some(item => item.status === "ok" || item.status === "partial")
+          ? "provider_unavailable" : (errors.length > 0 || fallbackChains.length > 0 || solanaRpcDiagnostics.some(item => item.role === "fallback") ? "partial" : "ok"),
+        coverage: results.length === 0 && errors.length > 0 &&
+          !solanaRpcDiagnostics.some(item => item.status === "ok" || item.status === "partial")
+          ? "unavailable" : (fallbackChains.length > 0 || errors.length > 0 || solanaRpcDiagnostics.some(item => item.role === "fallback" || item.status === "partial") ? "partial" : "primary-index"),
         providerDiagnostics: {
           geckoTerminal: {
             note: "shared-cooldown 表示命中本 Worker 所在 Cloudflare 边缘数据中心的冷却缓存；upstream-rate-limit 表示本次请求实际收到上游429。",
@@ -2952,6 +2985,7 @@ export default {
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；只有标记为 USDT 的池才表示池子直接以 USDT 为一侧资产，仍不代表钱包兑换路径已验证。",
           "Solana RPC 当前对 PumpSwap create_pool 和 Raydium CPMM initialize 执行协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；USDT/USDC 按报价侧储备×2估算美元流动性，wrapped-SOL 报价池使用通过新鲜度与置信区间校验的 Pyth SOL/USD 价格估算，价格源不合格时跳过。Pump.fun bonding curve、Raydium AMM v4、Meteora、Orca 当前仍只做活动线索诊断；本兜底仅抽样少量近期交易，不是全 Solana 新池索引，成交/K线/钱包路由缺失的候选仍待复核。",
+          "可选设置 SOLANA_RPC_FALLBACK_URL 作为备用 HTTPS RPC；仅当主 RPC 在扫描任何程序前立即失败时才切换，避免双倍消耗 Worker 子请求预算。备用 RPC 仍使用有限协议抽样，不会替代完整 Solana 索引；API Key 应只存 Cloudflare Secret，不要写入仓库。",
           "公共索引和 RPC 的 429/402 使用共享冷却；5xx 最多重试一次并进入短冷却。冷却和缓存是尽力而为的 Cloudflare 边缘级治理，不代表上游配额已恢复。",
           "本接口只读，不执行兑换或交易。"
         ],
