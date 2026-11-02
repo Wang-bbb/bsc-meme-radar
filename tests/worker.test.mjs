@@ -1581,6 +1581,29 @@ test("multiscan cross-checks Solana program activity over RPC without promoting 
   assert.equal(rpcCalls, 12, "six program signature scans plus at most six transaction samples");
 });
 
+test("Solana scan rejects a NodeReal BSC endpoint before making any RPC request", async () => {
+  let rpcCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("bsc-mainnet.nodereal.io")) {
+      rpcCalls++;
+      throw new Error("Solana request must not be sent to a BSC endpoint");
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://bsc-mainnet.nodereal.io/v1/redacted-test-key"
+  });
+  const data = await res.json();
+  assert.equal(data.solanaRpcDiagnostics[0].endpointFormat, "nodereal-bsc");
+  assert.equal(data.solanaRpcDiagnostics[0].errorCategory, "wrong_chain_endpoint");
+  assert.equal(data.solanaRpcDiagnostics[0].status, "error");
+  assert.equal(rpcCalls, 0, "never send Solana JSON-RPC methods to a BSC endpoint");
+});
+
 test("Solana RPC discovery stops immediately on HTTP 429 and reports unavailable evidence", async () => {
   let rpcCalls = 0;
   globalThis.fetch = async (input, init = {}) => {
