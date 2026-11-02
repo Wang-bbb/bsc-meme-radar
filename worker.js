@@ -1936,7 +1936,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
   } catch (error) {
     diagnostics.status = diagnostics.programsChecked > 0 ? "partial" : "error";
     diagnostics.error = String(error);
-    const rpcHttpStatusMatch = String(error).match(/HTTP\\s+(\\d{3})/i);
+    const rpcHttpStatusMatch = String(error).match(/HTTP\s+(\d{3})/i);
     const rpcHttpStatus = rpcHttpStatusMatch ? Number(rpcHttpStatusMatch[1]) : null;
     diagnostics.errorCategory = rpcHttpStatus === 401 || rpcHttpStatus === 403 ? "endpoint_auth_or_access"
       : rpcHttpStatus === 429 ? "rate_limited"
