@@ -1942,14 +1942,18 @@ function describeSolanaRpcEndpoint(rpcUrl) {
     const pathParts = parsed.pathname.split("/").filter(Boolean);
     const isNodeRealSolana = host === "open-platform.nodereal.io" &&
       pathParts.length === 2 && pathParts[1] === "solana";
+    const isNodeRealBsc = host === "bsc-mainnet.nodereal.io" ||
+      host === "bsc-testnet.nodereal.io";
     const isPublicSolana = host === "api.mainnet-beta.solana.com" &&
       parsed.pathname === "/";
     return {
       endpointHost: host,
       endpointFormat: isNodeRealSolana ? "nodereal-solana"
-        : isPublicSolana ? "solana-public-rpc" : "custom-or-unrecognized",
+        : isNodeRealBsc ? "nodereal-bsc"
+          : isPublicSolana ? "solana-public-rpc" : "custom-or-unrecognized",
       endpointPathPattern: isNodeRealSolana ? "/[REDACTED]/solana/"
-        : isPublicSolana ? "/" : "[redacted]"
+        : isNodeRealBsc ? "/v1/[REDACTED]"
+          : isPublicSolana ? "/" : "[redacted]"
     };
   } catch (_) {
     return {
@@ -1992,6 +1996,13 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     },
     note: "仅将通过 PumpSwap create_pool 或 Raydium CPMM initialize 指令、池账户归属和双侧 Vault/Mint 关联核验的新池加入待复核候选。USDC/USDT 按报价侧储备×2估算；wrapped-SOL 报价池仅使用通过新鲜度与置信区间校验的 Pyth SOL/USD 价格估算，价格源不可用或不合格时跳过。其他协议目前仍只做活动线索诊断；RPC 仅抽样少量近期交易，不代表完整新池覆盖。"
   };
+  if (diagnostics.endpointFormat === "nodereal-bsc") {
+    diagnostics.status = "error";
+    diagnostics.errorCategory = "wrong_chain_endpoint";
+    diagnostics.error = "BSC RPC endpoint configured for Solana";
+    diagnostics.recoveryHint = "当前 SOLANA_RPC_URL 指向 NodeReal BSC 节点，不能用于 Solana 扫描。请使用 Solana Mainnet RPC Endpoint；本次已跳过请求，未发送 Solana 方法到 BSC。";
+    return { ...diagnostics, pools: [] };
+  }
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoff = nowSeconds - minutes * 60;
   const mintHints = new Set();
