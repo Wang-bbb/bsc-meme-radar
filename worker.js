@@ -1516,6 +1516,7 @@ async function solanaRpcCall(rpcUrl, method, params) {
     // because they may contain credentials or request-specific data.
     let responseHint = "unknown_response";
     let jsonErrorCode = "";
+    let jsonErrorKind = "";
     const responseContentType = String(response.headers.get("content-type") || "").toLowerCase();
     let responseText = "";
     try { responseText = await response.text(); } catch (_) {}
@@ -1532,6 +1533,29 @@ async function solanaRpcCall(rpcUrl, method, params) {
         } else if (parsedError && (parsedError.message || parsedError.error)) {
           responseHint = "json_error";
         }
+        // Emit only a fixed allow-listed category. Never return provider message/body,
+        // which could contain credentials, request identifiers, or other sensitive data.
+        const errorText = String(
+          parsedError && parsedError.error && parsedError.error.message ||
+          parsedError && parsedError.message ||
+          parsedError && parsedError.error ||
+          ""
+        ).toLowerCase();
+        if (/invalid api.?key|api.?key invalid|unauthorized|authentication|invalid token/.test(errorText)) {
+          jsonErrorKind = "auth_rejected";
+        } else if (/forbidden|permission|access denied|not allowed/.test(errorText)) {
+          jsonErrorKind = "access_denied";
+        } else if (/not found|no route|unknown endpoint|endpoint.*invalid|route.*not found/.test(errorText)) {
+          jsonErrorKind = "route_not_found";
+        } else if (/quota|rate.?limit|too many requests|billing|plan limit|credits/.test(errorText)) {
+          jsonErrorKind = "quota_or_rate_limit";
+        } else if (/method not found|unsupported method|method.*not supported/.test(errorText)) {
+          jsonErrorKind = "method_unsupported";
+        } else if (errorText) {
+          jsonErrorKind = "provider_json_error_other";
+        } else if (parsedError && typeof parsedError === "object") {
+          jsonErrorKind = "json_object_without_recognized_error";
+        }
       } catch (_) {}
     } else if (responseContentType.includes("html") || /<\s*!doctype html|<\s*html/i.test(responseText.slice(0, 500))) {
       responseHint = "html_error_page";
@@ -1539,7 +1563,8 @@ async function solanaRpcCall(rpcUrl, method, params) {
       responseHint = "text_response";
     }
     throw new Error("Solana RPC HTTP " + response.status + " (" + responseHint +
-      (jsonErrorCode ? ", code " + jsonErrorCode : "") + ")");
+      (jsonErrorCode ? ", code " + jsonErrorCode : "") +
+      (jsonErrorKind ? ", kind " + jsonErrorKind : "") + ")");
   }
   let body;
   try { body = await response.json(); }
