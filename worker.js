@@ -1881,10 +1881,36 @@ async function decodeRaydiumCpmmPool(rpcUrl, instruction, blockTime, nowSeconds,
   };
 }
 
+function describeSolanaRpcEndpoint(rpcUrl) {
+  try {
+    const parsed = new URL(rpcUrl);
+    const host = parsed.hostname.toLowerCase();
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    const isNodeRealSolana = host === "open-platform.nodereal.io" &&
+      pathParts.length === 2 && pathParts[1] === "solana";
+    const isPublicSolana = host === "api.mainnet-beta.solana.com" &&
+      parsed.pathname === "/";
+    return {
+      endpointHost: host,
+      endpointFormat: isNodeRealSolana ? "nodereal-solana"
+        : isPublicSolana ? "solana-public-rpc" : "custom-or-unrecognized",
+      endpointPathPattern: isNodeRealSolana ? "/[REDACTED]/solana/"
+        : isPublicSolana ? "/" : "[redacted]"
+    };
+  } catch (_) {
+    return {
+      endpointHost: "unparseable",
+      endpointFormat: "custom-or-unrecognized",
+      endpointPathPattern: "[redacted]"
+    };
+  }
+}
+
 async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
   const diagnostics = {
     chain: "Solana",
     provider: "Solana JSON-RPC · Pump.fun / PumpSwap / Raydium / Meteora / Orca",
+    ...describeSolanaRpcEndpoint(rpcUrl),
     status: "partial",
     coverage: "pumpswap-create-pool-and-raydium-cpmm-initialize",
     programsChecked: 0,
@@ -2004,11 +2030,14 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     const rpcHttpStatusMatch = String(error).match(/HTTP\s+(\d{3})/i);
     const rpcHttpStatus = rpcHttpStatusMatch ? Number(rpcHttpStatusMatch[1]) : null;
     diagnostics.errorCategory = rpcHttpStatus === 401 || rpcHttpStatus === 403 ? "endpoint_auth_or_access"
+      : rpcHttpStatus === 404 ? "endpoint_not_found_or_wrong_path"
       : rpcHttpStatus === 429 ? "rate_limited"
       : rpcHttpStatus !== null && rpcHttpStatus >= 500 ? "provider_unavailable"
       : "rpc_error";
     diagnostics.recoveryHint = rpcHttpStatus === 401 || rpcHttpStatus === 403
       ? "检查 Cloudflare Worker 的 SOLANA_RPC_URL 是否为有效的 HTTPS RPC 地址、API Key/套餐权限是否有效，以及服务商是否允许 Cloudflare Worker 出口请求；不要把 API Key 放进公开代码或聊天。"
+      : rpcHttpStatus === 404
+        ? "RPC 返回 HTTP 404：核对 endpointHost 和 endpointFormat 是否符合服务商文档；NodeReal Solana 通常应为 open-platform.nodereal.io/<已隐藏密钥>/solana/。诊断不会输出密钥。"
       : rpcHttpStatus === 429
         ? "RPC 服务商已限流：检查额度/CUPS 配额，使用有足够配额的专用 Solana RPC，并避免频繁刷新；当前结果不能证明没有新池。"
         : rpcHttpStatus !== null && rpcHttpStatus >= 500
