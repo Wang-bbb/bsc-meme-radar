@@ -3480,7 +3480,7 @@ export default {
       const seenBurnTokens = new Set();
       for (const pool of [...pools].sort((a, b) =>
         (Number(b.volumeSincePoolCreationUSD || 0) / Math.max(1, Number(b.liquidityUSDApprox || 0))) -
-        (Number(a.volumeSincePoolCreationUSD || 0) / Math.max(1, Number(a.liquidityUSDApprox || 0)))) {
+        (Number(a.volumeSincePoolCreationUSD || 0) / Math.max(1, Number(a.liquidityUSDApprox || 0))))) {
         const token = String(pool.tokenAddress || "").toLowerCase();
         if (!/^0x[a-f0-9]{40}$/.test(token) || seenBurnTokens.has(token)) continue;
         seenBurnTokens.add(token);
