@@ -1361,7 +1361,7 @@ export function classifyMultichainPoolRisk(pool) {
     solana: { usdt: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".toLowerCase() },
     eth: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
     ethereum: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
-    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ad a2699bb2".replace(/\s/g, "") }
+    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ad a2699bb2".replace(/\\s/g, "") }
   };
   const expectedUsdt = stableQuotes[chain]?.usdt || null;
   const directUsdtPool = Boolean(expectedUsdt && quoteAddress === expectedUsdt);
@@ -1375,7 +1375,10 @@ export function classifyMultichainPoolRisk(pool) {
   const volume = n(pool.volume1hUSD);
   const liquidity = n(pool.liquidityUSDApprox);
   const age = n(pool.ageMinutes);
+  const buys = n(pool.buys1h);
+  const sells = n(pool.sells1h);
   const flags = [];
+  const reviewReasons = [];
   if (change5m != null && Number.isFinite(change5m) && change5m <= -30) {
     flags.push("极端短时下跌：5分钟跌幅达到或超过30%");
   }
@@ -1385,6 +1388,19 @@ export function classifyMultichainPoolRisk(pool) {
   if (change5m != null && Number.isFinite(change5m) && change5m <= -15 && change5m > -30) {
     flags.push("短时明显下跌：5分钟跌幅达到或超过15%");
   }
+  if (age != null && Number.isFinite(age) && age <= 15 &&
+      ((change5m != null && Number.isFinite(change5m) && change5m >= 40) ||
+       (change1h != null && Number.isFinite(change1h) && change1h >= 80))) {
+    flags.push("新池短时间急拉：5分钟涨幅达到40%或1小时涨幅达到80%，追高/回落风险高");
+  }
+  if (buys != null && Number.isFinite(buys) && sells != null && Number.isFinite(sells) &&
+      buys >= 10 && sells === 0) {
+    flags.push("买入活动已有一定样本但未观察到卖出，卖出能力/抛压尚未验证");
+  }
+  if (buys != null && Number.isFinite(buys) && sells != null && Number.isFinite(sells) &&
+      buys >= 20 && sells > 0 && sells / buys < 0.1) {
+    flags.push("卖出笔数不足买入笔数的10%，双向交易证据偏弱");
+  }
   const turnover = volume != null && Number.isFinite(volume) && liquidity != null &&
     Number.isFinite(liquidity) && liquidity > 0 ? volume / liquidity : null;
   if (age != null && Number.isFinite(age) && age <= 15 &&
@@ -1393,7 +1409,48 @@ export function classifyMultichainPoolRisk(pool) {
       turnover != null && turnover < 0.01) {
     flags.push("新池成交活跃度偏低：近1小时成交额不足估算流动性的1%");
   }
-  const severeDrawdown = flags.some(flag => flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌"));
+  if (liquidity != null && Number.isFinite(liquidity) && liquidity >= 5000 && liquidity < 6000) {
+    flags.push("流动性缓冲较薄：估算流动性仅略高于5000美元门槛");
+  }
+
+  // This is a review-priority score (higher = more reasons to inspect), not a
+  // safety score, probability of fraud, or buy signal. Missing core data yields
+  // null rather than a misleading low score.
+  const coreMetricsAvailable = age != null && Number.isFinite(age) &&
+    liquidity != null && Number.isFinite(liquidity) &&
+    volume != null && Number.isFinite(volume);
+  let riskReviewScore = 0;
+  if (!directUsdtPool) {
+    riskReviewScore += 10;
+    reviewReasons.push("不是已按合约地址验证的USDT直接报价池");
+  }
+  reviewReasons.push("钱包兑换路径/卖出报价尚未验证");
+  riskReviewScore += 15;
+  if (flags.some(flag => flag.startsWith("新池短时间急拉"))) {
+    riskReviewScore += 30;
+    reviewReasons.push("短时间急拉，追高/回落风险高");
+  }
+  if (flags.some(flag => flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌"))) {
+    riskReviewScore += 35;
+    reviewReasons.push("检测到严重价格回撤信号");
+  } else if (flags.some(flag => flag.startsWith("短时明显下跌"))) {
+    riskReviewScore += 20;
+    reviewReasons.push("检测到短时价格下跌信号");
+  }
+  if (flags.some(flag => flag.startsWith("买入活动已有一定样本") || flag.startsWith("卖出笔数不足"))) {
+    riskReviewScore += 20;
+    reviewReasons.push("双向成交/卖出证据不足");
+  }
+  if (flags.some(flag => flag.startsWith("新池成交活跃度偏低"))) {
+    riskReviewScore += 10;
+    reviewReasons.push("成交活跃度相对流动性偏低");
+  }
+  if (flags.some(flag => flag.startsWith("流动性缓冲较薄"))) {
+    riskReviewScore += 10;
+    reviewReasons.push("流动性接近最低门槛");
+  }
+  const severeDrawdown = flags.some(flag =>
+    flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌") || flag.startsWith("新池短时间急拉"));
   const partialSource = /fallback/i.test(String(pool.source || ""));
   return {
     usdtDirectPoolStatus,
@@ -1402,6 +1459,9 @@ export function classifyMultichainPoolRisk(pool) {
     multichainRiskTier: severeDrawdown ? "high_risk_review"
       : flags.length ? "review_only" : "unclassified_review",
     multichainRiskFlags: flags,
+    riskReviewScore: coreMetricsAvailable ? Math.min(100, riskReviewScore) : null,
+    riskReviewScoreStatus: coreMetricsAvailable ? "checked_heuristic" : "insufficient_core_data",
+    riskReviewReasons: coreMetricsAvailable ? reviewReasons : [...reviewReasons, "核心年龄/流动性/成交量数据不完整，风险评分不可用"],
     volumeToLiquidityRatio1h: turnover == null ? null : Math.round(turnover * 10000) / 10000,
     sourceCoverage: partialSource ? "partial_fallback" : "provider_dependent"
   };
@@ -2839,6 +2899,23 @@ export default {
       // produced no Solana candidates. A failed primary index must not trigger
       // extra RPC work after a fallback already found pools; HTTP 200 with an
       // empty first page is still not proof that no recent pools exist.
+      if (indexedSolanaPoolCount > 0 && networks.some(item => item.id === "solana")) {
+        // The index already supplied candidates, so skip the bounded RPC decoder
+        // to conserve Worker subrequests. Explicitly report that neither RPC was
+        // checked; an empty diagnostics array must not be mistaken for success.
+        solanaRpcDiagnostics.push({
+          chain: "Solana",
+          provider: "Solana JSON-RPC",
+          status: "not_needed",
+          role: "fallback",
+          reason: "indexed_candidates_found",
+          indexedCandidateCount: indexedSolanaPoolCount,
+          fallbackConfigured: Boolean(String(env && env.SOLANA_RPC_FALLBACK_URL || "").trim()),
+          primaryRpcChecked: false,
+          fallbackRpcChecked: false,
+          note: "本轮索引源已返回候选，按子请求预算跳过 RPC 抽样；这不代表主 RPC 或备用 RPC 已通过连通性测试。"
+        });
+      }
       if (indexedSolanaPoolCount === 0 && networks.some(item => item.id === "solana")) {
         const primarySolanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
         const fallbackSolanaRpcUrl = String(env && env.SOLANA_RPC_FALLBACK_URL || "").trim();
