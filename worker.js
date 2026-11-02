@@ -1505,10 +1505,10 @@ async function solanaRpcCall(rpcUrl, method, params) {
       headers: { "content-type": "application/json", "accept": "application/json" },
       body: requestBody
     });
-    if (response.status >= 500) await writeProviderCooldown("solana-rpc", response);
+    if (response.status >= 500) await writeProviderCooldown(endpointCooldownKey, response);
   }
   if (response.status === 429 || response.status === 402) {
-    await writeProviderCooldown("solana-rpc", response);
+    await writeProviderCooldown(endpointCooldownKey, response);
     throw new Error("Solana RPC HTTP " + response.status + " (provider cooldown)");
   }
   if (!response.ok) throw new Error("Solana RPC HTTP " + response.status);
