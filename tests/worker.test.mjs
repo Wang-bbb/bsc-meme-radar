@@ -720,11 +720,14 @@ test("dashboard ranks security-passed candidates by validated trend score and le
     {id:"unknown",ageMinutes:0.5,volume1hUSD:900,trendScore:{status:"insufficient",score:null,confidence:55}},
     {id:"high",ageMinutes:8,volume1hUSD:1000,trendScore:{status:"checked",score:85,confidence:85}},
     {id:"medium",ageMinutes:2,volume1hUSD:500,trendScore:{status:"checked",score:70,confidence:80}},
-    {id:"low-confidence",ageMinutes:0.2,volume1hUSD:2000,trendScore:{status:"checked",score:99,confidence:40}}
+    {id:"low-confidence",ageMinutes:0.2,volume1hUSD:2000,trendScore:{status:"checked",score:99,confidence:40}},
+    {id:"null-score",ageMinutes:0.1,volume1hUSD:3000,trendScore:{status:"checked",score:null,confidence:95}},
+    {id:"null-confidence",ageMinutes:0.3,volume1hUSD:2500,trendScore:{status:"checked",score:95,confidence:null}}
   ];
   const sorted = sort(candidates);
-  assert.equal(Array.from(sorted, item => item.id).join(","), "high,medium,low,low-confidence,unknown");
+  assert.equal(Array.from(sorted, item => item.id).join(","), "high,medium,low,null-score,low-confidence,null-confidence,unknown");
   assert.equal(sorted.find(item => item.id==="unknown").trendScore.score, null);
+  assert.equal(sorted.find(item => item.id==="null-score").trendScore.score, null);
 });
 
 function loadDashboardPriceRisk() {
