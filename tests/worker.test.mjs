@@ -2333,3 +2333,76 @@ test("multichain risk labels flag extreme Solana drawdowns and do not infer USDT
   assert.equal(realSolUsdt.directUsdtPool, true);
   assert.equal(realSolUsdt.usdtDirectPoolStatus, "direct_usdt_quote_verified_by_contract");
 });
+
+
+test("multichain risk classifier flags rapid pumps and reports a review score without calling it a safety score", () => {
+  const rapidPump = classifyMultichainPoolRisk({
+    chainId: "solana",
+    quoteSymbol: "SOL",
+    quoteAddress: "So11111111111111111111111111111111111111112",
+    ageMinutes: 1.5,
+    liquidityUSDApprox: 5291.6683,
+    volume1hUSD: 304.619,
+    buys1h: 18,
+    sells1h: 8,
+    priceChange5m: 112.358,
+    priceChange1h: 112.358
+  });
+  assert.equal(rapidPump.multichainRiskTier, "high_risk_review");
+  assert.ok(rapidPump.multichainRiskFlags.some(flag => flag.includes("短时间急拉")));
+  assert.equal(rapidPump.riskReviewScoreStatus, "checked_heuristic");
+  assert.ok(rapidPump.riskReviewScore >= 50);
+  assert.equal(rapidPump.directUsdtPool, false);
+  assert.equal(rapidPump.walletRouteStatus, "not_verified");
+
+  const missingData = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "SOL", ageMinutes: 1,
+    liquidityUSDApprox: null, volume1hUSD: null
+  });
+  assert.equal(missingData.riskReviewScore, null);
+  assert.equal(missingData.riskReviewScoreStatus, "insufficient_core_data");
+});
+
+test("multiscan reports that RPC failover was skipped when indexed Solana candidates already exist", async () => {
+  const token = "EMaethUe1qANpy46PkKfYJVeLuFvnHNqKqNDaRFrpump";
+  const pool = "HPrvmHE6dMvSfYpvvN4qgX36RwsbDzeUg3UyxbyhSGoi";
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === "api.geckoterminal.com") {
+      return response({
+        data: [{
+          id: "solana_" + pool,
+          attributes: {
+            address: pool,
+            name: "45-47 Coin / SOL",
+            pool_created_at: new Date(Date.now() - 60_000).toISOString(),
+            reserve_in_usd: "5500",
+            base_token_price_usd: "0.0001",
+            volume_usd: { h1: "3000" },
+            transactions: { h1: { buys: 112, sells: 17 } },
+            price_change_percentage: { m5: 45, h1: 45 }
+          },
+          relationships: { base_token: { data: { id: "solana_" + token } } }
+        }],
+        included: [{
+          id: "solana_" + token,
+          type: "token",
+          attributes: { address: token, name: "45-47 Coin", symbol: "45-47" }
+        }]
+      }, 200);
+    }
+    if (url.hostname === "api.dexscreener.com") return response([], 200);
+    if (url.hostname === "api.dexpaprika.com") return response({ pools: [] }, 200);
+    throw new Error("Unexpected URL " + url.href);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://primary.example",
+    SOLANA_RPC_FALLBACK_URL: "https://fallback.example"
+  });
+  const data = await res.json();
+  assert.ok(Array.isArray(data.solanaRpcDiagnostics));
+  assert.equal(data.solanaRpcDiagnostics[0].status, "not_needed");
+  assert.equal(data.solanaRpcDiagnostics[0].reason, "indexed_candidates_found");
+  assert.equal(data.solanaRpcDiagnostics[0].fallbackConfigured, true);
+  assert.equal(data.solanaRpcDiagnostics[0].fallbackRpcChecked, false);
+});
