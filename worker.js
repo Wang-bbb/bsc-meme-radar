@@ -2717,7 +2717,7 @@ export default {
       if (requestedChains.length && networks.length === 0) {
         return json({ ok: false, error: "chains must include a supported chain: solana, eth, base" }, 400);
       }
-      const results = [];
+      let results = [];
       const errors = [];
       const chainSources = [];
       const failedNetworks = [];
