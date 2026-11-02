@@ -1358,10 +1358,10 @@ export function classifyMultichainPoolRisk(pool) {
   const quoteSymbol = String(pool.quoteSymbol || "").trim().toUpperCase();
   const quoteAddress = String(pool.quoteAddress || "").trim().toLowerCase();
   const stableQuotes = {
-    solana: { usdt: "es9vmfrzaCERmJfrf4h2fyd4knkceNkY11mcce8benwyb".toLowerCase() },
+    solana: { usdt: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".toLowerCase() },
     eth: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
     ethereum: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
-    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ad a2699bb2".replace(/\\s/g, "") }
+    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ad a2699bb2".replace(/\s/g, "") }
   };
   const expectedUsdt = stableQuotes[chain]?.usdt || null;
   const directUsdtPool = Boolean(expectedUsdt && quoteAddress === expectedUsdt);
