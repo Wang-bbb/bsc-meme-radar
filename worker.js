@@ -1511,7 +1511,36 @@ async function solanaRpcCall(rpcUrl, method, params) {
     await writeProviderCooldown(endpointCooldownKey, response);
     throw new Error("Solana RPC HTTP " + response.status + " (provider cooldown)");
   }
-  if (!response.ok) throw new Error("Solana RPC HTTP " + response.status);
+  if (!response.ok) {
+    // Report only a sanitized response shape; never echo provider bodies or URLs,
+    // because they may contain credentials or request-specific data.
+    let responseHint = "unknown_response";
+    let jsonErrorCode = "";
+    const responseContentType = String(response.headers.get("content-type") || "").toLowerCase();
+    let responseText = "";
+    try { responseText = await response.text(); } catch (_) {}
+    if (!responseText.trim()) {
+      responseHint = "empty_response";
+    } else if (responseContentType.includes("json")) {
+      responseHint = "json_response";
+      try {
+        const parsedError = JSON.parse(responseText);
+        const rawCode = parsedError && parsedError.error && parsedError.error.code;
+        if (rawCode !== undefined && rawCode !== null) {
+          jsonErrorCode = String(rawCode).slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "");
+          responseHint = "json_rpc_error";
+        } else if (parsedError && (parsedError.message || parsedError.error)) {
+          responseHint = "json_error";
+        }
+      } catch (_) {}
+    } else if (responseContentType.includes("html") || /<\s*!doctype html|<\s*html/i.test(responseText.slice(0, 500))) {
+      responseHint = "html_error_page";
+    } else {
+      responseHint = "text_response";
+    }
+    throw new Error("Solana RPC HTTP " + response.status + " (" + responseHint +
+      (jsonErrorCode ? ", code " + jsonErrorCode : "") + ")");
+  }
   let body;
   try { body = await response.json(); }
   catch (_) { throw new Error("Solana RPC returned invalid JSON"); }
