@@ -1530,6 +1530,41 @@ test("Solana RPC discovery stops immediately on HTTP 429 and reports unavailable
 });
 
 
+test("Solana RPC falls back after an immediate primary 403 and reports partial rather than unavailable coverage", async () => {
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("solana-primary.invalid")) {
+      primaryCalls++;
+      return response({ error: "forbidden" }, 403);
+    }
+    if (url.includes("solana-fallback.invalid")) {
+      fallbackCalls++;
+      return response({ jsonrpc: "2.0", id: 1, result: [] }, 200);
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://solana-primary.invalid",
+    SOLANA_RPC_FALLBACK_URL: "https://solana-fallback.invalid"
+  });
+  const data = await res.json();
+  assert.equal(data.pools.length, 0);
+  assert.equal(data.complete, false, "limited RPC sampling is not complete chain-wide coverage");
+  assert.equal(data.scanStatus, "partial");
+  assert.equal(data.coverage, "partial");
+  assert.equal(data.solanaRpcDiagnostics[0].errorCategory, "endpoint_auth_or_access");
+  assert.equal(data.solanaRpcDiagnostics[1].role, "fallback");
+  assert.equal(data.solanaRpcDiagnostics[1].status, "ok");
+  assert.equal(primaryCalls, 1, "do not retry a forbidden primary endpoint");
+  assert.ok(fallbackCalls > 0, "use the configured fallback endpoint");
+});
+
+
 test("Solana RPC applies cooldown when a 5xx retry is followed by HTTP 429", async () => {
   let rpcCalls = 0;
   globalThis.fetch = async (input, init = {}) => {
