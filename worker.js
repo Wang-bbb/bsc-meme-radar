@@ -3465,6 +3465,116 @@ export default {
         };
       }));
 
+      // Burn-address diagnostics are supplementary only: tokens sent to the
+      // conventional dead address may be inaccessible, but this does not prove
+      // a protocol-level burn or imply price appreciation. Bound calls to avoid
+      // exhausting the Worker subrequest budget.
+      const DEAD_ADDRESS = "0x000000000000000000000000000000000000dead";
+      const DEAD_TOPIC = "0x" + DEAD_ADDRESS.slice(2).toLowerCase().padStart(64, "0");
+      const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+      const burnCandidates = [];
+      const seenBurnTokens = new Set();
+      for (const pool of [...pools].sort((a, b) =>
+        (Number(b.volumeSincePoolCreationUSD || 0) / Math.max(1, Number(b.liquidityUSDApprox || 0))) -
+        (Number(a.volumeSincePoolCreationUSD || 0) / Math.max(1, Number(a.liquidityUSDApprox || 0)))) {
+        const token = String(pool.tokenAddress || "").toLowerCase();
+        if (!/^0x[a-f0-9]{40}$/.test(token) || seenBurnTokens.has(token)) continue;
+        seenBurnTokens.add(token);
+        burnCandidates.push(pool);
+        if (burnCandidates.length >= 10) break;
+      }
+      for (const pool of pools) {
+        pool.burnSignalStatus = "not_checked_budget_limit";
+        pool.deadAddressBalancePctOfSupply = null;
+        pool.burnAmountSincePoolCreation = null;
+        pool.burnShareOfSupplyPct = null;
+        pool.burnAddress = DEAD_ADDRESS;
+        pool.burnSignalFlags = [];
+      }
+      if (burnCandidates.length) {
+        try {
+          const tokenAddresses = burnCandidates.map(p => p.tokenAddress.toLowerCase());
+          const fromBlockBurn = Math.min(...burnCandidates.map(p => Number(p.createdBlock || 0)));
+          const burnLogsPromise = rpc("eth_getLogs", [{
+            address: tokenAddresses,
+            fromBlock: hexNum(fromBlockBurn),
+            toBlock: latestHex,
+            topics: [TRANSFER_TOPIC, null, DEAD_TOPIC]
+          }], rpcUrl);
+          const calls = [];
+          for (const token of tokenAddresses) {
+            calls.push({ method: "eth_call", params: [{ to: token, data: "0x70a08231" + DEAD_ADDRESS.slice(2).toLowerCase().padStart(64, "0") }, "latest"] });
+            calls.push({ method: "eth_call", params: [{ to: token, data: "0x18160ddd" }, "latest"] });
+          }
+          const [burnLogsResult, supplyResults] = await Promise.all([
+            burnLogsPromise,
+            rpcBatch(calls, rpcUrl)
+          ]);
+          const metrics = new Map();
+          for (let i = 0; i < burnCandidates.length; i++) {
+            const pool = burnCandidates[i];
+            const balanceResult = supplyResults[i * 2];
+            const totalSupplyResult = supplyResults[i * 2 + 1];
+            let deadBalancePct = null;
+            if (!balanceResult?.error && balanceResult?.result && !totalSupplyResult?.error && totalSupplyResult?.result) {
+              try {
+                const deadBalance = BigInt(balanceResult.result);
+                const totalSupply = BigInt(totalSupplyResult.result);
+                if (totalSupply > 0n) deadBalancePct = Number(deadBalance * 1000000n / totalSupply) / 10000;
+              } catch (_) {}
+            }
+            metrics.set(pool.tokenAddress.toLowerCase(), {
+              pool,
+              deadBalancePct,
+              burnRaw: 0n,
+              burnLogsSeen: 0
+            });
+          }
+          if (Array.isArray(burnLogsResult)) {
+            for (const log of burnLogsResult) {
+              const token = String(log.address || "").toLowerCase();
+              const metric = metrics.get(token);
+              if (!metric || Number(log.blockNumber) < Number(metric.pool.createdBlock || 0)) continue;
+              try {
+                const amount = BigInt(log.data || "0x0");
+                if (amount > 0n) {
+                  metric.burnRaw += amount;
+                  metric.burnLogsSeen++;
+                }
+              } catch (_) {}
+            }
+          }
+          for (const [token, metric] of metrics) {
+            const decimals = Number(metric.pool.tokenDecimals ?? metric.pool.decimals ?? 18);
+            let burnAmount = null;
+            let burnSharePct = null;
+            try {
+              const denominator = 10 ** Math.min(36, Math.max(0, decimals));
+              burnAmount = Number(metric.burnRaw) / denominator;
+              if (metric.deadBalancePct != null && metric.pool.totalSupplyRaw != null) {
+                // Supply ratio for recent burns is computed from raw total supply below when available.
+                const totalSupplyRaw = BigInt(metric.pool.totalSupplyRaw);
+                if (totalSupplyRaw > 0n) burnSharePct = Number(metric.burnRaw * 1000000n / totalSupplyRaw) / 10000;
+              }
+            } catch (_) {}
+            const pool = metric.pool;
+            pool.deadAddressBalancePctOfSupply = metric.deadBalancePct;
+            pool.burnAmountSincePoolCreation = burnAmount;
+            pool.burnShareOfSupplyPct = burnSharePct;
+            pool.burnSignalStatus = "checked";
+            if ((metric.deadBalancePct != null && metric.deadBalancePct >= 1) ||
+                (burnSharePct != null && burnSharePct >= 0.5)) {
+              pool.burnSignalFlags = ["检测到销毁地址持仓或建池后转入量达到观察阈值；仅为销毁线索，不代表价格利好"];
+            }
+          }
+        } catch (e) {
+          for (const pool of burnCandidates) {
+            pool.burnSignalStatus = "unavailable";
+            pool.burnSignalFlags = ["本轮销毁地址查询失败，不能视为零销毁"];
+          }
+        }
+      }
+
       const historyOnlyPools = [...pairData, ...v3Read]
         .filter((p) => p && !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD < minLiquidity)
         .map((p) => ({
