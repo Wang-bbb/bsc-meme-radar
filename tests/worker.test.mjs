@@ -1524,6 +1524,8 @@ test("Solana RPC discovery stops immediately on HTTP 429 and reports unavailable
   assert.equal(data.complete, false, "RPC failure must not be reported as a complete scan");
   assert.equal(data.solanaRpcDiagnostics[0].status, "error");
   assert.match(data.solanaRpcDiagnostics[0].error, /HTTP 429/);
+  assert.equal(data.solanaRpcDiagnostics[0].errorCategory, "rate_limited");
+  assert.match(data.solanaRpcDiagnostics[0].recoveryHint, /专用 Solana RPC/);
   assert.equal(rpcCalls, 1, "do not hammer the RPC after its first 429");
 });
 
