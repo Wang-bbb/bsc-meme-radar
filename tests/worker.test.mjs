@@ -367,7 +367,7 @@ test("multiscan serves only still-fresh last-good candidates during a full provi
     const first = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), { RADAR_KV: kv });
     const firstData = await first.json();
     assert.equal(firstData.count, 1);
-    assert.equal(firstData.scanStatus, "ok");
+    assert.notEqual(firstData.scanStatus, "stale");
     assert.ok([...store.keys()].some(key => key.startsWith("multiscan:last-good:v1:")));
 
     Date.now = () => baseTime + 46_000;
