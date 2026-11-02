@@ -1452,10 +1452,18 @@ export function classifyMultichainPoolRisk(pool) {
   const severeDrawdown = flags.some(flag =>
     flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌") || flag.startsWith("新池短时间急拉"));
   const partialSource = /fallback/i.test(String(pool.source || ""));
+  const hardExcluded = flags.some(flag =>
+    flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌"));
+  const rapidPump = flags.some(flag => flag.startsWith("新池短时间急拉"));
+  const quoteAssetGroup = directUsdtPool ? "usdt_direct_pool" : "non_usdt_quote_pool";
   return {
     usdtDirectPoolStatus,
     directUsdtPool,
+    quoteAssetGroup,
     walletRouteStatus: "not_verified",
+    candidateDisposition: hardExcluded ? "excluded_severe_drawdown"
+      : rapidPump ? "deprioritized_rapid_pump"
+        : flags.length ? "review_only" : "unclassified_review",
     multichainRiskTier: severeDrawdown ? "high_risk_review"
       : flags.length ? "review_only" : "unclassified_review",
     multichainRiskFlags: flags,
@@ -3124,7 +3132,19 @@ export default {
         }
       }
       for (const pool of results) Object.assign(pool, classifyMultichainPoolRisk(pool));
-      results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
+      const riskFilterDiagnostics = {
+        receivedCandidates: results.length,
+        excludedSevereDrawdown: results.filter(pool => pool.candidateDisposition === "excluded_severe_drawdown").length,
+        deprioritizedRapidPump: results.filter(pool => pool.candidateDisposition === "deprioritized_rapid_pump").length,
+        retainedForReview: results.filter(pool => pool.candidateDisposition !== "excluded_severe_drawdown").length,
+        rules: ["5分钟跌幅<=-30%或1小时跌幅<=-50%的候选从展示列表硬排除", "5分钟涨幅>=40%或1小时涨幅>=80%的极新池降级观察，不作为优先候选", "买卖失衡和流动性缓冲较薄保留风险标签", "USDT直接池与其他报价池分组；钱包卖出路径未验证时始终待复核"]
+      };
+      results = results.filter(pool => pool.candidateDisposition !== "excluded_severe_drawdown");
+      results.sort((a, b) =>
+        (a.candidateDisposition === "deprioritized_rapid_pump" ? 1 : 0) -
+          (b.candidateDisposition === "deprioritized_rapid_pump" ? 1 : 0) ||
+        (a.directUsdtPool ? 0 : 1) - (b.directUsdtPool ? 0 : 1) ||
+        a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       const responsePayload = {
         ok: true,
         complete: errors.length === 0 && !solanaRpcDiagnostics.some(item => item.status === "error") && !evmRpcDiagnostics.some(item => item.status === "error"),
@@ -3160,6 +3180,7 @@ export default {
         solanaRpcDiagnostics,
         fallbackChains,
         count: results.length,
+        riskFilterDiagnostics,
         pools: results,
         chainErrors: errors,
         limitations: [
