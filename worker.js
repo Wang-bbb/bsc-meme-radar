@@ -3270,6 +3270,8 @@ export default {
           poolUrl: "https://dexscreener.com/bsc/" + p.pair,
           bscScanUrl: "https://bscscan.com/token/" + p.tokenAddress,
           createdAt: new Date(p.createdAt).toISOString(),
+          createdBlock: p.createdBlock,
+          decimals: p.decimals,
           ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
           usdtReserve: p.usdtReserve,
           liquidityUSDApprox: p.liquidityUSD,
@@ -3526,6 +3528,7 @@ export default {
             metrics.set(pool.tokenAddress.toLowerCase(), {
               pool,
               deadBalancePct,
+              totalSupplyRaw: (!totalSupplyResult?.error && totalSupplyResult?.result) ? totalSupplyResult.result : null,
               burnRaw: 0n,
               burnLogsSeen: 0
             });
@@ -3551,9 +3554,8 @@ export default {
             try {
               const denominator = 10 ** Math.min(36, Math.max(0, decimals));
               burnAmount = Number(metric.burnRaw) / denominator;
-              if (metric.deadBalancePct != null && metric.pool.totalSupplyRaw != null) {
-                // Supply ratio for recent burns is computed from raw total supply below when available.
-                const totalSupplyRaw = BigInt(metric.pool.totalSupplyRaw);
+              if (metric.totalSupplyRaw != null) {
+                const totalSupplyRaw = BigInt(metric.totalSupplyRaw);
                 if (totalSupplyRaw > 0n) burnSharePct = Number(metric.burnRaw * 1000000n / totalSupplyRaw) / 10000;
               }
             } catch (_) {}
