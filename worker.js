@@ -1481,7 +1481,12 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // It deliberately does NOT manufacture pool candidates: pool address, token
 // side, liquidity and tradeability require a protocol-specific decoder.
 async function solanaRpcCall(rpcUrl, method, params) {
-  const cooldown = await readProviderCooldown("solana-rpc");
+  // Cool down each RPC endpoint independently. A primary 429 must not block
+  // an independently operated fallback before the fallback request is sent.
+  // Store only the hostname in the cache key; never persist API-key paths/query strings.
+  let endpointCooldownKey = "solana-rpc";
+  try { endpointCooldownKey = "solana-rpc-" + new URL(rpcUrl).hostname.toLowerCase(); } catch (_) {}
+  const cooldown = await readProviderCooldown(endpointCooldownKey);
   if (cooldown) throw new Error("Solana RPC shared cooldown HTTP " + cooldown.status);
   const requestBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
   let response = await fetch(rpcUrl, {
@@ -1490,7 +1495,7 @@ async function solanaRpcCall(rpcUrl, method, params) {
     body: requestBody
   });
   if (response.status === 429 || response.status === 402) {
-    await writeProviderCooldown("solana-rpc", response);
+    await writeProviderCooldown(endpointCooldownKey, response);
     throw new Error("Solana RPC HTTP " + response.status + " (provider cooldown)");
   }
   if (response.status >= 500) {
@@ -1500,10 +1505,10 @@ async function solanaRpcCall(rpcUrl, method, params) {
       headers: { "content-type": "application/json", "accept": "application/json" },
       body: requestBody
     });
-    if (response.status >= 500) await writeProviderCooldown("solana-rpc", response);
+    if (response.status >= 500) await writeProviderCooldown(endpointCooldownKey, response);
   }
   if (response.status === 429 || response.status === 402) {
-    await writeProviderCooldown("solana-rpc", response);
+    await writeProviderCooldown(endpointCooldownKey, response);
     throw new Error("Solana RPC HTTP " + response.status + " (provider cooldown)");
   }
   if (!response.ok) throw new Error("Solana RPC HTTP " + response.status);
