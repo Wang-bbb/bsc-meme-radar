@@ -1936,6 +1936,19 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
   } catch (error) {
     diagnostics.status = diagnostics.programsChecked > 0 ? "partial" : "error";
     diagnostics.error = String(error);
+    const rpcHttpStatusMatch = String(error).match(/HTTP\s+(\d{3})/i);
+    const rpcHttpStatus = rpcHttpStatusMatch ? Number(rpcHttpStatusMatch[1]) : null;
+    diagnostics.errorCategory = rpcHttpStatus === 401 || rpcHttpStatus === 403 ? "endpoint_auth_or_access"
+      : rpcHttpStatus === 429 ? "rate_limited"
+      : rpcHttpStatus !== null && rpcHttpStatus >= 500 ? "provider_unavailable"
+      : "rpc_error";
+    diagnostics.recoveryHint = rpcHttpStatus === 401 || rpcHttpStatus === 403
+      ? "检查 Cloudflare Worker 的 SOLANA_RPC_URL 是否为有效的 HTTPS RPC 地址、API Key/套餐权限是否有效，以及服务商是否允许 Cloudflare Worker 出口请求；不要把 API Key 放进公开代码或聊天。"
+      : rpcHttpStatus === 429
+        ? "RPC 服务商已限流：检查额度/CUPS 配额，使用有足够配额的专用 Solana RPC，并避免频繁刷新；当前结果不能证明没有新池。"
+        : rpcHttpStatus !== null && rpcHttpStatus >= 500
+          ? "RPC 服务商暂时异常；等待恢复或配置备用的专用 Solana RPC，当前结果不能证明没有新池。"
+          : "检查 RPC 端点连通性与 JSON-RPC 响应；数据源错误期间不得将空结果视为无新池。";
     diagnostics.mintHints = [...mintHints].slice(0, 20);
     diagnostics.poolInitLogHints = [...poolInitLogHints].slice(0, 20);
     diagnostics.candidatePoolsAdded = candidates.length;
@@ -2905,7 +2918,8 @@ export default {
         minutes,
         minLiquidityUSD: minLiquidity,
         dataSource: "GeckoTerminal primary; DexScreener profiles/boosts fallback; DexPaprika independent fallback when both fail",
-        coverage: fallbackChains.length ? "partial" : "primary-index",
+        scanStatus: results.length === 0 && errors.length > 0 ? "provider_unavailable" : (errors.length > 0 || fallbackChains.length > 0 ? "partial" : "ok"),
+        coverage: results.length === 0 && errors.length > 0 ? "unavailable" : (fallbackChains.length > 0 || errors.length > 0 ? "partial" : "primary-index"),
         providerDiagnostics: {
           geckoTerminal: {
             note: "shared-cooldown 表示命中本 Worker 所在 Cloudflare 边缘数据中心的冷却缓存；upstream-rate-limit 表示本次请求实际收到上游429。",
