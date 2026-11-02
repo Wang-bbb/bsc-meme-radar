@@ -1350,6 +1350,63 @@ async function recordLiquiditySnapshot(env, network, poolAddress, liquidityUSD) 
 
 
 
+// Conservative cross-chain annotations for early pools. These are review signals,
+// not trade recommendations. Direct-USDT status is based on the known quote-token
+// contract, never on a token symbol alone, and does not verify a wallet swap route.
+export function classifyMultichainPoolRisk(pool) {
+  const chain = String(pool.chainId || pool.chain || "").toLowerCase();
+  const quoteSymbol = String(pool.quoteSymbol || "").trim().toUpperCase();
+  const quoteAddress = String(pool.quoteAddress || "").trim().toLowerCase();
+  const stableQuotes = {
+    solana: { usdt: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".toLowerCase() },
+    eth: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
+    ethereum: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
+    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ad a2699bb2".replace(/\s/g, "") }
+  };
+  const expectedUsdt = stableQuotes[chain]?.usdt || null;
+  const directUsdtPool = Boolean(expectedUsdt && quoteAddress === expectedUsdt);
+  const usdtDirectPoolStatus = directUsdtPool
+    ? "direct_usdt_quote_verified_by_contract"
+    : quoteSymbol === "USDT" ? "usdt_symbol_unverified_or_contract_mismatch" : "not_usdt_quote_pool";
+
+  const n = value => value == null || value === "" ? null : Number(value);
+  const change5m = n(pool.priceChange5m);
+  const change1h = n(pool.priceChange1h);
+  const volume = n(pool.volume1hUSD);
+  const liquidity = n(pool.liquidityUSDApprox);
+  const age = n(pool.ageMinutes);
+  const flags = [];
+  if (change5m != null && Number.isFinite(change5m) && change5m <= -30) {
+    flags.push("极端短时下跌：5分钟跌幅达到或超过30%");
+  }
+  if (change1h != null && Number.isFinite(change1h) && change1h <= -50) {
+    flags.push("严重下跌：1小时跌幅达到或超过50%");
+  }
+  if (change5m != null && Number.isFinite(change5m) && change5m <= -15 && change5m > -30) {
+    flags.push("短时明显下跌：5分钟跌幅达到或超过15%");
+  }
+  const turnover = volume != null && Number.isFinite(volume) && liquidity != null &&
+    Number.isFinite(liquidity) && liquidity > 0 ? volume / liquidity : null;
+  if (age != null && Number.isFinite(age) && age <= 15 &&
+      volume != null && Number.isFinite(volume) && volume >= 0 &&
+      liquidity != null && Number.isFinite(liquidity) && liquidity >= 5000 &&
+      turnover != null && turnover < 0.01) {
+    flags.push("新池成交活跃度偏低：近1小时成交额不足估算流动性的1%");
+  }
+  const severeDrawdown = flags.some(flag => flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌"));
+  const partialSource = /fallback/i.test(String(pool.source || ""));
+  return {
+    usdtDirectPoolStatus,
+    directUsdtPool,
+    walletRouteStatus: "not_verified",
+    multichainRiskTier: severeDrawdown ? "high_risk_review"
+      : flags.length ? "review_only" : "unclassified_review",
+    multichainRiskFlags: flags,
+    volumeToLiquidityRatio1h: turnover == null ? null : Math.round(turnover * 10000) / 10000,
+    sourceCoverage: partialSource ? "partial_fallback" : "provider_dependent"
+  };
+}
+
 const SOLANA_DISCOVERY_PROGRAMS = [
   { name: "Pump.fun", address: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P" },
   { name: "PumpSwap", address: "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA" },
@@ -2765,10 +2822,11 @@ export default {
       const solanaRpcDiagnostics = [];
       const failedSolana = failedNetworks.find(item => item.network.id === "solana");
       const indexedSolanaPoolCount = results.filter(item => item.chainId === "solana" || item.chain === "Solana").length;
-      // Run the protocol decoder when the Solana index failed OR returned no
-      // qualifying pools. An HTTP 200 with an empty first page is not proof
-      // that no recent Raydium CPMM pools exist.
-      if ((failedSolana || indexedSolanaPoolCount === 0) && networks.some(item => item.id === "solana")) {
+      // Run the protocol decoder only when indexed providers (including fallbacks)
+      // produced no Solana candidates. A failed primary index must not trigger
+      // extra RPC work after a fallback already found pools; HTTP 200 with an
+      // empty first page is still not proof that no recent pools exist.
+      if (indexedSolanaPoolCount === 0 && networks.some(item => item.id === "solana")) {
         const solanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
         if (!/^https:\/\//i.test(solanaRpcUrl) || /\s/.test(solanaRpcUrl)) {
           solanaRpcDiagnostics.push({
@@ -2837,10 +2895,11 @@ export default {
           });
         }
       }
+      for (const pool of results) Object.assign(pool, classifyMultichainPoolRisk(pool));
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       const responsePayload = {
         ok: true,
-        complete: errors.length === 0,
+        complete: errors.length === 0 && !solanaRpcDiagnostics.some(item => item.status === "error") && !evmRpcDiagnostics.some(item => item.status === "error"),
         mode: "multichain-new-pools",
         chains: networks.map((x) => x.name),
         minutes,
