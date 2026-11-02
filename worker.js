@@ -2898,7 +2898,7 @@ export default {
       results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       const responsePayload = {
         ok: true,
-        complete: errors.length === 0,
+        complete: errors.length === 0 && !solanaRpcDiagnostics.some(item => item.status === "error") && !evmRpcDiagnostics.some(item => item.status === "error"),
         mode: "multichain-new-pools",
         chains: networks.map((x) => x.name),
         minutes,
