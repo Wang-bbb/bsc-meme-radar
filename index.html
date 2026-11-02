@@ -81,7 +81,9 @@ function selectMarketHistoryTargets(all){
 function sortCandidatesByTrendQuality(candidates){
   const scoreOf=p=>{
     const trend=p&&p.trendScore;
-    if(!trend||trend.status!=="checked"||!Number.isFinite(Number(trend.score))||
+    if(!trend||trend.status!=="checked"||trend.score==null||trend.score===""||
+      trend.confidence==null||trend.confidence===""||
+      !Number.isFinite(Number(trend.score))||
       !Number.isFinite(Number(trend.confidence))||Number(trend.confidence)<60)return null;
     return Number(trend.score);
   };
