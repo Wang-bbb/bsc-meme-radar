@@ -258,6 +258,8 @@ test("multiscan stops retrying GeckoTerminal immediately after HTTP 429 and does
   const res = await worker.fetch(request("/multiscan?minutes=15&minLiquidity=5000"), {});
   const data = await res.json();
   assert.equal(data.complete, false);
+  assert.equal(data.scanStatus, "provider_unavailable");
+  assert.equal(data.coverage, "unavailable");
   assert.equal(data.pools.length, 0);
   assert.equal(data.chainErrors.length, 3);
   assert.deepEqual([...attempts.values()], [1, 1, 1]);
