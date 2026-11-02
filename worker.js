@@ -3428,6 +3428,8 @@ export default {
           poolUrl: "https://dexscreener.com/bsc/" + p.pair,
           bscScanUrl: "https://bscscan.com/token/" + p.tokenAddress,
           createdAt: new Date(p.createdAt).toISOString(),
+          createdBlock: p.createdBlock,
+          decimals: p.decimals,
           ageMinutes: Math.round((latestTime - p.createdAt) / 6000) / 10,
           usdtReserve: p.usdtReserve, liquidityUSDApprox: p.liquidityUSD,
           volumeSincePoolCreationUSD: metric(volumeSincePoolCreationUSD),
@@ -3566,7 +3568,8 @@ export default {
             pool.burnSignalStatus = "checked";
             if ((metric.deadBalancePct != null && metric.deadBalancePct >= 1) ||
                 (burnSharePct != null && burnSharePct >= 0.5)) {
-              pool.burnSignalFlags = ["检测到销毁地址持仓或建池后转入量达到观察阈值；仅为销毁线索，不代表价格利好"];
+              pool.burnSignalFlags = ["检测到死地址余额或建池后转入量达到观察阈值；属于销毁线索，不证明代币已被协议销毁，也不代表价格利好"];
+              if (Array.isArray(pool.earlySignalReasons)) pool.earlySignalReasons.push("死地址余额/建池后转入量达到销毁观察阈值（不单独加分）");
             }
           }
         } catch (e) {
