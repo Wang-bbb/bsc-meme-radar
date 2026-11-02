@@ -2665,6 +2665,8 @@ export default {
       // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
       const scanKv = env && env.RADAR_KV;
       const scanCacheKey = "multiscan:scope-v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
+      const lastGoodScanCacheKey = "multiscan:last-good:v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
+      let lastGoodScan = null;
       if (scanKv && typeof scanKv.get === "function") {
         try {
           const cachedScan = await scanKv.get(scanCacheKey, "json");
@@ -2674,6 +2676,14 @@ export default {
             return json({ ...cachedScan.payload, cache: { status: "hit", ageSeconds, ttlSeconds: 45 } });
           }
         } catch (_) {}
+      }
+      if (scanKv && typeof scanKv.get === "function") {
+        try {
+          lastGoodScan = await scanKv.get(lastGoodScanCacheKey, "json");
+          if (!lastGoodScan || !lastGoodScan.payload || !Array.isArray(lastGoodScan.payload.pools)) {
+            lastGoodScan = null;
+          }
+        } catch (_) { lastGoodScan = null; }
       }
       // Keep every chain available for future restoration, while allowing the
       // client to request a reduced stable scan scope (for example chains=solana).
@@ -3156,12 +3166,53 @@ export default {
         ],
         generatedAt: new Date().toISOString()
       };
+      const providerUnavailableEmpty = responsePayload.count === 0 &&
+        responsePayload.scanStatus === "provider_unavailable";
+      if (providerUnavailableEmpty && lastGoodScan) {
+        const nowMs = Date.now();
+        const stalePools = lastGoodScan.payload.pools
+          .map((pool) => {
+            const createdAtMs = Date.parse(pool && pool.createdAt || "");
+            if (!Number.isFinite(createdAtMs)) return null;
+            const ageMinutes = (nowMs - createdAtMs) / 60000;
+            const liquidity = Number(pool.liquidityUSDApprox || 0);
+            if (ageMinutes < 0 || ageMinutes > minutes || liquidity < minLiquidity) return null;
+            return { ...pool, ageMinutes: Math.round(ageMinutes * 10) / 10 };
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.ageMinutes - b.ageMinutes || Number(b.volume1hUSD || 0) - Number(a.volume1hUSD || 0));
+        if (stalePools.length) {
+          const cachedAt = Number(lastGoodScan._cachedAt || 0);
+          responsePayload.pools = stalePools;
+          responsePayload.count = stalePools.length;
+          responsePayload.complete = false;
+          responsePayload.scanStatus = "stale";
+          responsePayload.coverage = "stale";
+          responsePayload.staleFallback = {
+            ageSeconds: cachedAt > 0 ? Math.max(0, Math.floor(nowMs / 1000 - cachedAt)) : null,
+            sourceGeneratedAt: lastGoodScan.payload.generatedAt || null,
+            note: "当前数据源不可用，以下为最近一次有效扫描中仍处于所选时间窗口且满足流动性门槛的候选；不是本轮实时发现结果，请重新核验。"
+          };
+        }
+      }
       if (scanKv && typeof scanKv.put === "function") {
         try {
-          await scanKv.put(scanCacheKey, JSON.stringify({
-            _cachedAt: Math.floor(Date.now() / 1000),
-            payload: responsePayload
-          }), { expirationTtl: 90 });
+          // Preserve the last non-empty candidate set separately for outage
+          // fallback. Never replace it with an empty or stale response.
+          if (responsePayload.count > 0 && !responsePayload.staleFallback) {
+            await scanKv.put(lastGoodScanCacheKey, JSON.stringify({
+              _cachedAt: Math.floor(Date.now() / 1000),
+              payload: responsePayload
+            }), { expirationTtl: 3600 });
+          }
+          // Do not cache an empty provider-outage response as if it were a
+          // normal scan result; the next request may be the first after recovery.
+          if (!providerUnavailableEmpty) {
+            await scanKv.put(scanCacheKey, JSON.stringify({
+              _cachedAt: Math.floor(Date.now() / 1000),
+              payload: responsePayload
+            }), { expirationTtl: 90 });
+          }
         } catch (_) {}
       }
       return json({ ...responsePayload, cache: { status: "miss", ageSeconds: 0, ttlSeconds: 45 } });
