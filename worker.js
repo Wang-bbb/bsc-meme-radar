@@ -2822,10 +2822,11 @@ export default {
       const solanaRpcDiagnostics = [];
       const failedSolana = failedNetworks.find(item => item.network.id === "solana");
       const indexedSolanaPoolCount = results.filter(item => item.chainId === "solana" || item.chain === "Solana").length;
-      // Run the protocol decoder when the Solana index failed OR returned no
-      // qualifying pools. An HTTP 200 with an empty first page is not proof
-      // that no recent Raydium CPMM pools exist.
-      if ((failedSolana || indexedSolanaPoolCount === 0) && networks.some(item => item.id === "solana")) {
+      // Run the protocol decoder only when indexed providers (including fallbacks)
+      // produced no Solana candidates. A failed primary index must not trigger
+      // extra RPC work after a fallback already found pools; HTTP 200 with an
+      // empty first page is still not proof that no recent pools exist.
+      if (indexedSolanaPoolCount === 0 && networks.some(item => item.id === "solana")) {
         const solanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
         if (!/^https:\/\//i.test(solanaRpcUrl) || /\s/.test(solanaRpcUrl)) {
           solanaRpcDiagnostics.push({
