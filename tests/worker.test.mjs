@@ -2541,3 +2541,35 @@ test("multiscan reports that RPC failover was skipped when indexed Solana candid
   assert.equal(data.solanaRpcDiagnostics[0].fallbackConfigured, true);
   assert.equal(data.solanaRpcDiagnostics[0].fallbackRpcChecked, false);
 });
+
+
+test("multichain candidate disposition excludes severe dumps and deprioritizes rapid pumps", () => {
+  const dumped = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "SOL",
+    priceChange5m: -34, priceChange1h: -89,
+    volume1hUSD: 64000, liquidityUSDApprox: 6200, ageMinutes: 7,
+    buys1h: 652, sells1h: 554
+  });
+  assert.equal(dumped.candidateDisposition, "excluded_severe_drawdown");
+  assert.equal(dumped.quoteAssetGroup, "non_usdt_quote_pool");
+
+  const pumped = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "SOL",
+    priceChange5m: 42, priceChange1h: 63,
+    volume1hUSD: 2400, liquidityUSDApprox: 7600, ageMinutes: 7,
+    buys1h: 168, sells1h: 118
+  });
+  assert.equal(pumped.candidateDisposition, "deprioritized_rapid_pump");
+  assert.equal(pumped.walletRouteStatus, "not_verified");
+
+  const balanced = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "USDT",
+    quoteAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    priceChange5m: 2, priceChange1h: 5,
+    volume1hUSD: 3000, liquidityUSDApprox: 15000, ageMinutes: 8,
+    buys1h: 30, sells1h: 20
+  });
+  assert.equal(balanced.quoteAssetGroup, "usdt_direct_pool");
+  assert.equal(balanced.candidateDisposition, "unclassified_review");
+  assert.equal(balanced.walletRouteStatus, "not_verified");
+});
