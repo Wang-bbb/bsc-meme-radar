@@ -1452,10 +1452,18 @@ export function classifyMultichainPoolRisk(pool) {
   const severeDrawdown = flags.some(flag =>
     flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌") || flag.startsWith("新池短时间急拉"));
   const partialSource = /fallback/i.test(String(pool.source || ""));
+  const hardExcluded = flags.some(flag =>
+    flag.startsWith("极端短时下跌") || flag.startsWith("严重下跌"));
+  const rapidPump = flags.some(flag => flag.startsWith("新池短时间急拉"));
+  const quoteAssetGroup = directUsdtPool ? "usdt_direct_pool" : "non_usdt_quote_pool";
   return {
     usdtDirectPoolStatus,
     directUsdtPool,
+    quoteAssetGroup,
     walletRouteStatus: "not_verified",
+    candidateDisposition: hardExcluded ? "excluded_severe_drawdown"
+      : rapidPump ? "deprioritized_rapid_pump"
+        : flags.length ? "review_only" : "unclassified_review",
     multichainRiskTier: severeDrawdown ? "high_risk_review"
       : flags.length ? "review_only" : "unclassified_review",
     multichainRiskFlags: flags,
@@ -1942,14 +1950,18 @@ function describeSolanaRpcEndpoint(rpcUrl) {
     const pathParts = parsed.pathname.split("/").filter(Boolean);
     const isNodeRealSolana = host === "open-platform.nodereal.io" &&
       pathParts.length === 2 && pathParts[1] === "solana";
+    const isNodeRealBsc = host === "bsc-mainnet.nodereal.io" ||
+      host === "bsc-testnet.nodereal.io";
     const isPublicSolana = host === "api.mainnet-beta.solana.com" &&
       parsed.pathname === "/";
     return {
       endpointHost: host,
       endpointFormat: isNodeRealSolana ? "nodereal-solana"
-        : isPublicSolana ? "solana-public-rpc" : "custom-or-unrecognized",
+        : isNodeRealBsc ? "nodereal-bsc"
+          : isPublicSolana ? "solana-public-rpc" : "custom-or-unrecognized",
       endpointPathPattern: isNodeRealSolana ? "/[REDACTED]/solana/"
-        : isPublicSolana ? "/" : "[redacted]"
+        : isNodeRealBsc ? "/v1/[REDACTED]"
+          : isPublicSolana ? "/" : "[redacted]"
     };
   } catch (_) {
     return {
@@ -1992,6 +2004,13 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     },
     note: "仅将通过 PumpSwap create_pool 或 Raydium CPMM initialize 指令、池账户归属和双侧 Vault/Mint 关联核验的新池加入待复核候选。USDC/USDT 按报价侧储备×2估算；wrapped-SOL 报价池仅使用通过新鲜度与置信区间校验的 Pyth SOL/USD 价格估算，价格源不可用或不合格时跳过。其他协议目前仍只做活动线索诊断；RPC 仅抽样少量近期交易，不代表完整新池覆盖。"
   };
+  if (diagnostics.endpointFormat === "nodereal-bsc") {
+    diagnostics.status = "error";
+    diagnostics.errorCategory = "wrong_chain_endpoint";
+    diagnostics.error = "BSC RPC endpoint configured for Solana";
+    diagnostics.recoveryHint = "当前 SOLANA_RPC_URL 指向 NodeReal BSC 节点，不能用于 Solana 扫描。请使用 Solana Mainnet RPC Endpoint；本次已跳过请求，未发送 Solana 方法到 BSC。";
+    return { ...diagnostics, pools: [] };
+  }
   const nowSeconds = Math.floor(Date.now() / 1000);
   const cutoff = nowSeconds - minutes * 60;
   const mintHints = new Set();
@@ -2665,6 +2684,8 @@ export default {
       // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
       const scanKv = env && env.RADAR_KV;
       const scanCacheKey = "multiscan:scope-v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
+      const lastGoodScanCacheKey = "multiscan:last-good:v1:" + (requestedChains.length ? requestedChains.join(",") : "all") + ":" + minutes + ":" + minLiquidity;
+      let lastGoodScan = null;
       if (scanKv && typeof scanKv.get === "function") {
         try {
           const cachedScan = await scanKv.get(scanCacheKey, "json");
@@ -2674,6 +2695,14 @@ export default {
             return json({ ...cachedScan.payload, cache: { status: "hit", ageSeconds, ttlSeconds: 45 } });
           }
         } catch (_) {}
+      }
+      if (scanKv && typeof scanKv.get === "function") {
+        try {
+          lastGoodScan = await scanKv.get(lastGoodScanCacheKey, "json");
+          if (!lastGoodScan || !lastGoodScan.payload || !Array.isArray(lastGoodScan.payload.pools)) {
+            lastGoodScan = null;
+          }
+        } catch (_) { lastGoodScan = null; }
       }
       // Keep every chain available for future restoration, while allowing the
       // client to request a reduced stable scan scope (for example chains=solana).
@@ -2688,7 +2717,7 @@ export default {
       if (requestedChains.length && networks.length === 0) {
         return json({ ok: false, error: "chains must include a supported chain: solana, eth, base" }, 400);
       }
-      const results = [];
+      let results = [];
       const errors = [];
       const chainSources = [];
       const failedNetworks = [];
@@ -3103,7 +3132,19 @@ export default {
         }
       }
       for (const pool of results) Object.assign(pool, classifyMultichainPoolRisk(pool));
-      results.sort((a, b) => a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
+      const riskFilterDiagnostics = {
+        receivedCandidates: results.length,
+        excludedSevereDrawdown: results.filter(pool => pool.candidateDisposition === "excluded_severe_drawdown").length,
+        deprioritizedRapidPump: results.filter(pool => pool.candidateDisposition === "deprioritized_rapid_pump").length,
+        retainedForReview: results.filter(pool => pool.candidateDisposition !== "excluded_severe_drawdown").length,
+        rules: ["5分钟跌幅<=-30%或1小时跌幅<=-50%的候选从展示列表硬排除", "5分钟涨幅>=40%或1小时涨幅>=80%的极新池降级观察，不作为优先候选", "买卖失衡和流动性缓冲较薄保留风险标签", "USDT直接池与其他报价池分组；钱包卖出路径未验证时始终待复核"]
+      };
+      results = results.filter(pool => pool.candidateDisposition !== "excluded_severe_drawdown");
+      results.sort((a, b) =>
+        (a.candidateDisposition === "deprioritized_rapid_pump" ? 1 : 0) -
+          (b.candidateDisposition === "deprioritized_rapid_pump" ? 1 : 0) ||
+        (a.directUsdtPool ? 0 : 1) - (b.directUsdtPool ? 0 : 1) ||
+        a.ageMinutes - b.ageMinutes || b.volume1hUSD - a.volume1hUSD);
       const responsePayload = {
         ok: true,
         complete: errors.length === 0 && !solanaRpcDiagnostics.some(item => item.status === "error") && !evmRpcDiagnostics.some(item => item.status === "error"),
@@ -3139,6 +3180,7 @@ export default {
         solanaRpcDiagnostics,
         fallbackChains,
         count: results.length,
+        riskFilterDiagnostics,
         pools: results,
         chainErrors: errors,
         limitations: [
@@ -3156,12 +3198,53 @@ export default {
         ],
         generatedAt: new Date().toISOString()
       };
+      const providerUnavailableEmpty = responsePayload.count === 0 &&
+        responsePayload.scanStatus === "provider_unavailable";
+      if (providerUnavailableEmpty && lastGoodScan) {
+        const nowMs = Date.now();
+        const stalePools = lastGoodScan.payload.pools
+          .map((pool) => {
+            const createdAtMs = Date.parse(pool && pool.createdAt || "");
+            if (!Number.isFinite(createdAtMs)) return null;
+            const ageMinutes = (nowMs - createdAtMs) / 60000;
+            const liquidity = Number(pool.liquidityUSDApprox || 0);
+            if (ageMinutes < 0 || ageMinutes > minutes || liquidity < minLiquidity) return null;
+            return { ...pool, ageMinutes: Math.round(ageMinutes * 10) / 10 };
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.ageMinutes - b.ageMinutes || Number(b.volume1hUSD || 0) - Number(a.volume1hUSD || 0));
+        if (stalePools.length) {
+          const cachedAt = Number(lastGoodScan._cachedAt || 0);
+          responsePayload.pools = stalePools;
+          responsePayload.count = stalePools.length;
+          responsePayload.complete = false;
+          responsePayload.scanStatus = "stale";
+          responsePayload.coverage = "stale";
+          responsePayload.staleFallback = {
+            ageSeconds: cachedAt > 0 ? Math.max(0, Math.floor(nowMs / 1000 - cachedAt)) : null,
+            sourceGeneratedAt: lastGoodScan.payload.generatedAt || null,
+            note: "当前数据源不可用，以下为最近一次有效扫描中仍处于所选时间窗口且满足流动性门槛的候选；不是本轮实时发现结果，请重新核验。"
+          };
+        }
+      }
       if (scanKv && typeof scanKv.put === "function") {
         try {
-          await scanKv.put(scanCacheKey, JSON.stringify({
-            _cachedAt: Math.floor(Date.now() / 1000),
-            payload: responsePayload
-          }), { expirationTtl: 90 });
+          // Preserve the last non-empty candidate set separately for outage
+          // fallback. Never replace it with an empty or stale response.
+          if (responsePayload.count > 0 && !responsePayload.staleFallback) {
+            await scanKv.put(lastGoodScanCacheKey, JSON.stringify({
+              _cachedAt: Math.floor(Date.now() / 1000),
+              payload: responsePayload
+            }), { expirationTtl: 3600 });
+          }
+          // Do not cache an empty provider-outage response as if it were a
+          // normal scan result; the next request may be the first after recovery.
+          if (!providerUnavailableEmpty) {
+            await scanKv.put(scanCacheKey, JSON.stringify({
+              _cachedAt: Math.floor(Date.now() / 1000),
+              payload: responsePayload
+            }), { expirationTtl: 90 });
+          }
         } catch (_) {}
       }
       return json({ ...responsePayload, cache: { status: "miss", ageSeconds: 0, ttlSeconds: 45 } });

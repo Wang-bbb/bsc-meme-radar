@@ -319,6 +319,84 @@ test("multiscan combines indexed pools and applies the age and liquidity filters
   assert.ok(data.pools.every(pool => pool.priceChange15m === -3.4));
 });
 
+test("multiscan serves only still-fresh last-good candidates during a full provider outage", async () => {
+  const originalNow = Date.now;
+  const baseTime = 1_800_000_000_000;
+  const store = new Map();
+  const kv = {
+    async get(key, type) {
+      assert.equal(type, "json");
+      return store.has(key) ? JSON.parse(store.get(key)) : null;
+    },
+    async put(key, value) {
+      store.set(key, value);
+    }
+  };
+  const tokenId = "solana_token";
+  const quoteId = "solana_quote";
+  const dexId = "solana_dex";
+  Date.now = () => baseTime;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    assert.equal(url.hostname, "api.geckoterminal.com");
+    return response({
+      data: [{
+        id: "solana_TestPool",
+        attributes: {
+          address: "TestPool",
+          pool_created_at: new Date(baseTime - 5 * 60_000).toISOString(),
+          reserve_in_usd: "12000",
+          transactions: { h1: { buys: 7, sells: 3 } },
+          volume_usd: { h1: "2500" },
+          price_change_percentage: { m5: "-2.1", m15: "-3.4", h1: "4.2" }
+        },
+        relationships: {
+          base_token: { data: { id: tokenId } },
+          quote_token: { data: { id: quoteId } },
+          dex: { data: { id: dexId } }
+        }
+      }],
+      included: [
+        { id: tokenId, attributes: { address: "MemeToken", symbol: "MEME", name: "Meme Token" } },
+        { id: quoteId, attributes: { address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", name: "Tether USD" } },
+        { id: dexId, attributes: { name: "Test DEX" } }
+      ]
+    });
+  };
+  try {
+    const first = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), { RADAR_KV: kv });
+    const firstData = await first.json();
+    assert.equal(firstData.count, 1);
+    assert.notEqual(firstData.scanStatus, "stale");
+    assert.ok([...store.keys()].some(key => key.startsWith("multiscan:last-good:v1:")));
+
+    Date.now = () => baseTime + 46_000;
+    globalThis.fetch = async (input) => {
+      const url = new URL(input);
+      if (url.hostname === "api.geckoterminal.com") return response({ error: "rate limited" }, 429);
+      if (url.hostname === "api.dexscreener.com") return response({ error: "rate limited" }, 429);
+      if (url.hostname === "api.dexpaprika.com") return response({ error: "quota" }, 402);
+      if (url.hostname === "solana-rpc.invalid") return response({ error: "rate limited" }, 429);
+      throw new Error("Unexpected URL " + url.href);
+    };
+    const second = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+      RADAR_KV: kv,
+      SOLANA_RPC_URL: "https://solana-rpc.invalid"
+    });
+    const secondData = await second.json();
+    assert.equal(secondData.complete, false);
+    assert.equal(secondData.scanStatus, "stale");
+    assert.equal(secondData.coverage, "stale");
+    assert.equal(secondData.count, 1);
+    assert.equal(secondData.pools[0].pairAddress, "TestPool");
+    assert.ok(secondData.pools[0].ageMinutes <= 15);
+    assert.ok(secondData.staleFallback);
+    assert.equal(secondData.chainErrors.length > 0, true);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("Solana security gate keeps active mint or freeze authorities in review", async () => {
   globalThis.fetch = async () => response({
     tokenProgram: "spl-token",
@@ -1503,6 +1581,29 @@ test("multiscan cross-checks Solana program activity over RPC without promoting 
   assert.equal(rpcCalls, 12, "six program signature scans plus at most six transaction samples");
 });
 
+test("Solana scan rejects a NodeReal BSC endpoint before making any RPC request", async () => {
+  let rpcCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("geckoterminal.com")) return response({ data: [], included: [] }, 429);
+    if (url.includes("dexscreener.com")) return response([], 200);
+    if (url.includes("dexpaprika.com")) return response({ error: "quota" }, 402);
+    if (url.includes("bsc-mainnet.nodereal.io")) {
+      rpcCalls++;
+      throw new Error("Solana request must not be sent to a BSC endpoint");
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const res = await worker.fetch(request("/multiscan?chains=solana&minutes=15&minLiquidity=5000"), {
+    SOLANA_RPC_URL: "https://bsc-mainnet.nodereal.io/v1/redacted-test-key"
+  });
+  const data = await res.json();
+  assert.equal(data.solanaRpcDiagnostics[0].endpointFormat, "nodereal-bsc");
+  assert.equal(data.solanaRpcDiagnostics[0].errorCategory, "wrong_chain_endpoint");
+  assert.equal(data.solanaRpcDiagnostics[0].status, "error");
+  assert.equal(rpcCalls, 0, "never send Solana JSON-RPC methods to a BSC endpoint");
+});
+
 test("Solana RPC discovery stops immediately on HTTP 429 and reports unavailable evidence", async () => {
   let rpcCalls = 0;
   globalThis.fetch = async (input, init = {}) => {
@@ -2439,4 +2540,36 @@ test("multiscan reports that RPC failover was skipped when indexed Solana candid
   assert.equal(data.solanaRpcDiagnostics[0].reason, "indexed_candidates_found");
   assert.equal(data.solanaRpcDiagnostics[0].fallbackConfigured, true);
   assert.equal(data.solanaRpcDiagnostics[0].fallbackRpcChecked, false);
+});
+
+
+test("multichain candidate disposition excludes severe dumps and deprioritizes rapid pumps", () => {
+  const dumped = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "SOL",
+    priceChange5m: -34, priceChange1h: -89,
+    volume1hUSD: 64000, liquidityUSDApprox: 6200, ageMinutes: 7,
+    buys1h: 652, sells1h: 554
+  });
+  assert.equal(dumped.candidateDisposition, "excluded_severe_drawdown");
+  assert.equal(dumped.quoteAssetGroup, "non_usdt_quote_pool");
+
+  const pumped = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "SOL",
+    priceChange5m: 42, priceChange1h: 63,
+    volume1hUSD: 2400, liquidityUSDApprox: 7600, ageMinutes: 7,
+    buys1h: 168, sells1h: 118
+  });
+  assert.equal(pumped.candidateDisposition, "deprioritized_rapid_pump");
+  assert.equal(pumped.walletRouteStatus, "not_verified");
+
+  const balanced = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "USDT",
+    quoteAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    priceChange5m: 2, priceChange1h: 5,
+    volume1hUSD: 3000, liquidityUSDApprox: 15000, ageMinutes: 8,
+    buys1h: 30, sells1h: 20
+  });
+  assert.equal(balanced.quoteAssetGroup, "usdt_direct_pool");
+  assert.equal(balanced.candidateDisposition, "unclassified_review");
+  assert.equal(balanced.walletRouteStatus, "not_verified");
 });
