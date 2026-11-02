@@ -2871,7 +2871,7 @@ export default {
           } else {
             results.push(...primaryPools);
             solanaRpcDiagnostics.push(primaryDiagnostics);
-            if (fallbackSolanaRpcUrl && !validRpcUrl(fallbackSolanaRpcUrl)) {
+            if (shouldTryFallback && fallbackSolanaRpcUrl && !validRpcUrl(fallbackSolanaRpcUrl)) {
               solanaRpcDiagnostics.push({
                 chain: "Solana", provider: "Solana JSON-RPC fallback", status: "error",
                 error: "SOLANA_RPC_FALLBACK_URL must be a valid HTTPS endpoint",
@@ -2985,6 +2985,7 @@ export default {
           "流动性、成交量、买卖次数和价格变化来自第三方索引，可能有延迟或缺失。",
           "多链报价资产会显示其索引符号；只有标记为 USDT 的池才表示池子直接以 USDT 为一侧资产，仍不代表钱包兑换路径已验证。",
           "Solana RPC 当前对 PumpSwap create_pool 和 Raydium CPMM initialize 执行协议级解码，并核验池账户程序归属、双侧 Vault Token 程序和 Mint 关联；USDT/USDC 按报价侧储备×2估算美元流动性，wrapped-SOL 报价池使用通过新鲜度与置信区间校验的 Pyth SOL/USD 价格估算，价格源不合格时跳过。Pump.fun bonding curve、Raydium AMM v4、Meteora、Orca 当前仍只做活动线索诊断；本兜底仅抽样少量近期交易，不是全 Solana 新池索引，成交/K线/钱包路由缺失的候选仍待复核。",
+          "可选设置 SOLANA_RPC_FALLBACK_URL 作为备用 HTTPS RPC；仅当主 RPC 在扫描任何程序前立即失败时才切换，避免双倍消耗 Worker 子请求预算。备用 RPC 仍使用有限协议抽样，不会替代完整 Solana 索引；API Key 应只存 Cloudflare Secret，不要写入仓库。",
           "公共索引和 RPC 的 429/402 使用共享冷却；5xx 最多重试一次并进入短冷却。冷却和缓存是尽力而为的 Cloudflare 边缘级治理，不代表上游配额已恢复。",
           "本接口只读，不执行兑换或交易。"
         ],
