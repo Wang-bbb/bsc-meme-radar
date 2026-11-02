@@ -2840,17 +2840,46 @@ export default {
       // extra RPC work after a fallback already found pools; HTTP 200 with an
       // empty first page is still not proof that no recent pools exist.
       if (indexedSolanaPoolCount === 0 && networks.some(item => item.id === "solana")) {
-        const solanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
-        if (!/^https:\/\//i.test(solanaRpcUrl) || /\s/.test(solanaRpcUrl)) {
+        const primarySolanaRpcUrl = String(env && env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com").trim();
+        const fallbackSolanaRpcUrl = String(env && env.SOLANA_RPC_FALLBACK_URL || "").trim();
+        const validRpcUrl = value => /^https:\/\//i.test(value) && !/\s/.test(value);
+        if (!validRpcUrl(primarySolanaRpcUrl)) {
           solanaRpcDiagnostics.push({
-            chain: "Solana", provider: "Solana JSON-RPC", status: "error",
-            error: "SOLANA_RPC_URL must be a valid HTTPS endpoint"
+            chain: "Solana", provider: "Solana JSON-RPC primary", status: "error",
+            error: "SOLANA_RPC_URL must be a valid HTTPS endpoint",
+            errorCategory: "invalid_endpoint",
+            recoveryHint: "在 Cloudflare Worker Settings → Variables and Secrets 中配置有效的 SOLANA_RPC_URL。"
           });
         } else {
-          const scanned = await scanSolanaRpcActivity(solanaRpcUrl, minutes, minLiquidity);
-          results.push(...scanned.pools);
-          const { pools: _decodedPools, ...diagnostics } = scanned;
-          solanaRpcDiagnostics.push(diagnostics);
+          const primaryScan = await scanSolanaRpcActivity(primarySolanaRpcUrl, minutes, minLiquidity);
+          const { pools: primaryPools, ...primaryDiagnostics } = primaryScan;
+          primaryDiagnostics.role = "primary";
+          const shouldTryFallback = primaryDiagnostics.status === "error" &&
+            primaryDiagnostics.programsChecked === 0 &&
+            fallbackSolanaRpcUrl &&
+            fallbackSolanaRpcUrl !== primarySolanaRpcUrl;
+          if (shouldTryFallback && validRpcUrl(fallbackSolanaRpcUrl)) {
+            solanaRpcDiagnostics.push(primaryDiagnostics);
+            const fallbackScan = await scanSolanaRpcActivity(fallbackSolanaRpcUrl, minutes, minLiquidity);
+            const { pools: fallbackPools, ...fallbackDiagnostics } = fallbackScan;
+            fallbackDiagnostics.role = "fallback";
+            fallbackDiagnostics.primaryRpcError = primaryDiagnostics.error || "primary RPC unavailable";
+            fallbackDiagnostics.note = (fallbackDiagnostics.note || "") +
+              " 已在主 RPC 首次请求失败时切换到备用 RPC；备用扫描仍为有限协议抽样，不是全链完整索引。";
+            results.push(...fallbackPools);
+            solanaRpcDiagnostics.push(fallbackDiagnostics);
+          } else {
+            results.push(...primaryPools);
+            solanaRpcDiagnostics.push(primaryDiagnostics);
+            if (fallbackSolanaRpcUrl && !validRpcUrl(fallbackSolanaRpcUrl)) {
+              solanaRpcDiagnostics.push({
+                chain: "Solana", provider: "Solana JSON-RPC fallback", status: "error",
+                error: "SOLANA_RPC_FALLBACK_URL must be a valid HTTPS endpoint",
+                errorCategory: "invalid_endpoint",
+                recoveryHint: "备用 RPC 地址必须是有效 HTTPS URL；请勿把 API Key 写入公开代码。"
+              });
+            }
+          }
         }
       }
 
@@ -2918,8 +2947,12 @@ export default {
         minutes,
         minLiquidityUSD: minLiquidity,
         dataSource: "GeckoTerminal primary; DexScreener profiles/boosts fallback; DexPaprika independent fallback when both fail",
-        scanStatus: results.length === 0 && errors.length > 0 ? "provider_unavailable" : (errors.length > 0 || fallbackChains.length > 0 ? "partial" : "ok"),
-        coverage: results.length === 0 && errors.length > 0 ? "unavailable" : (fallbackChains.length > 0 || errors.length > 0 ? "partial" : "primary-index"),
+        scanStatus: results.length === 0 && errors.length > 0 &&
+          !solanaRpcDiagnostics.some(item => item.status === "ok" || item.status === "partial")
+          ? "provider_unavailable" : (errors.length > 0 || fallbackChains.length > 0 || solanaRpcDiagnostics.some(item => item.role === "fallback") ? "partial" : "ok"),
+        coverage: results.length === 0 && errors.length > 0 &&
+          !solanaRpcDiagnostics.some(item => item.status === "ok" || item.status === "partial")
+          ? "unavailable" : (fallbackChains.length > 0 || errors.length > 0 || solanaRpcDiagnostics.some(item => item.role === "fallback" || item.status === "partial") ? "partial" : "primary-index"),
         providerDiagnostics: {
           geckoTerminal: {
             note: "shared-cooldown 表示命中本 Worker 所在 Cloudflare 边缘数据中心的冷却缓存；upstream-rate-limit 表示本次请求实际收到上游429。",
