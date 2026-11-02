@@ -1533,7 +1533,7 @@ async function solanaRpcCall(rpcUrl, method, params) {
           responseHint = "json_error";
         }
       } catch (_) {}
-    } else if (responseContentType.includes("html") || /<\\s*!doctype html|<\\s*html/i.test(responseText.slice(0, 500))) {
+    } else if (responseContentType.includes("html") || /<\s*!doctype html|<\s*html/i.test(responseText.slice(0, 500))) {
       responseHint = "html_error_page";
     } else {
       responseHint = "text_response";
