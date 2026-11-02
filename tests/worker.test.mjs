@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -2258,4 +2258,38 @@ test("user-reported scam labels do not affect unrelated token addresses", () => 
   }));
   assert.equal(result.userReportedRiskStatus, "none");
   assert.deepEqual(result.userReportedRiskReasons, []);
+});
+
+test("multichain risk labels flag extreme Solana drawdowns and do not infer USDT from symbol alone", () => {
+  const crashed = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "SOL",
+    quoteAddress: "So11111111111111111111111111111111111111112",
+    priceChange5m: -69.54, priceChange1h: -82.67,
+    volume1hUSD: 64248.47, liquidityUSDApprox: 5345.75,
+    ageMinutes: 13.9, source: "DexScreener profiles + boosts fallback"
+  });
+  assert.equal(crashed.multichainRiskTier, "high_risk_review");
+  assert.equal(crashed.directUsdtPool, false);
+  assert.equal(crashed.usdtDirectPoolStatus, "not_usdt_quote_pool");
+  assert.equal(crashed.walletRouteStatus, "not_verified");
+  assert.equal(crashed.sourceCoverage, "partial_fallback");
+  assert.ok(crashed.multichainRiskFlags.some(flag => flag.includes("极端短时下跌")));
+
+  const symbolSpoof = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "USDT",
+    quoteAddress: "So11111111111111111111111111111111111111112",
+    priceChange5m: 1, priceChange1h: 2,
+    volume1hUSD: 100, liquidityUSDApprox: 10000, ageMinutes: 5
+  });
+  assert.equal(symbolSpoof.directUsdtPool, false);
+  assert.equal(symbolSpoof.usdtDirectPoolStatus, "usdt_symbol_unverified_or_contract_mismatch");
+
+  const realSolUsdt = classifyMultichainPoolRisk({
+    chainId: "solana", quoteSymbol: "USDT",
+    quoteAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    priceChange5m: 0, priceChange1h: 0,
+    volume1hUSD: 1000, liquidityUSDApprox: 10000, ageMinutes: 5
+  });
+  assert.equal(realSolUsdt.directUsdtPool, true);
+  assert.equal(realSolUsdt.usdtDirectPoolStatus, "direct_usdt_quote_verified_by_contract");
 });
