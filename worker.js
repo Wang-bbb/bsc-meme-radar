@@ -1494,11 +1494,15 @@ export function parseSolanaRpcErrorDiagnostics(error) {
   const hintMatch = message.match(/\((empty_response|json_response|json_rpc_error|json_error|html_error_page|text_response|unknown_response)(?:,|\))/i);
   const codeMatch = message.match(/,\s*code\s+([a-zA-Z0-9_-]{1,24})/i);
   const kindMatch = message.match(/,\s*kind\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
+  const shapeMatch = message.match(/,\s*shape\s+(object|array|scalar)/i);
+  const keysMatch = message.match(/,\s*json_keys\s+([a-z_+]{1,64})/i);
   return {
     rpcHttpStatus: statusMatch ? Number(statusMatch[1]) : null,
     rpcResponseHint: hintMatch ? hintMatch[1].toLowerCase() : null,
     rpcJsonErrorCode: codeMatch ? codeMatch[1] : null,
-    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null
+    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null,
+    rpcJsonErrorShape: shapeMatch ? shapeMatch[1].toLowerCase() : null,
+    rpcJsonTopLevelKeys: keysMatch ? keysMatch[1].split("+") : []
   };
 }
 
@@ -1548,13 +1552,46 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
       responseHint = "json_response";
       try {
         const parsedError = JSON.parse(responseText);
-        const rawCode = parsedError && parsedError.error && parsedError.error.code;
+        const isPlainObject = parsedError !== null && typeof parsedError === "object" && !Array.isArray(parsedError);
+        const nestedError = isPlainObject && parsedError.error && typeof parsedError.error === "object"
+          ? parsedError.error : null;
+        const rawCode = nestedError && nestedError.code != null ? nestedError.code
+          : isPlainObject && parsedError.code != null ? parsedError.code
+            : isPlainObject && parsedError.statusCode != null ? parsedError.statusCode : null;
         if (rawCode !== undefined && rawCode !== null) {
           jsonErrorCode = String(rawCode).slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "");
           responseHint = "json_rpc_error";
         } else if (parsedError && (parsedError.message || parsedError.error)) {
           responseHint = "json_error";
         }
+        const errorText = String(
+          nestedError && nestedError.message ||
+          isPlainObject && parsedError.message ||
+          isPlainObject && parsedError.error ||
+          ""
+        ).toLowerCase();
+        if (/invalid api.?key|api.?key invalid|unauthorized|authentication|invalid token|credential/.test(errorText)) {
+          jsonErrorKind = "auth_rejected";
+        } else if (/forbidden|permission|access denied|not allowed/.test(errorText)) {
+          jsonErrorKind = "access_denied";
+        } else if (/not found|no route|unknown endpoint|endpoint.*invalid|route.*not found|resource.*missing/.test(errorText)) {
+          jsonErrorKind = "route_not_found";
+        } else if (/quota|rate.?limit|too many requests|billing|plan limit|credits/.test(errorText)) {
+          jsonErrorKind = "quota_or_rate_limit";
+        } else if (/method not found|unsupported method|method.*not supported/.test(errorText)) {
+          jsonErrorKind = "method_unsupported";
+        } else if (errorText) {
+          jsonErrorKind = "provider_json_error_other";
+        } else if (parsedError && typeof parsedError === "object") {
+          jsonErrorKind = "json_object_without_recognized_error";
+        }
+        const safeKeys = ["code", "error", "message", "status", "statusCode", "data", "success"];
+        const presentKeys = isPlainObject
+          ? safeKeys.filter(key => Object.prototype.hasOwnProperty.call(parsedError, key))
+          : [];
+        var jsonShape = Array.isArray(parsedError) ? "array"
+          : parsedError !== null && typeof parsedError === "object" ? "object" : "scalar";
+        var jsonKeyHint = presentKeys.map(key => key.replace(/[A-Z]/g, match => "_" + match.toLowerCase())).join("+");
         // Emit only a fixed allow-listed category. Never return provider message/body,
         // which could contain credentials, request identifiers, or other sensitive data.
         const errorText = String(
@@ -1586,7 +1623,9 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     }
     throw new Error("Solana RPC HTTP " + response.status + " (" + responseHint +
       (jsonErrorCode ? ", code " + jsonErrorCode : "") +
-      (jsonErrorKind ? ", kind " + jsonErrorKind : "") + ")");
+      (jsonErrorKind ? ", kind " + jsonErrorKind : "") +
+      (typeof jsonShape === "string" ? ", shape " + jsonShape : "") +
+      (typeof jsonKeyHint === "string" && jsonKeyHint ? ", json_keys " + jsonKeyHint : "") + ")");
   }
   let body;
   try { body = await response.json(); }
