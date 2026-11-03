@@ -1488,7 +1488,7 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // launch/DEX programs and extracts explicit SPL mint-initialization evidence.
 // It deliberately does NOT manufacture pool candidates: pool address, token
 // side, liquidity and tradeability require a protocol-specific decoder.
-async function solanaRpcCall(rpcUrl, method, params) {
+async function solanaRpcCallRaw(rpcUrl, method, params) {
   // Cool down each RPC endpoint independently. A primary 429 must not block
   // an independently operated fallback before the fallback request is sent.
   // Store only the hostname in the cache key; never persist API-key paths/query strings.
@@ -1636,6 +1636,21 @@ export function calculateSolanaQuoteLiquidityUSD(quoteSymbol, quoteReserve, solU
   return null;
 }
 
+async function solanaRpcCall(rpcUrl, method, params, diagnostics = null) {
+  if (diagnostics) diagnostics.lastRpcMethod = method;
+  try {
+    const result = await solanaRpcCallRaw(rpcUrl, method, params);
+    if (diagnostics) diagnostics.lastRpcMethod = null;
+    return result;
+  } catch (error) {
+    if (diagnostics) {
+      diagnostics.failedRpcMethod = method;
+      diagnostics.lastRpcMethod = null;
+    }
+    throw error;
+  }
+}
+
 async function fetchPythSolUsdPrice() {
   const endpoint = "https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=" +
     PYTH_SOL_USD_FEED_ID + "&parsed=true";
@@ -1742,7 +1757,7 @@ function findPumpSwapCreatePoolInstructions(transaction) {
   }));
 }
 
-async function decodePumpSwapPool(rpcUrl, instruction, blockTime, nowSeconds, minutes, minLiquidity) {
+async function decodePumpSwapPool(rpcUrl, instruction, blockTime, nowSeconds, minutes, minLiquidity, diagnostics = null) {
   // Official PumpSwap create_pool account order: pool=0, base_mint=3,
   // quote_mint=4, pool_base_token_account=9, pool_quote_token_account=10.
   const accounts = instruction && instruction.accounts;
@@ -1760,7 +1775,7 @@ async function decodePumpSwapPool(rpcUrl, instruction, blockTime, nowSeconds, mi
   const rows = await solanaRpcCall(rpcUrl, "getMultipleAccounts", [
     [poolAddress, baseVaultAddress, quoteVaultAddress],
     { encoding: "jsonParsed", commitment: "confirmed" }
-  ]);
+  ], diagnostics);
   const values = rows && rows.value;
   if (!Array.isArray(values) || values.length !== 3 || values.some(value => !value)) {
     return { status: "skipped", reason: "pool or vault account data is unavailable" };
@@ -1859,7 +1874,7 @@ function parseSolanaTokenVault(account, expectedMint) {
   return { mint: info.mint, amount, decimals };
 }
 
-async function decodeRaydiumCpmmPool(rpcUrl, instruction, blockTime, nowSeconds, minutes, minLiquidity) {
+async function decodeRaydiumCpmmPool(rpcUrl, instruction, blockTime, nowSeconds, minutes, minLiquidity, diagnostics = null) {
   // Raydium CPMM initialize account order is pinned to the official IDL:
   // creator, amm_config, authority, pool_state, token_0_mint, token_1_mint,
   // lp_mint, creator_token_0, creator_token_1, creator_lp_token,
@@ -1982,6 +1997,8 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     programsChecked: 0,
     recentTransactions: 0,
     transactionFetchAttempts: 0,
+    failedRpcMethod: null,
+    lastRpcMethod: null,
     transactionNullCount: 0,
     transactionResponseCount: 0,
     sampledTransactions: 0,
@@ -2024,7 +2041,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     for (const program of SOLANA_DISCOVERY_PROGRAMS) {
       const signatures = await solanaRpcCall(rpcUrl, "getSignaturesForAddress", [
         program.address, { limit: 20, commitment: "confirmed" }
-      ]);
+      ], diagnostics);
       if (!Array.isArray(signatures)) throw new Error("getSignaturesForAddress returned an unexpected response");
       diagnostics.programsChecked++;
       const recent = signatures.filter(row => Number(row && row.blockTime) >= cutoff &&
@@ -2040,7 +2057,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
         diagnostics.transactionFetchAttempts++;
         const transaction = await solanaRpcCall(rpcUrl, "getTransaction", [
           row.signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }
-        ]);
+        ], diagnostics);
         if (!transaction) {
           diagnostics.transactionNullCount++;
           continue;
@@ -2065,7 +2082,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
             }
             diagnostics.protocolDecoders.pumpSwap.accountChecks++;
             const decoded = await decodePumpSwapPool(
-              rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity
+              rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity, diagnostics
             );
             if (decoded.status === "candidate") {
               candidates.push(decoded.pool);
@@ -2108,6 +2125,8 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
   } catch (error) {
     diagnostics.status = diagnostics.programsChecked > 0 ? "partial" : "error";
     diagnostics.error = String(error);
+    diagnostics.failedRpcMethod = diagnostics.failedRpcMethod || diagnostics.lastRpcMethod || "unknown";
+    diagnostics.lastRpcMethod = null;
     const rpcHttpStatusMatch = String(error).match(/HTTP\s+(\d{3})/i);
     const rpcHttpStatus = rpcHttpStatusMatch ? Number(rpcHttpStatusMatch[1]) : null;
     diagnostics.errorCategory = rpcHttpStatus === 401 || rpcHttpStatus === 403 ? "endpoint_auth_or_access"
