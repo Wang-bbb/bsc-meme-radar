@@ -1488,6 +1488,20 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // launch/DEX programs and extracts explicit SPL mint-initialization evidence.
 // It deliberately does NOT manufacture pool candidates: pool address, token
 // side, liquidity and tradeability require a protocol-specific decoder.
+export function parseSolanaRpcErrorDiagnostics(error) {
+  const message = String(error || "");
+  const statusMatch = message.match(/Solana RPC HTTP\\s+(\\d{3})/i);
+  const hintMatch = message.match(/\\((empty_response|json_response|json_rpc_error|json_error|html_error_page|text_response|unknown_response)(?:,|\\))/i);
+  const codeMatch = message.match(/,\\s*code\\s+([a-zA-Z0-9_-]{1,24})/i);
+  const kindMatch = message.match(/,\\s*kind\\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
+  return {
+    rpcHttpStatus: statusMatch ? Number(statusMatch[1]) : null,
+    rpcResponseHint: hintMatch ? hintMatch[1].toLowerCase() : null,
+    rpcJsonErrorCode: codeMatch ? codeMatch[1] : null,
+    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null
+  };
+}
+
 async function solanaRpcCallRaw(rpcUrl, method, params) {
   // Cool down each RPC endpoint independently. A primary 429 must not block
   // an independently operated fallback before the fallback request is sent.
@@ -2125,6 +2139,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
   } catch (error) {
     diagnostics.status = diagnostics.programsChecked > 0 ? "partial" : "error";
     diagnostics.error = String(error);
+    Object.assign(diagnostics, parseSolanaRpcErrorDiagnostics(error));
     diagnostics.failedRpcMethod = diagnostics.failedRpcMethod || diagnostics.lastRpcMethod || "unknown";
     diagnostics.lastRpcMethod = null;
     const rpcHttpStatusMatch = String(error).match(/HTTP\s+(\d{3})/i);
