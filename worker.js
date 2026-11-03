@@ -1490,7 +1490,7 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // side, liquidity and tradeability require a protocol-specific decoder.
 export function parseSolanaRpcErrorDiagnostics(error) {
   const message = String(error || "");
-  const statusMatch = message.match(/Solana RPC HTTP\s+(\d{3})/i);
+  const statusMatch = message.match(/Solana RPC (?:shared cooldown )?HTTP\s+(\d{3})/i);
   const hintMatch = message.match(/\((empty_response|json_response|json_rpc_error|json_error|html_error_page|text_response|unknown_response)(?:,|\))/i);
   const codeMatch = message.match(/,\s*code\s+([a-zA-Z0-9_-]{1,24})/i);
   const kindMatch = message.match(/,\s*kind\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
