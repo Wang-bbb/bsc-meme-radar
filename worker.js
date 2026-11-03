@@ -1983,7 +1983,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     recentTransactions: 0,
     transactionFetchAttempts: 0,
     transactionNullCount: 0,
-    transactionDecodedCount: 0,
+    transactionResponseCount: 0,
     sampledTransactions: 0,
     mintHints: [],
     poolInitLogHints: [],
@@ -2045,7 +2045,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
           diagnostics.transactionNullCount++;
           continue;
         }
-        diagnostics.transactionDecodedCount++;
+        diagnostics.transactionResponseCount++;
         diagnostics.sampledTransactions++;
         const hints = extractSolanaTransactionHints(transaction, program.name, row.signature, row.blockTime);
         hints.mintHints.forEach(value => mintHints.add(value));
