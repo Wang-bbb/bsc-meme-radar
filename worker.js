@@ -1981,6 +1981,9 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     coverage: "pumpswap-create-pool-and-raydium-cpmm-initialize",
     programsChecked: 0,
     recentTransactions: 0,
+    transactionFetchAttempts: 0,
+    transactionNullCount: 0,
+    transactionDecodedCount: 0,
     sampledTransactions: 0,
     mintHints: [],
     poolInitLogHints: [],
@@ -2034,10 +2037,15 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
         : program.address === SOLANA_PUMPSWAP_PROGRAM ? recent.slice(0, 3) : recent.slice(0, 1);
       for (const row of sampleRows) {
         if (diagnostics.sampledTransactions >= 12) break;
+        diagnostics.transactionFetchAttempts++;
         const transaction = await solanaRpcCall(rpcUrl, "getTransaction", [
           row.signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }
         ]);
-        if (!transaction) continue;
+        if (!transaction) {
+          diagnostics.transactionNullCount++;
+          continue;
+        }
+        diagnostics.transactionDecodedCount++;
         diagnostics.sampledTransactions++;
         const hints = extractSolanaTransactionHints(transaction, program.name, row.signature, row.blockTime);
         hints.mintHints.forEach(value => mintHints.add(value));
