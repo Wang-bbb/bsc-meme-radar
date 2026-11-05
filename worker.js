@@ -315,28 +315,14 @@ async function fetchGoPlusCached(env, endpoint, cacheKey) {
   const providerCooldownKey = "security:goplus:provider-cooldown:v1";
   let kvStoreStatus = kv && typeof kv.get === "function" ? "read-ok" : "not-configured";
 
-  // GoPlus rate limits can apply across different token addresses. Check a
-  // provider-wide cooldown before making another request for any token.
+  // GoPlus rate limits can apply across different token addresses. The
+  // per-token cache is checked first (single KV read on a cache hit); the
+  // provider-wide cooldown is only consulted on a token-cache miss.
+  // Read the per-token cache first: on a cache hit this is the only KV read on
+  // the hot path. The provider-wide cooldown is checked only on cache miss (L8).
+  // (The two values live under different KV keys, so they cannot be fetched
+  // with a single read; ordering is the available optimization.)
   if (kv && typeof kv.get === "function") {
-    try {
-      const providerCooldown = await kv.get(providerCooldownKey, "json");
-      if (providerCooldown && providerCooldown.expiresAt > Date.now()) {
-        const remainingSeconds = Math.max(1, Math.ceil((providerCooldown.expiresAt - Date.now()) / 1000));
-        return new Response(JSON.stringify({ code: 0, message: "too many requests (cached provider cooldown)" }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "x-radar-goplus-cache": "rate-limit-cooldown",
-            "x-radar-goplus-cache-scope": "provider",
-            "x-radar-goplus-kv-store": "read-hit",
-            "x-radar-goplus-cooldown-seconds": String(remainingSeconds)
-          }
-        });
-      }
-    } catch (_) {
-      kvStoreStatus = "read-failed";
-    }
-
     try {
       const cached = await kv.get(cacheKey, "json");
       if (cached && cached.expiresAt > Date.now()) {
@@ -363,6 +349,27 @@ async function fetchGoPlusCached(env, endpoint, cacheKey) {
             }
           });
         }
+      }
+    } catch (_) {
+      kvStoreStatus = "read-failed";
+    }
+
+    // Provider-wide cooldown is consulted only on token-cache miss, so the
+    // hot path (fresh token cache) costs a single KV read (L8).
+    try {
+      const providerCooldown = await kv.get(providerCooldownKey, "json");
+      if (providerCooldown && providerCooldown.expiresAt > Date.now()) {
+        const remainingSeconds = Math.max(1, Math.ceil((providerCooldown.expiresAt - Date.now()) / 1000));
+        return new Response(JSON.stringify({ code: 0, message: "too many requests (cached provider cooldown)" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-radar-goplus-cache": "rate-limit-cooldown",
+            "x-radar-goplus-cache-scope": "provider",
+            "x-radar-goplus-kv-store": "read-hit",
+            "x-radar-goplus-cooldown-seconds": String(remainingSeconds)
+          }
+        });
       }
     } catch (_) {
       kvStoreStatus = "read-failed";
@@ -855,6 +862,12 @@ const fromTopic = (topic) => "0x" + topic.slice(-40).toLowerCase();
 const word = (data, index) => data.slice(2 + index * 64, 2 + (index + 1) * 64);
 const asNumber = (hex) => Number(BigInt(hex || "0x0"));
 const toFloat = (value, decimals) => Number(value) / Math.pow(10, decimals);
+// Strict hex parser for RPC results: returns null instead of throwing, so a
+// single malformed result degrades to _error instead of aborting the batch (L4).
+const parseHexBigInt = (value) => {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]+$/.test(value)) return null;
+  try { return BigInt(value); } catch (_) { return null; }
+};
 const signedInt256 = (hexWord) => {
   const value = BigInt("0x" + hexWord);
   return value >= (1n << 255n) ? value - (1n << 256n) : value;
@@ -925,60 +938,12 @@ async function blockTimes(blockNumbers, cache, rpcUrl, networkLabel = "BSC") {
     if (result && !result.error && result.result && result.result.timestamp) {
       cache.set(missing[index], asNumber(result.result.timestamp) * 1000);
     } else {
-      cache.set(missing[index], 0);
+      // Cache null (not 0): 0 would read as 1970-01-01 downstream (L2).
+      // Callers use `cache.get(...) || 0` plus a `createdAt > 0` filter.
+      cache.set(missing[index], null);
     }
   }
   return cache;
-}
-
-async function readV3Pool(log, createdAt, rpcUrl) {
-  const token0 = fromTopic(log.topics[1]);
-  const token1 = fromTopic(log.topics[2]);
-  const fee = asNumber(log.topics[3]);
-  const pair = "0x" + word(log.data, 1).slice(-40).toLowerCase();
-  const usdtIs0 = token0 === USDT.toLowerCase();
-  const token = usdtIs0 ? token1 : token0;
-  const balanceCall = await rpc("eth_call", [{
-    to: USDT,
-    data: "0x70a08231" + pair.slice(2).toLowerCase().padStart(64, "0")
-  }, "latest"], rpcUrl);
-  const usdtReserve = toFloat(BigInt(balanceCall || "0x0"), 18);
-  return {
-    pair, token0, token1, tokenAddress: token,
-    symbol: token.slice(0, 6) + "…" + token.slice(-4),
-    name: "Unknown token",
-    decimals: 18, usdtReserve, liquidityUSD: usdtReserve * 2,
-    createdBlock: asNumber(log.blockNumber), createdAt,
-    createdTx: log.transactionHash, usdtIs0, fee
-  };
-}
-
-async function readPair(log, rpcUrl) {
-  const token0 = fromTopic(log.topics[1]);
-  const token1 = fromTopic(log.topics[2]);
-  const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
-  const usdtIs0 = token0 === USDT.toLowerCase();
-  const token = usdtIs0 ? token1 : token0;
-  // Read reserves first. Token metadata is deferred until after the liquidity
-  // filter, preventing three unnecessary eth_call subrequests for every rejected pool.
-  const reservesHex = await rpc("eth_call", [{ to: pair, data: "0x0902f1ac" }, "latest"], rpcUrl);
-  const reserve0 = BigInt("0x" + word(reservesHex, 0));
-  const reserve1 = BigInt("0x" + word(reservesHex, 1));
-  const usdtReserve = toFloat(usdtIs0 ? reserve0 : reserve1, 18);
-  return {
-    pair: pair,
-    token0: token0,
-    token1: token1,
-    tokenAddress: token,
-    symbol: token.slice(0, 6) + "…" + token.slice(-4),
-    name: "Unknown token",
-    decimals: 18,
-    usdtReserve: usdtReserve,
-    liquidityUSD: usdtReserve * 2,
-    createdBlock: asNumber(log.blockNumber),
-    createdTx: log.transactionHash,
-    usdtIs0: usdtIs0
-  };
 }
 
 async function enrichTokenMetadata(pool, rpcUrl) {
@@ -1017,7 +982,10 @@ function summarizePoolWalletFlow(body, tokenAddress) {
     else if(kind==="buy"||kind==="sell")side=kind;
     if(!side)continue;
     const rawVolume=Number(a.volume_in_usd);
-    const volume=Number.isFinite(rawVolume)&&rawVolume>0?rawVolume:0;
+    // Samples without a usable USD volume are skipped entirely: they must not
+    // be counted toward the "checked" trade total or the wallet aggregates (L3).
+    if(!Number.isFinite(rawVolume)||rawVolume<=0)continue;
+    const volume=rawVolume;
     const timestamp=Date.parse(a.block_timestamp||a.timestamp||"");
     if(Number.isFinite(timestamp)){
       oldestTimestamp=oldestTimestamp==null?timestamp:Math.min(oldestTimestamp,timestamp);
@@ -1686,7 +1654,14 @@ async function solanaRpcCall(rpcUrl, method, params, diagnostics = null) {
   }
 }
 
+// Pyth SOL/USD is fetched at most once per 60s; a scan round reuses the
+// cached price instead of hitting Hermes for every SOL-quoted pool (L6).
+let pythSolUsdCache = { priceUsd: null, fetchedAtMs: 0 };
 async function fetchPythSolUsdPrice() {
+  const nowMs = Date.now();
+  if (pythSolUsdCache.priceUsd !== null && nowMs - pythSolUsdCache.fetchedAtMs < 60000) {
+    return { priceUsd: pythSolUsdCache.priceUsd, cached: true };
+  }
   const endpoint = "https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=" +
     PYTH_SOL_USD_FEED_ID + "&parsed=true";
   const response = await fetch(endpoint, { headers: { accept: "application/json" } });
@@ -1696,6 +1671,7 @@ async function fetchPythSolUsdPrice() {
   catch (_) { throw new Error("Pyth SOL/USD returned invalid JSON"); }
   const parsed = parsePythSolUsdPrice(payload);
   if (!parsed.ok) throw new Error(parsed.reason);
+  pythSolUsdCache = { priceUsd: parsed.priceUsd, fetchedAtMs: nowMs };
   return parsed;
 }
 const SOLANA_TOKEN_PROGRAMS = new Set([
@@ -2159,7 +2135,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
               }
               diagnostics.protocolDecoders.raydiumCpmm.accountChecks++;
               const decoded = await decodeRaydiumCpmmPool(
-                rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity
+                rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity, diagnostics
               );
               if (decoded.status === "candidate") {
                 candidates.push(decoded.pool);
@@ -2643,19 +2619,19 @@ export default {
         let report = {};
         let honeypotError = null;
         let honeypotResponseStatus = null;
-        let honeypotResponseBody = null;
         try {
           const honeypotResponse = await fetch("https://api.honeypot.is/v2/IsHoneypot?" + params.toString(), { headers: { "accept": "application/json" } });
           honeypotResponseStatus = honeypotResponse.status;
           const honeypotText = await honeypotResponse.text();
+          // Only the HTTP status is kept; the third-party response body is not
+          // echoed into our output (L1).
           if (!honeypotResponse.ok) {
-            honeypotResponseBody = honeypotText.slice(0, 1200);
-            throw new Error("Honeypot.is HTTP " + honeypotResponse.status + (honeypotResponseBody ? ": " + honeypotResponseBody : ""));
+            throw new Error("Honeypot.is HTTP " + honeypotResponse.status);
           }
           try { report = JSON.parse(honeypotText); }
-          catch (_) { honeypotResponseBody = honeypotText.slice(0, 1200); throw new Error("Honeypot.is returned invalid JSON"); }
+          catch (_) { throw new Error("Honeypot.is returned invalid JSON"); }
         } catch (error) {
-          honeypotError = String(error);
+          honeypotError = String(error).slice(0, 200);
         }
         const simulation = report.simulationResult || {};
         const flags = Array.isArray(report.summary?.flags) ? report.summary.flags : [];
@@ -2746,7 +2722,6 @@ export default {
           goPlusKvStoreStatus,
           goPlusCooldownSeconds,
           honeypotHttpStatus: honeypotResponseStatus,
-          honeypotResponseBody,
           simulationSuccess: report.simulationSuccess === true,
           isHoneypot: report.honeypotResult?.isHoneypot ?? null,
           risk: report.summary?.risk || "unknown", riskLevel,
@@ -3496,7 +3471,9 @@ export default {
           const token0 = fromTopic(log.topics[1]), token1 = fromTopic(log.topics[2]);
           const pair = "0x" + word(log.data, 1).slice(-40).toLowerCase();
           if (result.error || !result.result) return { _error: "V3 reserve batch call failed: " + String(result.error?.message || "missing result"), pair, token0, token1, tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0, dex: log._dex, dexId: log._dexId, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash };
-          const usdtReserve = toFloat(BigInt(result.result || "0x0"), 18);
+          const usdtReserveRaw = parseHexBigInt(result.result);
+          if (usdtReserveRaw === null) return { _error: "V3 reserve batch call failed: invalid hex result", pair, token0, token1, tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0, dex: log._dex, dexId: log._dexId, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash };
+          const usdtReserve = toFloat(usdtReserveRaw, 18);
           return { pair, token0, token1, tokenAddress: token0 === USDT.toLowerCase() ? token1 : token0, symbol: (token0 === USDT.toLowerCase() ? token1 : token0).slice(0, 6) + "…" + (token0 === USDT.toLowerCase() ? token1 : token0).slice(-4), name: "Unknown token", decimals: 18, usdtReserve, liquidityUSD: usdtReserve * 2, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash, usdtIs0: token0 === USDT.toLowerCase(), fee: asNumber(log.topics[3]), dex: log._dex, dexId: log._dexId };
         });
       } catch (e) {
@@ -3545,10 +3522,17 @@ export default {
           const pair = "0x" + word(log.data, 0).slice(-40).toLowerCase();
           const tokenAddress = token0 === USDT.toLowerCase() ? token1 : token0;
           if (result.error || !result.result) return { _error: "V2 reserves batch call failed: " + String(result.error?.message || "missing result"), pair, token0, token1, tokenAddress, dex: log._dex || "PancakeSwap V2", dexId: log._dexId || "pancakeswap", createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash };
-          const reserve0 = BigInt("0x" + word(result.result, 0)), reserve1 = BigInt("0x" + word(result.result, 1));
+          const reservesHex = typeof result.result === "string" ? result.result : "";
+          const reserve0 = parseHexBigInt("0x" + word(reservesHex, 0));
+          const reserve1 = parseHexBigInt("0x" + word(reservesHex, 1));
+          if (reserve0 === null || reserve1 === null) return { _error: "V2 reserves batch call failed: invalid reserves data", pair, token0, token1, tokenAddress, dex: log._dex || "PancakeSwap V2", dexId: log._dexId || "pancakeswap", createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash };
           const usdtIs0 = token0 === USDT.toLowerCase();
           const usdtReserve = toFloat(usdtIs0 ? reserve0 : reserve1, 18);
-          return { pair, token0, token1, tokenAddress, symbol: tokenAddress.slice(0, 6) + "…" + tokenAddress.slice(-4), name: "Unknown token", decimals: 18, usdtReserve, liquidityUSD: usdtReserve * 2, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash, usdtIs0, dex: log._dex || "PancakeSwap V2", dexId: log._dexId || "pancakeswap" };
+          const tokenReserve = toFloat(usdtIs0 ? reserve1 : reserve0, 18);
+          // Sanity check: a zero/missing token-side reserve means the quote-side
+          // x2 estimate would be ~2x too high; mark liquidity unknown instead (L7).
+          const liquidityUnknown = !(tokenReserve > 0);
+          return { pair, token0, token1, tokenAddress, symbol: tokenAddress.slice(0, 6) + "…" + tokenAddress.slice(-4), name: "Unknown token", decimals: 18, usdtReserve, liquidityUSD: liquidityUnknown ? null : usdtReserve * 2, liquidityNote: liquidityUnknown ? "token 侧储备为 0 或缺失，流动性未知" : null, createdBlock: asNumber(log.blockNumber), createdAt: x.createdAt, createdTx: log.transactionHash, usdtIs0, dex: log._dex || "PancakeSwap V2", dexId: log._dexId || "pancakeswap" };
         });
       } catch (e) {
         pairDataRaw = v2ToInspect.map((x) => ({ _error: String(e), pair: "0x" + word(x.log.data, 0).slice(-40).toLowerCase(), tokenAddress: fromTopic(x.log.topics[1]) === USDT.toLowerCase() ? fromTopic(x.log.topics[2]) : fromTopic(x.log.topics[1]), dex: x.log._dex || "PancakeSwap V2", dexId: x.log._dexId || "pancakeswap", createdBlock: asNumber(x.log.blockNumber), createdAt: x.createdAt, createdTx: x.log.transactionHash }));
