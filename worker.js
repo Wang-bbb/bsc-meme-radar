@@ -300,8 +300,10 @@ async function attachPoolHistoryRisk(env, pools, nowMs = Date.now()) {
     try {
       await kv.put(POOL_HISTORY_KEY, JSON.stringify(nextDocument), { expirationTtl: POOL_HISTORY_TTL_SECONDS });
       return { status: "updated", trackedPoolCount: sortedEntries.length, snapshotUpdatedAt: new Date(nowMs).toISOString(), writeIntervalSeconds: POOL_HISTORY_WRITE_INTERVAL_MS / 1000 };
-    } catch (_) {
-      return unavailable("unavailable", "历史快照写入失败，短期趋势未验证");
+    } catch (error) {
+      // Write failure only affects future baselines; per-pool classifications
+      // computed above from the successful read stay intact (M5).
+      return { status: "write_failed", trackedPoolCount: sortedEntries.length, reason: "历史快照写入失败，本轮已验证的池分类保留", error: String((error && error.message) || error).slice(0, 160) };
     }
   }
   return { status: "available_cached_baseline", trackedPoolCount: Object.keys(storedPools).length, snapshotUpdatedAt: lastWriteAt ? new Date(lastWriteAt).toISOString() : null, nextWriteInSeconds: Math.max(0, Math.ceil((POOL_HISTORY_WRITE_INTERVAL_MS - (nowMs - lastWriteAt)) / 1000)), writeIntervalSeconds: POOL_HISTORY_WRITE_INTERVAL_MS / 1000 };
@@ -446,7 +448,9 @@ async function writeProviderCooldown(provider, response) {
   const status = Number(response.status || 429);
   const retryAfter = Number(response.headers.get("retry-after") || 0);
   const baseTtl = status === 402 ? 600 : status >= 500 ? 60 : PROVIDER_COOLDOWN_SECONDS;
-  const ttl = Math.min(900, Math.max(baseTtl, retryAfter || 0));
+  // Clamp to 300s so one oversized retry-after cannot black out a whole
+  // provider for 15 minutes; per-status base TTLs are unchanged (M6).
+  const ttl = Math.min(300, Math.max(baseTtl, retryAfter || 0));
   const headers = new Headers({
     "x-radar-original-status": String(status),
     "cache-control": "public, max-age=" + ttl
@@ -826,10 +830,23 @@ async function rpcBatch(calls, rpcUrl, networkLabel = "BSC") {
   const body = await response.json();
   if (!Array.isArray(body)) throw new Error(networkLabel + " RPC batch response was not an array");
   const byId = new Map(body.map((item) => [Number(item.id), item]));
+  // Sanitize provider errors with the same rules as rpc() so raw endpoint URLs
+  // or key material never reach response diagnostics (M2).
+  const sanitizeBatchError = (error) => {
+    if (!error || typeof error !== "object") return { message: "batch item error" };
+    const message = String(error.message || "JSON-RPC error")
+      .replace(/https?:\/\/[^\s\"'<>]+/gi, "[endpoint]")
+      .replace(/(api[_-]?key|apikey|token)=([^\s]+)/gi, "$1=[redacted]")
+      .replace(/\b(alch[a-z0-9_-]{8,})\b/gi, "[redacted]")
+      .slice(0, 240);
+    const out = { message };
+    if (error.code !== undefined && error.code !== null) out.code = error.code;
+    return out;
+  };
   return payload.map((request) => {
     const item = byId.get(request.id);
     if (!item) return { error: { message: "Missing batch response item" } };
-    return item.error ? { error: item.error } : { result: item.result };
+    return item.error ? { error: sanitizeBatchError(item.error) } : { result: item.result };
   });
 }
 
@@ -1286,7 +1303,7 @@ function calculateEarlyTrendScore(history, context, liquiditySnapshot) {
     rawScore: Math.round(rawScore),
     drawdownPenalty,
     components, warnings,
-    note: "仅为早期走势质量排序，不是安全评分或买入信号；买卖笔数为索引源近1小时统计，数据缺失不按零分处理。结构信号用于识别持续推进，不奖励单根暴涨"
+    note: "仅为早期走势质量排序，不是安全评分或买入信号；买卖笔数为调用方通过 URL 参数提供（非索引源统计口径），数据缺失不按零分处理。结构信号用于识别持续推进，不奖励单根暴涨"
   };
 }
 
@@ -1302,7 +1319,10 @@ async function recordLiquiditySnapshot(env, network, poolAddress, liquidityUSD) 
   if (!Number.isFinite(currentLiquidity) || currentLiquidity <= 0) {
     return { status: "insufficient", error: "缺少有效的当前流动性数值，无法记录快照" };
   }
-  const key = "liquidity:v1:" + network + ":" + poolAddress;
+  // Normalize EVM addresses to lowercase so checksum/mixed-case input does not
+  // fork one pool into two histories; Solana base58 addresses stay as-is (M4a).
+  const normalizedPoolAddress = network === "solana" ? String(poolAddress) : String(poolAddress).toLowerCase();
+  const key = "liquidity:v1:" + network + ":" + normalizedPoolAddress;
   const now = Math.floor(Date.now() / 1000);
   try {
     const stored = await kv.get(key, "json");
@@ -2028,6 +2048,8 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
     failedRpcMethod: null,
     lastRpcMethod: null,
     transactionNullCount: 0,
+    transactionErrorCount: 0,
+    lastTransactionError: null,
     transactionResponseCount: 0,
     sampledTransactions: 0,
     mintHints: [],
@@ -2083,65 +2105,74 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
       for (const row of sampleRows) {
         if (diagnostics.sampledTransactions >= 12) break;
         diagnostics.transactionFetchAttempts++;
-        const transaction = await solanaRpcCall(rpcUrl, "getTransaction", [
-          row.signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }
-        ], diagnostics);
-        if (!transaction) {
-          diagnostics.transactionNullCount++;
+        // Per-transaction isolation: a 429/5xx on one transaction must not abort the whole round (M8).
+        try {
+          const transaction = await solanaRpcCall(rpcUrl, "getTransaction", [
+            row.signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }
+          ], diagnostics);
+          if (!transaction) {
+            diagnostics.transactionNullCount++;
+            continue;
+          }
+          diagnostics.transactionResponseCount++;
+          diagnostics.sampledTransactions++;
+          const hints = extractSolanaTransactionHints(transaction, program.name, row.signature, row.blockTime);
+          hints.mintHints.forEach(value => mintHints.add(value));
+          hints.poolInitLogHints.forEach(value => poolInitLogHints.add(program.name + ": " + value));
+          if (diagnostics.samples.length < 8) diagnostics.samples.push(hints);
+          if (program.address === SOLANA_PUMPSWAP_PROGRAM) {
+            const createPoolInstructions = findPumpSwapCreatePoolInstructions(transaction);
+            for (const instruction of createPoolInstructions) {
+              diagnostics.protocolDecoders.pumpSwap.createPoolInstructions++;
+              const poolAddress = instruction.accounts[0];
+              if (poolAddress && seenPools.has(poolAddress)) continue;
+              if (poolAddress) seenPools.add(poolAddress);
+              if (diagnostics.protocolDecoders.pumpSwap.accountChecks +
+                diagnostics.protocolDecoders.raydiumCpmm.accountChecks >= 3) {
+                diagnostics.protocolDecoders.pumpSwap.skipped++;
+                continue;
+              }
+              diagnostics.protocolDecoders.pumpSwap.accountChecks++;
+              const decoded = await decodePumpSwapPool(
+                rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity, diagnostics
+              );
+              if (decoded.status === "candidate") {
+                candidates.push(decoded.pool);
+                diagnostics.protocolDecoders.pumpSwap.candidatesAdded++;
+              } else {
+                diagnostics.protocolDecoders.pumpSwap.skipped++;
+              }
+            }
+          }
+          if (program.address === SOLANA_RAYDIUM_CPMM_PROGRAM) {
+            const initializeInstructions = findRaydiumCpmmInitializeInstructions(transaction);
+            for (const instruction of initializeInstructions) {
+              diagnostics.protocolDecoders.raydiumCpmm.initializeInstructions++;
+              const poolAddress = instruction.accounts[instruction.withPermission ? 4 : 3];
+              if (poolAddress && seenPools.has(poolAddress)) continue;
+              if (poolAddress) seenPools.add(poolAddress);
+              // Pool/vault checks share the global cap of 3 with PumpSwap (M8).
+              if (diagnostics.protocolDecoders.pumpSwap.accountChecks +
+                diagnostics.protocolDecoders.raydiumCpmm.accountChecks >= 3) {
+                diagnostics.protocolDecoders.raydiumCpmm.skipped++;
+                continue;
+              }
+              diagnostics.protocolDecoders.raydiumCpmm.accountChecks++;
+              const decoded = await decodeRaydiumCpmmPool(
+                rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity
+              );
+              if (decoded.status === "candidate") {
+                candidates.push(decoded.pool);
+                diagnostics.protocolDecoders.raydiumCpmm.candidatesAdded++;
+              } else {
+                diagnostics.protocolDecoders.raydiumCpmm.skipped++;
+              }
+            }
+          }
+        } catch (txError) {
+          diagnostics.transactionErrorCount = (diagnostics.transactionErrorCount || 0) + 1;
+          diagnostics.lastTransactionError = String((txError && txError.message) || txError).slice(0, 160);
           continue;
-        }
-        diagnostics.transactionResponseCount++;
-        diagnostics.sampledTransactions++;
-        const hints = extractSolanaTransactionHints(transaction, program.name, row.signature, row.blockTime);
-        hints.mintHints.forEach(value => mintHints.add(value));
-        hints.poolInitLogHints.forEach(value => poolInitLogHints.add(program.name + ": " + value));
-        if (diagnostics.samples.length < 8) diagnostics.samples.push(hints);
-        if (program.address === SOLANA_PUMPSWAP_PROGRAM) {
-          const createPoolInstructions = findPumpSwapCreatePoolInstructions(transaction);
-          for (const instruction of createPoolInstructions) {
-            diagnostics.protocolDecoders.pumpSwap.createPoolInstructions++;
-            const poolAddress = instruction.accounts[0];
-            if (poolAddress && seenPools.has(poolAddress)) continue;
-            if (poolAddress) seenPools.add(poolAddress);
-            if (diagnostics.protocolDecoders.pumpSwap.accountChecks +
-              diagnostics.protocolDecoders.raydiumCpmm.accountChecks >= 3) {
-              diagnostics.protocolDecoders.pumpSwap.skipped++;
-              continue;
-            }
-            diagnostics.protocolDecoders.pumpSwap.accountChecks++;
-            const decoded = await decodePumpSwapPool(
-              rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity, diagnostics
-            );
-            if (decoded.status === "candidate") {
-              candidates.push(decoded.pool);
-              diagnostics.protocolDecoders.pumpSwap.candidatesAdded++;
-            } else {
-              diagnostics.protocolDecoders.pumpSwap.skipped++;
-            }
-          }
-        }
-        if (program.address === SOLANA_RAYDIUM_CPMM_PROGRAM) {
-          const initializeInstructions = findRaydiumCpmmInitializeInstructions(transaction);
-          for (const instruction of initializeInstructions) {
-            diagnostics.protocolDecoders.raydiumCpmm.initializeInstructions++;
-            const poolAddress = instruction.accounts[instruction.withPermission ? 4 : 3];
-            if (poolAddress && seenPools.has(poolAddress)) continue;
-            if (poolAddress) seenPools.add(poolAddress);
-            if (diagnostics.protocolDecoders.raydiumCpmm.accountChecks >= 3) {
-              diagnostics.protocolDecoders.raydiumCpmm.skipped++;
-              continue;
-            }
-            diagnostics.protocolDecoders.raydiumCpmm.accountChecks++;
-            const decoded = await decodeRaydiumCpmmPool(
-              rpcUrl, instruction, row.blockTime, nowSeconds, minutes, minLiquidity
-            );
-            if (decoded.status === "candidate") {
-              candidates.push(decoded.pool);
-              diagnostics.protocolDecoders.raydiumCpmm.candidatesAdded++;
-            } else {
-              diagnostics.protocolDecoders.raydiumCpmm.skipped++;
-            }
-          }
         }
       }
     }
@@ -2498,6 +2529,11 @@ export default {
       if (!address) return json({ ok: false, status: "unverified", error: "missing token address" }, 400);
       try {
         if (chain === "solana") {
+          // Validate mint format before any upstream call so an invalid address
+          // never triggers a RugCheck request (M1).
+          if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+            return json({ ok: false, chain, tokenAddress: address, provider: "RugCheck + Solana RPC", status: "unverified", error: "Solana mint address format is invalid" }, 400);
+          }
           const [rugCheckResult, mintEvidence] = await Promise.all([
             (async () => {
               try {
@@ -2596,6 +2632,10 @@ export default {
         const chainIds = { ethereum: 1, eth: 1, bsc: 56, base: 8453 };
         const chainID = chainIds[chain];
         if (!chainID) return json({ ok: false, status: "unverified", error: "unsupported chain" }, 400);
+        // EVM branch previously only checked for empty address; overlong or
+        // malformed input was forwarded to upstream providers (M1).
+        if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return json({ ok: false, status: "unverified", error: "invalid EVM token address format" }, 400);
+        if (pair.length > 160) return json({ ok: false, status: "unverified", error: "pair parameter too long" }, 400);
         const params = new URLSearchParams({ address, chainID: String(chainID) });
         if (pair) params.set("pair", pair);
         // Honeypot simulation and GoPlus holder concentration are independent
@@ -2784,75 +2824,86 @@ export default {
       // cooldown is shared, so repeating the same fallback only repeats errors.
       let dexPaprikaRateLimited = false;
       let dexPaprikaRateLimitError = "";
-      for (const network of networks) {
-        try {
-          const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
-          const response = await fetchGeckoTerminal(endpoint);
-          if (!response.ok) {
-            const providerState = response.headers.get("x-radar-provider-state");
-            const detail = providerState === "shared-cooldown"
-              ? "GeckoTerminal shared cooldown (previous upstream HTTP 429)"
-              : providerState === "upstream-rate-limit"
-                ? "GeckoTerminal upstream HTTP 429 (provider rate limit)"
-                : "GeckoTerminal HTTP " + response.status;
-            throw new Error(detail);
-          }
-          const body = await response.json();
-          const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
-          const indexDiagnostic = {
-            chain: network.name, provider: "GeckoTerminal", status: "ok",
-            indexedPoolCount: Array.isArray(body.data) ? body.data.length : 0,
-            excludedInvalidAge: 0, excludedOutsideAgeWindow: 0,
-            excludedBelowLiquidity: 0, excludedKnownQuotePair: 0, acceptedPools: 0
-          };
-          let chainPoolCount = 0;
-          for (const item of body.data || []) {
-            const a = item.attributes || {};
-            const rel = item.relationships || {};
-            const baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
-            const quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
-            const base = included.get(baseId) || {};
-            const quote = included.get(quoteId) || {};
-            const dexId = rel.dex && rel.dex.data && rel.dex.data.id;
-            const dex = included.get(dexId) || {};
-            const created = Date.parse(a.pool_created_at || "");
-            const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
-            const liquidity = Number(a.reserve_in_usd || 0);
-            if (ageMinutes == null || ageMinutes < 0) { indexDiagnostic.excludedInvalidAge++; continue; }
-            if (ageMinutes > minutes) { indexDiagnostic.excludedOutsideAgeWindow++; continue; }
-            if (liquidity < minLiquidity) { indexDiagnostic.excludedBelowLiquidity++; continue; }
-            const tx1h = a.transactions && a.transactions.h1 || {};
-            const volume1h = Number(a.volume_usd && a.volume_usd.h1 || 0);
-            const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
-              ? Number(a.price_change_percentage.h1) : null;
-            const priceChange5m = a.price_change_percentage && a.price_change_percentage.m5 != null
-              ? Number(a.price_change_percentage.m5) : null;
-            const priceChange15m = a.price_change_percentage && a.price_change_percentage.m15 != null
-              ? Number(a.price_change_percentage.m15) : null;
-            const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
-            const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
-            const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
-            if (candidate.skip) { indexDiagnostic.excludedKnownQuotePair++; continue; }
-            results.push({
-              chain: network.name, chainId: network.dexChain,
-              dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
-              symbol: candidate.symbol || "Unknown", name: candidate.name || "Unknown token",
-              tokenAddress: candidate.address, tokenSelectionVerified: candidate.verified,
-              tokenSelectionNote: candidate.verified ? "" : "交易池两侧均未匹配已知主流报价资产，暂按 base token 显示，代币方向未确认。",
-              quoteSymbol: quote.symbol || "Unknown", quoteAddress,
-              pairAddress: poolAddress,
-              poolUrl: "https://www.geckoterminal.com/" + network.id + "/pools/" + poolAddress,
-              dexScreenerUrl: "https://dexscreener.com/" + network.dexChain + "/" + poolAddress,
-              createdAt: new Date(created).toISOString(), ageMinutes: Math.round(ageMinutes * 10) / 10,
-              liquidityUSDApprox: liquidity, volume1hUSD: volume1h,
-              buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
-              priceChange1h, priceChange5m, priceChange15m,
-              usdtRouteStatus: "not_verified", source: "GeckoTerminal",
-              riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
-            });
-            chainPoolCount++;
-            indexDiagnostic.acceptedPools++;
-          }
+      // Primary GeckoTerminal requests run concurrently so one slow chain
+      // cannot stall the round; per-chain failures stay isolated (M9).
+      // Fallback stages below remain serial to conserve provider quota.
+      const fetchPrimaryChainPools = async (network) => {
+        const endpoint = "https://api.geckoterminal.com/api/v2/networks/" + network.id + "/new_pools?include=base_token,quote_token,dex";
+        const response = await fetchGeckoTerminal(endpoint);
+        if (!response.ok) {
+          const providerState = response.headers.get("x-radar-provider-state");
+          const detail = providerState === "shared-cooldown"
+            ? "GeckoTerminal shared cooldown (previous upstream HTTP 429)"
+            : providerState === "upstream-rate-limit"
+              ? "GeckoTerminal upstream HTTP 429 (provider rate limit)"
+              : "GeckoTerminal HTTP " + response.status;
+          throw new Error(detail);
+        }
+        const body = await response.json();
+        const included = new Map((body.included || []).map((item) => [item.id, item.attributes || {}]));
+        const indexDiagnostic = {
+          chain: network.name, provider: "GeckoTerminal", status: "ok",
+          indexedPoolCount: Array.isArray(body.data) ? body.data.length : 0,
+          excludedInvalidAge: 0, excludedOutsideAgeWindow: 0,
+          excludedBelowLiquidity: 0, excludedKnownQuotePair: 0, acceptedPools: 0
+        };
+        let chainPoolCount = 0;
+        const chainResults = [];
+        for (const item of body.data || []) {
+          const a = item.attributes || {};
+          const rel = item.relationships || {};
+          const baseId = rel.base_token && rel.base_token.data && rel.base_token.data.id;
+          const quoteId = rel.quote_token && rel.quote_token.data && rel.quote_token.data.id;
+          const base = included.get(baseId) || {};
+          const quote = included.get(quoteId) || {};
+          const dexId = rel.dex && rel.dex.data && rel.dex.data.id;
+          const dex = included.get(dexId) || {};
+          const created = Date.parse(a.pool_created_at || "");
+          const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : null;
+          const liquidity = Number(a.reserve_in_usd || 0);
+          if (ageMinutes == null || ageMinutes < 0) { indexDiagnostic.excludedInvalidAge++; continue; }
+          if (ageMinutes > minutes) { indexDiagnostic.excludedOutsideAgeWindow++; continue; }
+          if (liquidity < minLiquidity) { indexDiagnostic.excludedBelowLiquidity++; continue; }
+          const tx1h = a.transactions && a.transactions.h1 || {};
+          const volume1h = Number(a.volume_usd && a.volume_usd.h1 || 0);
+          const priceChange1h = a.price_change_percentage && a.price_change_percentage.h1 != null
+            ? Number(a.price_change_percentage.h1) : null;
+          const priceChange5m = a.price_change_percentage && a.price_change_percentage.m5 != null
+            ? Number(a.price_change_percentage.m5) : null;
+          const priceChange15m = a.price_change_percentage && a.price_change_percentage.m15 != null
+            ? Number(a.price_change_percentage.m15) : null;
+          const poolAddress = a.address || (item.id || "").split("_").slice(1).join("_");
+          const quoteAddress = (quote.address || (quoteId || "").split("_").slice(1).join("_"));
+          const candidate = choosePoolToken(network.id, base, quote, baseId, quoteId);
+          if (candidate.skip) { indexDiagnostic.excludedKnownQuotePair++; continue; }
+          chainResults.push({
+            chain: network.name, chainId: network.dexChain,
+            dex: dex.name || a.dex_id || "GeckoTerminal indexed DEX",
+            symbol: candidate.symbol || "Unknown", name: candidate.name || "Unknown token",
+            tokenAddress: candidate.address, tokenSelectionVerified: candidate.verified,
+            tokenSelectionNote: candidate.verified ? "" : "交易池两侧均未匹配已知主流报价资产，暂按 base token 显示，代币方向未确认。",
+            quoteSymbol: quote.symbol || "Unknown", quoteAddress,
+            pairAddress: poolAddress,
+            poolUrl: "https://www.geckoterminal.com/" + network.id + "/pools/" + poolAddress,
+            dexScreenerUrl: "https://dexscreener.com/" + network.dexChain + "/" + poolAddress,
+            createdAt: new Date(created).toISOString(), ageMinutes: Math.round(ageMinutes * 10) / 10,
+            liquidityUSDApprox: liquidity, volume1hUSD: volume1h,
+            buys1h: Number(tx1h.buys || 0), sells1h: Number(tx1h.sells || 0),
+            priceChange1h, priceChange5m, priceChange15m,
+            usdtRouteStatus: "not_verified", source: "GeckoTerminal",
+            riskNote: "第三方新池索引数据；USDT 路由尚未实时报价验证。新池风险高，请独立核实合约、流动性和卖出能力。"
+          });
+          chainPoolCount++;
+          indexDiagnostic.acceptedPools++;
+        }
+        return { network, indexDiagnostic, chainResults, chainPoolCount };
+      };
+      const primaryOutcomes = await Promise.allSettled(networks.map((network) => fetchPrimaryChainPools(network)));
+      primaryOutcomes.forEach((outcome, index) => {
+        const network = networks[index];
+        if (outcome.status === "fulfilled") {
+          const { indexDiagnostic, chainResults, chainPoolCount } = outcome.value;
+          results.push(...chainResults);
           indexDiagnostics.push(indexDiagnostic);
           if (chainPoolCount === 0) {
             // A successful HTTP response with zero qualifying pools is not proof
@@ -2861,12 +2912,12 @@ export default {
           } else {
             chainSources.push({ chain: network.name, provider: "GeckoTerminal", status: "ok", pools: chainPoolCount });
           }
-        } catch (error) {
-          const detail = String(error);
+        } else {
+          const detail = String(outcome.reason);
           indexDiagnostics.push({ chain: network.name, provider: "GeckoTerminal", status: "error", error: detail });
           failedNetworks.push({ network, error: detail });
         }
-      }
+      });
 
       // Supplemental fallback only: this feed contains latest token profiles,
       // not a complete global new-pool feed. Pair creation time and liquidity

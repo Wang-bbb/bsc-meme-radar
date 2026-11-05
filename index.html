@@ -367,7 +367,10 @@ async function scan(){
       const quote=esc(p.quoteSymbol||"未知报价资产");
       const usdtStatus=p.chain==="BSC"?"BSC USDT 直连池":"钱包兑换路径未验证";
       const price=p.priceChange1h==null?"—":pct(p.priceChange1h);
-      const poolLink=p.poolUrl||p.dexScreenerUrl||"#";
+      // Upstream pool URLs are untrusted: only allow http(s), otherwise fall
+      // back to "#" so a javascript: URL can never become a clickable link (M7).
+      const rawPoolLink=p.poolUrl||p.dexScreenerUrl||"#";
+      const poolLink=/^https?:\/\//i.test(rawPoolLink)?rawPoolLink:"#";
       const tokenLink=p.bscScanUrl||(p.chain==="Solana"?"https://solscan.io/token/"+encodeURIComponent(p.tokenAddress):p.chain==="Base"?"https://basescan.org/token/"+encodeURIComponent(p.tokenAddress):"https://etherscan.io/token/"+encodeURIComponent(p.tokenAddress));
       const sec=p.security||{};
       const secInfo=sec.provider&&sec.provider.includes("Honeypot")

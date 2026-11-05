@@ -63,6 +63,11 @@ GMGN 在 2026-09-07 发布的牛来复盘记录了一个值得学习的反例：
 - BSC 仅覆盖代码中配置的 DEX 工厂，不等于全 BSC DEX；流动性为估算值，V3 成交统计尚未接入。
 - BSC USDT 直连池与其他链的钱包兑换路径是两回事；其他三链目前不提供 USDT 直连或可成交保证。
 
+## CORS 与配额风险声明
+- 所有接口响应均携带 `access-control-allow-origin: *` 且无鉴权：任意第三方网站的前端代码都可直接调用本 Worker 的全部只读接口。
+- 被第三方调用时，消耗的是**部署者自己**的配额：NodeReal BSC RPC 子请求、GeckoTerminal / DexScreener / DexPaprika 限流额度、GoPlus / Honeypot.is / RugCheck 调用量，以及 Cloudflare KV 读写次数。
+- 如需收紧，可在 Worker 入口按部署的前端域名做 Origin 白名单；当前保持 `*` 是为了多端直接访问，部署者应知晓该取舍。
+
 ## 部署说明
 1. Cloudflare Worker 使用仓库中的 `worker.js`，并在 Cloudflare Secret 中配置 `NODEREAL_RPC_URL`。Solana 链上安全检查默认使用 Solana 公共 JSON-RPC；建议在 Cloudflare Secret 中额外配置 `SOLANA_RPC_URL`，指向你自己的可靠 Solana RPC 服务，以降低公共节点限流概率。
 2. 为启用 Ethereum / Base 链上兜底扫描，可在 Cloudflare Dashboard → Workers & Pages → `younbsc-meme-radar` → Settings → Variables and Secrets 中分别添加 Secret：`ETH_RPC_URL`、`BASE_RPC_URL`。两者可分别配置，建议使用支持对应链 `eth_getLogs` 的 RPC 服务；不要把 RPC URL 或 API Key 提交到 GitHub 仓库或聊天中。
