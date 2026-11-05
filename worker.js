@@ -1361,7 +1361,7 @@ export function classifyMultichainPoolRisk(pool) {
     solana: { usdt: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB".toLowerCase() },
     eth: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
     ethereum: { usdt: "0xdac17f958d2ee523a2206206994597c13d831ec7" },
-    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ad a2699bb2".replace(/\\s/g, "") }
+    base: { usdt: "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2" }
   };
   const expectedUsdt = stableQuotes[chain]?.usdt || null;
   const directUsdtPool = Boolean(expectedUsdt && quoteAddress === expectedUsdt);
@@ -2720,7 +2720,8 @@ export default {
     }
     if (url.pathname === "/multiscan") {
       const minutes = Number(url.searchParams.get("minutes") || 15);
-      const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
+      const _minLiquidityRaw = Number(url.searchParams.get("minLiquidity") || 5000);
+      const minLiquidity = Number.isFinite(_minLiquidityRaw) ? Math.max(0, _minLiquidityRaw) : 5000;
       if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
       const requestedChains = String(url.searchParams.get("chains") || "").split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
       // Brief KV cache avoids multiplying public-provider calls on repeated refreshes.
@@ -3295,7 +3296,8 @@ export default {
 
     const minutes = Number(url.searchParams.get("minutes") || 15);
     if (![15, 30, 60].includes(minutes)) return json({ ok: false, error: "minutes must be 15, 30, or 60" }, 400);
-    const minLiquidity = Math.max(0, Number(url.searchParams.get("minLiquidity") || 5000));
+    const _minLiquidityRaw = Number(url.searchParams.get("minLiquidity") || 5000);
+    const minLiquidity = Number.isFinite(_minLiquidityRaw) ? Math.max(0, _minLiquidityRaw) : 5000;
 
     try {
       const latestHex = await rpc("eth_blockNumber", [], rpcUrl);
@@ -3329,16 +3331,25 @@ export default {
       const factoryFilterBase = { fromBlock: hexNum(fromBlock), toBlock: latestHex };
       // JSON-RPC eth_getLogs accepts an address array. Query all configured
       // V2 factories in one subrequest, then partition locally by emitting factory.
-      const v2FactoryLogs = await rpc("eth_getLogs", [{
-        ...factoryFilterBase, address: V2_FACTORIES.map((factory) => factory.address), topics: [PAIR_CREATED]
-      }], rpcUrl);
-      const v2FactoryResults = V2_FACTORIES.map((factory) => {
-        const allLogs = v2FactoryLogs.filter((log) => String(log.address).toLowerCase() === factory.address.toLowerCase());
-        const usdtLogs = allLogs.filter((log) =>
-          fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
-        );
-        return { factory, allLogs, usdtLogs };
-      });
+      // V2/V3 log fetches are isolated: one side failing must not discard the
+      // other side's results. Failures are recorded in diagnostics (H3).
+      let v2FactoryLogs = [];
+      let v2FactoryResults = [];
+      let v2FactoryLogError = null;
+      try {
+        v2FactoryLogs = await rpc("eth_getLogs", [{
+          ...factoryFilterBase, address: V2_FACTORIES.map((factory) => factory.address), topics: [PAIR_CREATED]
+        }], rpcUrl);
+        v2FactoryResults = V2_FACTORIES.map((factory) => {
+          const allLogs = v2FactoryLogs.filter((log) => String(log.address).toLowerCase() === factory.address.toLowerCase());
+          const usdtLogs = allLogs.filter((log) =>
+            fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
+          );
+          return { factory, allLogs, usdtLogs };
+        });
+      } catch (e) {
+        v2FactoryLogError = String((e && e.message) || e);
+      }
       const allV2FactoryLogs = v2FactoryResults.flatMap((x) => x.allLogs);
       const v2UsdtEvents = v2FactoryResults.flatMap(({ factory, usdtLogs }) =>
         usdtLogs.map((log) => ({ ...log, _dex: factory.name, _dexId: factory.dexId }))
@@ -3351,16 +3362,23 @@ export default {
 
       const timeCache = new Map();
       // Same aggregation for V3 factories: two version-level log queries total.
-      const v3FactoryLogs = await rpc("eth_getLogs", [{
-        ...factoryFilterBase, address: V3_FACTORIES.map((factory) => factory.address), topics: [V3_POOL_CREATED]
-      }], rpcUrl);
-      const v3FactoryResults = V3_FACTORIES.map((factory) => {
-        const allLogs = v3FactoryLogs.filter((log) => String(log.address).toLowerCase() === factory.address.toLowerCase());
-        const usdtLogs = allLogs.filter((log) =>
-          fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
-        );
-        return { factory, allLogs, usdtLogs };
-      });
+      let v3FactoryLogs = [];
+      let v3FactoryResults = [];
+      let v3FactoryLogError = null;
+      try {
+        v3FactoryLogs = await rpc("eth_getLogs", [{
+          ...factoryFilterBase, address: V3_FACTORIES.map((factory) => factory.address), topics: [V3_POOL_CREATED]
+        }], rpcUrl);
+        v3FactoryResults = V3_FACTORIES.map((factory) => {
+          const allLogs = v3FactoryLogs.filter((log) => String(log.address).toLowerCase() === factory.address.toLowerCase());
+          const usdtLogs = allLogs.filter((log) =>
+            fromTopic(log.topics[1] || "") === USDT || fromTopic(log.topics[2] || "") === USDT
+          );
+          return { factory, allLogs, usdtLogs };
+        });
+      } catch (e) {
+        v3FactoryLogError = String((e && e.message) || e);
+      }
       // Quote-asset counts are diagnostics only. Only USDT pools continue into
       // the candidate pipeline; WBNB/USDC/BUSD pools are never promoted here.
       const BSC_QUOTE_ASSETS = [
@@ -4042,6 +4060,10 @@ export default {
         factoryEventsFound: {
           v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.allLogs.length])),
           v3: Object.fromEntries(v3FactoryResults.map((x) => [x.factory.name, x.allLogs.length]))
+        },
+        factoryLogErrors: {
+          v2: v2FactoryLogError,
+          v3: v3FactoryLogError
         },
         usdtPoolEventsFound: {
           v2: Object.fromEntries(v2FactoryResults.map((x) => [x.factory.name, x.usdtLogs.length])),
