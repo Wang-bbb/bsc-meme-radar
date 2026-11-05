@@ -100,7 +100,7 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 
 ## Raydium CPMM 协议级新池解码（PR #43）
 - 当 Solana 索引源失败，或返回 HTTP 200 但没有合格池时，独立 RPC 交叉检查仍会运行，避免把空索引页误认为没有新池。
-- 当前仅解码 Raydium CPMM `initialize` 指令，使用官方 `raydium-io/raydium-idl` 中的指令 discriminator 和账户顺序；检查交易成功状态、创建时间窗口、pool_state owner、两个 vault 的 Token 程序 owner，以及每个 vault 的 Mint 是否与初始化指令的 token_0/token_1 mint 对应。
+- 当前解码 Raydium CPMM `initialize` 与 `initialize_with_permission`（creator fee 变体，账户顺序整体 +1 偏移）指令，使用官方 `raydium-io/raydium-idl` 中的指令 discriminator 和账户顺序；检查交易成功状态、创建时间窗口、pool_state owner、两个 vault 的 Token 程序 owner，以及每个 vault 的 Mint 是否与初始化指令的 token_0/token_1 mint 对应。
 - 单轮最多读取 4 笔 Raydium CPMM 近期交易，并最多执行 3 组池/Vault 账户核验；与其他程序抽样合计限制 RPC 请求量，429/402 仍触发共享冷却。
 - 仅当池子恰好包含一个已识别 USDC/USDT 报价 Mint，且稳定币侧储备×2估算值达到最低流动性门槛时，才加入新池观察列表。此估算不是可成交深度、真实总锁仓价值或钱包兑换路径验证。
 - 新候选的成交量、买卖笔数、K线、钱包流向和卖出能力仍标记为不可用/待复核；不会因为链上池账户解码成功就进入安全通过名单。

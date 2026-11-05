@@ -1602,6 +1602,7 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
 const SOLANA_PUMPSWAP_CREATE_POOL_DISCRIMINATOR = [233, 146, 209, 142, 207, 104, 64, 188];
 const SOLANA_PUMPSWAP_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
 const SOLANA_RAYDIUM_CPMM_INITIALIZE_DISCRIMINATOR = [175, 175, 109, 31, 13, 152, 155, 237];
+const SOLANA_RAYDIUM_CPMM_INITIALIZE_WITH_PERMISSION_DISCRIMINATOR = [63, 55, 254, 65, 49, 178, 89, 121];
 const SOLANA_RAYDIUM_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
 const SOLANA_STABLE_QUOTES = [
   { address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", symbol: "USDC" },
@@ -1742,12 +1743,20 @@ function findRaydiumCpmmInitializeInstructions(transaction) {
   return instructions.filter(instruction => {
     if (solanaInstructionProgramId(instruction, keys) !== SOLANA_RAYDIUM_CPMM_PROGRAM) return false;
     const data = decodeSolanaBase58(instruction && instruction.data);
+    // initialize_with_permission is the creator-fee variant: same pool/vault
+    // layout shifted by +1 (leading payer account). Discriminators verified
+    // against raydium-io/raydium-idl raydium_cpmm/raydium_cp_swap.json.
     return Array.isArray(data) && data.length >= 32 &&
-      SOLANA_RAYDIUM_CPMM_INITIALIZE_DISCRIMINATOR.every((byte, index) => data[index] === byte);
-  }).map(instruction => ({
-    programId: SOLANA_RAYDIUM_CPMM_PROGRAM,
-    accounts: solanaInstructionAccountKeys(instruction, keys)
-  }));
+      (SOLANA_RAYDIUM_CPMM_INITIALIZE_DISCRIMINATOR.every((byte, index) => data[index] === byte) ||
+        SOLANA_RAYDIUM_CPMM_INITIALIZE_WITH_PERMISSION_DISCRIMINATOR.every((byte, index) => data[index] === byte));
+  }).map(instruction => {
+    const data = decodeSolanaBase58(instruction && instruction.data);
+    return {
+      programId: SOLANA_RAYDIUM_CPMM_PROGRAM,
+      accounts: solanaInstructionAccountKeys(instruction, keys),
+      withPermission: SOLANA_RAYDIUM_CPMM_INITIALIZE_WITH_PERMISSION_DISCRIMINATOR.every((byte, index) => data[index] === byte)
+    };
+  });
 }
 
 
@@ -1890,13 +1899,18 @@ function parseSolanaTokenVault(account, expectedMint) {
 
 async function decodeRaydiumCpmmPool(rpcUrl, instruction, blockTime, nowSeconds, minutes, minLiquidity, diagnostics = null) {
   // Raydium CPMM initialize account order is pinned to the official IDL:
-  // creator, amm_config, authority, pool_state, token_0_mint, token_1_mint,
-  // lp_mint, creator_token_0, creator_token_1, creator_lp_token,
-  // token_0_vault, token_1_vault, ...
+  // initialize: creator, amm_config, authority, pool_state, token_0_mint, token_1_mint,
+  //   lp_mint, creator_token_0, creator_token_1, creator_lp_token,
+  //   token_0_vault, token_1_vault, ... (>= 19 accounts)
+  // initialize_with_permission: payer, creator, amm_config, authority, pool_state,
+  //   token_0_mint, token_1_mint, lp_mint, payer_token_0, payer_token_1, payer_lp_token,
+  //   token_0_vault, token_1_vault, ... (>= 20 accounts; leading payer shifts all by +1)
+  const withPermission = Boolean(instruction && instruction.withPermission);
+  const offset = withPermission ? 1 : 0;
   const accounts = instruction && instruction.accounts;
-  if (!Array.isArray(accounts) || accounts.length < 19) return { status: "skipped", reason: "initialize account list is incomplete" };
+  if (!Array.isArray(accounts) || accounts.length < 19 + offset) return { status: "skipped", reason: "initialize account list is incomplete" };
   const [poolAddress, token0Mint, token1Mint, vault0Address, vault1Address] =
-    [accounts[3], accounts[4], accounts[5], accounts[10], accounts[11]];
+    [accounts[3 + offset], accounts[4 + offset], accounts[5 + offset], accounts[10 + offset], accounts[11 + offset]];
   if (![poolAddress, token0Mint, token1Mint, vault0Address, vault1Address].every(value =>
     typeof value === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value))) {
     return { status: "skipped", reason: "initialize account keys are invalid" };
@@ -2110,7 +2124,7 @@ async function scanSolanaRpcActivity(rpcUrl, minutes, minLiquidity) {
           const initializeInstructions = findRaydiumCpmmInitializeInstructions(transaction);
           for (const instruction of initializeInstructions) {
             diagnostics.protocolDecoders.raydiumCpmm.initializeInstructions++;
-            const poolAddress = instruction.accounts[3];
+            const poolAddress = instruction.accounts[instruction.withPermission ? 4 : 3];
             if (poolAddress && seenPools.has(poolAddress)) continue;
             if (poolAddress) seenPools.add(poolAddress);
             if (diagnostics.protocolDecoders.raydiumCpmm.accountChecks >= 3) {
