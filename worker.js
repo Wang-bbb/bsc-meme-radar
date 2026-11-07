@@ -3650,6 +3650,7 @@ export default {
           createdTx: log.transactionHash
         };
       });
+      // Token metadata is deferred until after the liquidity filter to conserve RPC calls.
       const validByLiquidity = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
       // Only enrich pools that passed liquidity screening; this is the main guard
       // against exhausting Cloudflare's per-invocation subrequest budget.
