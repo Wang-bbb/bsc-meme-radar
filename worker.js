@@ -26,6 +26,99 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+// WxPusher delivery is intentionally isolated from scanning and ranking logic.
+// Only newly observed, conservative priority-watchlist BSC tokens are notified.
+async function notifyWxPusherForNewBscCandidates(env, payload) {
+  const appToken = String(env && env.WXPUSHER_APP_TOKEN || "").trim();
+  const uid = String(env && env.WXPUSHER_UID || "").trim();
+  const kv = env && env.RADAR_KV;
+  if (!appToken || !uid || !kv || typeof kv.get !== "function" || typeof kv.put !== "function") {
+    return { status: "not_configured" };
+  }
+  if (!payload || payload.ok !== true || !Array.isArray(payload.priorityWatchlist)) {
+    return { status: "no_valid_scan_payload" };
+  }
+
+  const candidates = [];
+  const seenTokens = new Set();
+  try {
+    for (const pool of payload.priorityWatchlist) {
+      const tokenAddress = String(pool && pool.tokenAddress || "").toLowerCase();
+      if (!/^0x[a-f0-9]{40}$/.test(tokenAddress) || seenTokens.has(tokenAddress)) continue;
+      if (pool.priorityWatchlistEligible !== true ||
+          pool.watchlistTier !== "priority_watchlist" ||
+          pool.userReportedRiskStatus !== "none" ||
+          pool.historicalRiskStatus !== "stable" ||
+          pool.tradeFlowStatus !== "mixed_flow" ||
+          Number(pool.liquidityUSDApprox) < 5000 ||
+          Number(pool.earlySignalScore) < 65 ||
+          !Array.isArray(pool.watchlistExclusionReasons) ||
+          pool.watchlistExclusionReasons.length !== 0) continue;
+
+      seenTokens.add(tokenAddress);
+      const key = "wxpusher:bsc-token-notified:v1:" + tokenAddress;
+      if (await kv.get(key)) continue;
+      candidates.push({ pool, key });
+    }
+  } catch (_) {
+    // If deduplication storage is unavailable, do not risk repeated alerts.
+    return { status: "dedupe_unavailable" };
+  }
+
+  if (!candidates.length) return { status: "no_new_candidates" };
+  const selected = candidates.slice(0, 5);
+  const lines = [
+    "BSC 新币优先观察提醒",
+    "本轮新增符合严格观察条件的代币：" + selected.length + " 个",
+    ""
+  ];
+  for (const { pool } of selected) {
+    lines.push(
+      (pool.name || pool.symbol || "未命名代币") + (pool.symbol ? " (" + pool.symbol + ")" : ""),
+      "流动性估算：$" + Math.round(Number(pool.liquidityUSDApprox) || 0).toLocaleString("en-US"),
+      "建池时长：" + (pool.ageMinutes == null ? "未知" : pool.ageMinutes + " 分钟"),
+      "早期信号分：" + (pool.earlySignalScore == null ? "未知" : pool.earlySignalScore),
+      "买/卖笔数：" + (pool.buysSincePoolCreation == null ? "未知" : pool.buysSincePoolCreation) + "/" +
+        (pool.sellsSincePoolCreation == null ? "未知" : pool.sellsSincePoolCreation),
+      "代币：" + pool.tokenAddress,
+      pool.poolUrl || ("https://bscscan.com/token/" + pool.tokenAddress),
+      ""
+    );
+  }
+  if (candidates.length > selected.length) {
+    lines.push("另有 " + (candidates.length - selected.length) + " 个候选将在后续扫描分批提醒。", "");
+  }
+  lines.push("注意：进入优先观察名单不等于安全认证或买入建议；请人工复核合约与风险。程序只读，不会自动交易。");
+
+  try {
+    const response = await fetch("https://wxpusher.zjiecode.com/api/send/message", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        appToken,
+        content: lines.join("\n"),
+        summary: "BSC 新增 " + selected.length + " 个优先观察候选",
+        contentType: 1,
+        uids: [uid]
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || !result || result.code !== 1000 || result.success !== true) {
+      return { status: "send_failed" };
+    }
+    for (const { key } of selected) {
+      try {
+        await kv.put(key, JSON.stringify({ sentAt: Date.now() }), { expirationTtl: 7 * 24 * 60 * 60 });
+      } catch (_) {
+        // Delivery was accepted; a KV write failure may permit a later duplicate.
+      }
+    }
+    return { status: "accepted", notifiedCount: selected.length };
+  } catch (_) {
+    return { status: "send_failed" };
+  }
+}
+
 
 // Conservative priority-watchlist gate. Keep all liquidity-qualified pools in
 // the diagnostic result, but only promote candidates with adequate two-way
@@ -2343,7 +2436,7 @@ async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const rpcUrl = env.NODEREAL_RPC_URL;
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
@@ -3557,6 +3650,7 @@ export default {
           createdTx: log.transactionHash
         };
       });
+      // Token metadata is deferred until after the liquidity filter to conserve RPC calls.
       const validByLiquidity = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
       // Only enrich pools that passed liquidity screening; this is the main guard
       // against exhausting Cloudflare's per-invocation subrequest budget.
@@ -4088,7 +4182,7 @@ export default {
         watchlistExclusionReasons: p.watchlistExclusionReasons
       }));
 
-      return json({
+      const scanPayload = {
         ok: true,
         chain: "BSC",
         quote: "USDT",
@@ -4174,7 +4268,13 @@ export default {
           "NodeReal RPC 可能限流；结果不保证覆盖全部 BSC 新池。"
         ],
         note: "只读观察，不会自动交易。"
-      });
+      };
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(notifyWxPusherForNewBscCandidates(env, scanPayload));
+      } else {
+        await notifyWxPusherForNewBscCandidates(env, scanPayload);
+      }
+      return json(scanPayload);
     } catch (error) {
       return json({
         ok: false,
