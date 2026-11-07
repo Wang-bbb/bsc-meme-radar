@@ -2436,7 +2436,7 @@ async function scanEvmRpcRecentPools(config, rpcUrl, minutes, minLiquidity) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const rpcUrl = env.NODEREAL_RPC_URL;
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
@@ -4268,7 +4268,11 @@ export default {
         ],
         note: "只读观察，不会自动交易。"
       };
-      await notifyWxPusherForNewBscCandidates(env, scanPayload);
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(notifyWxPusherForNewBscCandidates(env, scanPayload));
+      } else {
+        await notifyWxPusherForNewBscCandidates(env, scanPayload);
+      }
       return json(scanPayload);
     } catch (error) {
       return json({
