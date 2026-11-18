@@ -74,7 +74,8 @@ export async function collectFourMemeFinalizedLogs({
   if (!Number.isSafeInteger(maxBlocksPerRun) || maxBlocksPerRun < 1 || maxBlocksPerRun > 1000 ||
       !Number.isSafeInteger(maxLogsPerRun) || maxLogsPerRun < 1 ||
       !Number.isSafeInteger(checkpointWindow) || checkpointWindow < 2 ||
-      !Number.isSafeInteger(maxHashLookupsPerRun) || maxHashLookupsPerRun < 1) {
+      !Number.isSafeInteger(maxHashLookupsPerRun) || maxHashLookupsPerRun < 1 ||
+      checkpointWindow > maxHashLookupsPerRun) {
     throw new TypeError("Invalid collector bounds");
   }
 
