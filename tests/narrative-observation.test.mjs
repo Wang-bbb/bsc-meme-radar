@@ -10,6 +10,8 @@ const row = (source, observedAt, rank = 1, listSize = 10) => ({
 test("requires cross-platform coverage and previous-window evidence", () => {
   const result = evaluateNarrativeEvidence({
     nowMs: now,
+    expectedSources: ["weibo", "douyin"],
+    sourceStatuses: [{ source: "weibo", status: "ok" }, { source: "douyin", status: "ok" }],
     observations: [row("weibo", now - 1000), row("douyin", now - 2000)]
   });
   assert.equal(result[0].entity, "dog story");
@@ -21,6 +23,8 @@ test("requires cross-platform coverage and previous-window evidence", () => {
 test("marks momentum only when current cross-source score accelerates", () => {
   const result = evaluateNarrativeEvidence({
     nowMs: now,
+    expectedSources: ["weibo", "douyin"],
+    sourceStatuses: [{ source: "weibo", status: "ok" }, { source: "douyin", status: "ok" }],
     observations: [
       row("weibo", now - 7 * 60 * 60 * 1000, 8),
       row("douyin", now - 7 * 60 * 60 * 1000, 8),
@@ -36,7 +40,12 @@ test("failed upstream source forces insufficient coverage", () => {
   const result = evaluateNarrativeEvidence({
     nowMs: now,
     observations: [row("weibo", now - 1000), row("douyin", now - 2000)],
-    sourceStatuses: [{ source: "x", status: "failed" }]
+    expectedSources: ["weibo", "douyin", "x"],
+    sourceStatuses: [
+      { source: "weibo", status: "ok" },
+      { source: "douyin", status: "ok" },
+      { source: "x", status: "failed" }
+    ]
   });
   assert.equal(result[0].state, "insufficient_coverage");
   assert.deepEqual(result[0].failedSources, ["x"]);
@@ -56,4 +65,25 @@ test("rejects invalid ranks, future observations, and stale observations", () =>
 
 test("invalid window is rejected", () => {
   assert.throws(() => evaluateNarrativeEvidence({ nowMs: now, windowMs: 0 }), TypeError);
+});
+
+test("missing expected source status cannot be treated as complete coverage", () => {
+  const result = evaluateNarrativeEvidence({
+    nowMs: now,
+    expectedSources: ["weibo", "douyin", "x"],
+    sourceStatuses: [{ source: "weibo", status: "ok" }, { source: "douyin", status: "ok" }],
+    observations: [row("weibo", now - 1000), row("douyin", now - 2000)]
+  });
+  assert.equal(result[0].coverageComplete, false);
+  assert.equal(result[0].state, "insufficient_coverage");
+  assert.deepEqual(result[0].failedSources, ["x"]);
+});
+
+test("no declared expected sources never implies complete coverage", () => {
+  const result = evaluateNarrativeEvidence({
+    nowMs: now,
+    observations: [row("weibo", now - 1000), row("douyin", now - 2000)]
+  });
+  assert.equal(result[0].coverageComplete, false);
+  assert.equal(result[0].state, "insufficient_coverage");
 });
