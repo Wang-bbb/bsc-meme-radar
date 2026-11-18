@@ -308,3 +308,18 @@ test("rejects unsafe KV chunk byte-cap configuration", async () => {
     /Invalid collector bounds/
   );
 });
+
+
+test("supports smaller configurable KV chunks for scheduled observation", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 4);
+  const result = await collectFourMemeFinalizedLogs({
+    ...providers(kv, canonical, [], 4),
+    maxBlocksPerRun: 4,
+    blocksPerKvChunk: 2
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
+  assert.ok(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"));
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "2"), null);
+});
