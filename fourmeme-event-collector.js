@@ -63,6 +63,7 @@ export async function collectFourMemeFinalizedLogs({
   checkpointWindow = 8,
   maxHashLookupsPerRun = 32,
   maxChunkBytes = MAX_KV_CHUNK_BYTES,
+  blocksPerKvChunk = BLOCKS_PER_KV_CHUNK,
   eventTtlSeconds = 30 * 24 * 60 * 60,
   now = () => new Date().toISOString()
 }) {
@@ -78,7 +79,8 @@ export async function collectFourMemeFinalizedLogs({
       !Number.isSafeInteger(checkpointWindow) || checkpointWindow < 2 ||
       !Number.isSafeInteger(maxHashLookupsPerRun) || maxHashLookupsPerRun < 1 ||
       checkpointWindow > maxHashLookupsPerRun ||
-      !Number.isSafeInteger(maxChunkBytes) || maxChunkBytes < 1024 || maxChunkBytes > MAX_KV_CHUNK_BYTES) {
+      !Number.isSafeInteger(maxChunkBytes) || maxChunkBytes < 1024 || maxChunkBytes > MAX_KV_CHUNK_BYTES ||
+      !Number.isSafeInteger(blocksPerKvChunk) || blocksPerKvChunk < 1 || blocksPerKvChunk > BLOCKS_PER_KV_CHUNK) {
     throw new TypeError("Invalid collector bounds");
   }
 
@@ -204,7 +206,7 @@ export async function collectFourMemeFinalizedLogs({
   const chunks = new Map();
   for (let block = fromBlock; block <= toBlock; block++) {
     const chunkStart = configuredStart +
-      ((block - configuredStart) / BigInt(BLOCKS_PER_KV_CHUNK)) * BigInt(BLOCKS_PER_KV_CHUNK);
+      ((block - configuredStart) / BigInt(blocksPerKvChunk)) * BigInt(blocksPerKvChunk);
     const chunkKey = chunkStart.toString();
     if (!chunks.has(chunkKey)) {
       const blocks = [];
