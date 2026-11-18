@@ -7,6 +7,7 @@ const EVENT_NAMES = new Set([
   "TokenCreate",
   "TokenPurchase",
   "TokenSale",
+  "TradeStop",
   "LiquidityAdded"
 ]);
 
@@ -97,6 +98,10 @@ export function normalizeFourMemeEvent(input) {
     };
   }
 
+  if (input.eventName === "TradeStop") {
+    return { ...common, tokenAddress: requireAddress(args.token, "token") };
+  }
+
   return {
     ...common,
     tokenAddress: requireAddress(args.base, "base"),
@@ -132,6 +137,7 @@ export function summarizeFourMemeTokenEvents(events) {
         creation: null,
         buyEventCount: 0,
         sellEventCount: 0,
+        tradeStopped: false,
         liquidityAdded: false,
         distinctBuyAccounts: [],
         distinctTransactionSenders: [],
@@ -172,6 +178,8 @@ export function summarizeFourMemeTokenEvents(events) {
       summary.sellEventCount += 1;
       summary.totalSellCostRaw = (BigInt(summary.totalSellCostRaw) + BigInt(event.cost)).toString();
       summary.latestFundsRaw = event.funds;
+    } else if (event.eventName === "TradeStop") {
+      summary.tradeStopped = true;
     } else if (event.eventName === "LiquidityAdded") {
       summary.liquidityAdded = true;
       summary.latestFundsRaw = event.funds;
