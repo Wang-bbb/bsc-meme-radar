@@ -115,3 +115,64 @@ jobs:
           }
           if (!response.ok) process.exit(1);
           NODE
+
+  nodereal-finality-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify configured free BSC RPC finality and batch reads
+        env:
+          NODEREAL_RPC_URL: ${{ secrets.NODEREAL_RPC_URL }}
+        run: |
+          if [ -z "$NODEREAL_RPC_URL" ]; then
+            echo "Skipped: add the existing free BSC RPC endpoint as the repository Actions secret NODEREAL_RPC_URL to enable this read-only smoke test."
+            exit 0
+          fi
+          node --input-type=module <<'NODE'
+          const endpoint = process.env.NODEREAL_RPC_URL;
+          async function rpc(method, params, id = 1) {
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+              signal: AbortSignal.timeout(15000)
+            });
+            if (!response.ok) throw new Error("RPC HTTP request failed");
+            const payload = await response.json();
+            if (payload.error || payload.result == null) throw new Error("RPC method failed");
+            return payload.result;
+          }
+          const [chainId, latest, finalized] = await Promise.all([
+            rpc("eth_chainId", []),
+            rpc("eth_getBlockByNumber", ["latest", false]),
+            rpc("eth_getBlockByNumber", ["finalized", false])
+          ]);
+          if (chainId !== "0x38") throw new Error("Endpoint is not BNB Smart Chain mainnet");
+          if (!latest?.number || !latest?.hash || !finalized?.number || !finalized?.hash) {
+            throw new Error("Latest/finalized block response is incomplete");
+          }
+          if (BigInt(finalized.number) > BigInt(latest.number)) {
+            throw new Error("Finalized height is ahead of latest height");
+          }
+          const batchNumbers = [finalized.number, (BigInt(finalized.number) - 1n).toString(16).replace(/^/, "0x")];
+          const batchResponse = await fetch(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(batchNumbers.map((number, index) => ({
+              jsonrpc: "2.0",
+              id: index + 10,
+              method: "eth_getBlockByNumber",
+              params: [number, false]
+            }))),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!batchResponse.ok) throw new Error("RPC batch HTTP request failed");
+          const batchPayload = await batchResponse.json();
+          if (!Array.isArray(batchPayload) || batchPayload.length !== 2 ||
+              batchPayload.some(item => item.error || !item.result?.hash || !item.result?.number)) {
+            throw new Error("RPC JSON-RPC batch response is invalid");
+          }
+          console.log("BSC chainId:", chainId);
+          console.log("latest block:", BigInt(latest.number).toString());
+          console.log("finalized block:", BigInt(finalized.number).toString());
+          console.log("JSON-RPC batch block reads: passed (2/2)");
+          NODE
