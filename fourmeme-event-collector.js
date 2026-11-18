@@ -59,8 +59,8 @@ export async function collectFourMemeFinalizedLogs({
   startBlock,
   maxBlocksPerRun = 1000,
   maxLogsPerRun = 500,
-  checkpointWindow = 16,
-  maxHashLookupsPerRun = 64,
+  checkpointWindow = 8,
+  maxHashLookupsPerRun = 32,
   eventTtlSeconds = 30 * 24 * 60 * 60,
   now = () => new Date().toISOString()
 }) {
