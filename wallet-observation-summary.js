@@ -13,7 +13,7 @@ export function summarizeObservedWalletActivity(observations) {
 
   const wallets = new Map();
   for (const item of observations) {
-    if (!item || item.status !== "observed" || item.coverage && item.coverage !== "observed_pool_only") continue;
+    if (!item || item.status !== "observed" || item.coverage !== "observed_pool_only") continue;
     const address = typeof item.initiatorAddress === "string" ? item.initiatorAddress.trim().toLowerCase() : "";
     const chain = typeof item.chain === "string" ? item.chain.trim().toLowerCase() : "";
     if (!address || !chain || isExcludedSystemAddress(address)) continue;
