@@ -97,6 +97,27 @@ test("deduplicates identical transaction/log events by deterministic KV key", as
   assert.equal(observationKeys.length, 1);
 });
 
+test("rotates through pools beyond the per-run cap instead of starving later pools", async () => {
+  const kv = memoryKv();
+  const pools = Array.from({ length: 5 }, (_, index) => ({
+    ...pool,
+    address: "0x" + (index + 1).toString(16).padStart(40, "0")
+  }));
+  const scanned = [];
+  const rpc = async (method, params) => {
+    if (method === "eth_getLogs") {
+      scanned.push(params[0].address);
+      return [];
+    }
+    throw new Error("unexpected method");
+  };
+  const first = await collectBscV2WalletObservations({ rpc, kv, pools, latestBlock: 1000 });
+  const second = await collectBscV2WalletObservations({ rpc, kv, pools, latestBlock: 1000 });
+  assert.equal(first.processedPools, 3);
+  assert.equal(second.processedPools, 3);
+  assert.deepEqual(new Set(scanned), new Set(pools.map(item => item.address)));
+});
+
 test("rejects missing dependencies and caps work to three pools and ten blocks", async () => {
   const missing = await collectBscV2WalletObservations({ pools: [pool], latestBlock: 1000 });
   assert.equal(missing.status, "not_configured");
