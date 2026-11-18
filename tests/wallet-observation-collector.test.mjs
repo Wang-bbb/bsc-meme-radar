@@ -65,6 +65,16 @@ test("does not advance cursor when transaction attribution is unavailable", asyn
   assert.equal(kv.values.has("wallet-observation:v1:bsc:cursor:" + pool.address), false);
 });
 
+test("does not advance cursor when a log has no stable log index", async () => {
+  const kv = memoryKv();
+  const rpc = async method => method === "eth_getLogs"
+    ? [{ ...makeLog(), logIndex: undefined }]
+    : { from: initiator };
+  const result = await collectBscV2WalletObservations({ rpc, kv, pools: [pool], latestBlock: 1000 });
+  assert.equal(result.status, "partial");
+  assert.equal(kv.values.has("wallet-observation:v1:bsc:cursor:" + pool.address), false);
+});
+
 test("does not advance cursor when event volume exceeds the safety cap", async () => {
   const kv = memoryKv();
   const rpc = async method => method === "eth_getLogs"
