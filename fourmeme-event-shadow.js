@@ -71,7 +71,7 @@ function wordAddress(word, field) {
 
 function readDynamicString(data, offsetWord, field) {
   const offset = BigInt("0x" + offsetWord);
-  if (offset % 32n !== 0n || offset > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (offset < 256n || offset % 32n !== 0n || offset > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new TypeError(`Invalid ABI offset: ${field}`);
   }
   const byteOffset = Number(offset);
