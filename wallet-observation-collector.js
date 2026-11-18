@@ -78,7 +78,21 @@ export async function collectBscV2WalletObservations({
   const logLimit = Math.max(1, Math.min(DEFAULT_MAX_LOGS, Number(maxLogs) || DEFAULT_MAX_LOGS));
   const concurrency = Math.max(1, Math.min(DEFAULT_TX_CONCURRENCY, Number(txConcurrency) || DEFAULT_TX_CONCURRENCY));
   const ttl = Math.max(60, Math.min(DEFAULT_RETENTION_SECONDS, Number(retentionSeconds) || DEFAULT_RETENTION_SECONDS));
-  const selectedPools = pools.slice(0, poolLimit);
+  // Rotate through the supplied pool list so pools beyond the per-run cap
+  // cannot be starved forever by a fixed first-N slice.
+  const rotationKey = "wallet-observation:v1:bsc:pool-rotation";
+  let rotationIndex = 0;
+  try {
+    const savedRotation = await kv.get(rotationKey, "json");
+    const savedIndex = Number(savedRotation && savedRotation.nextIndex);
+    if (Number.isSafeInteger(savedIndex) && savedIndex >= 0) rotationIndex = savedIndex % pools.length;
+  } catch (_) {
+    // A missing/unreadable rotation pointer safely falls back to the first pool.
+  }
+  const selectedPools = Array.from(
+    { length: Math.min(poolLimit, pools.length) },
+    (_, offset) => pools[(rotationIndex + offset) % pools.length]
+  );
   const result = { status: "ok", processedPools: 0, savedObservations: 0, skippedPools: 0, errors: [], pools: [] };
 
   for (const pool of selectedPools) {
@@ -172,7 +186,16 @@ export async function collectBscV2WalletObservations({
   if (pools.length > selectedPools.length) {
     result.status = "partial";
     result.skippedPools += pools.length - selectedPools.length;
-    result.errors.push("本轮只处理前 " + poolLimit + " 个池，其余留待后续轮次");
+    result.errors.push("本轮处理 " + selectedPools.length + " 个池；轮询游标会让剩余池在后续轮次获得机会");
+  }
+  try {
+    await kv.put(rotationKey, JSON.stringify({
+      nextIndex: (rotationIndex + selectedPools.length) % pools.length,
+      updatedAt: Math.floor(Date.now() / 1000)
+    }), { expirationTtl: ttl });
+  } catch (error) {
+    result.status = "partial";
+    result.errors.push("池轮询游标保存失败: " + String(error && error.message || error).slice(0, 120));
   }
   return result;
 }
