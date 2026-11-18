@@ -2632,5 +2632,5 @@ test("scheduled Four.meme observer is a no-op unless explicitly enabled", async 
   const result = await task;
   assert.equal(result.status, "disabled");
   assert.equal(result.enabled, false);
-  assert.equal(values.get("fourmeme:v2:collector:status") != null, true);
+  assert.equal(values.has("fourmeme:v2:collector:status"), false, "disabled cron must not write KV");
 });
