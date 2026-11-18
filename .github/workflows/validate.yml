@@ -188,6 +188,8 @@ jobs:
             await import("./fourmeme-nodereal-adapter.js");
           const adapter = createNodeRealFourMemeRpcAdapter({ endpoint });
           const adapterFinalized = await adapter.getFinalizedBlockNumber();
+          // Finalized height may advance between the direct smoke read and adapter read.
+          // The adapter's own finalized-height result is validated by its canonical hash lookup below.
           const adapterHashes = await adapter.getBlockHashes([adapterFinalized]);
           if (!adapterHashes[adapterFinalized]) {
             throw new Error("Adapter canonical block-hash batch read is incomplete");
