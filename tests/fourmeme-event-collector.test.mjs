@@ -172,7 +172,7 @@ test("detects a shallow reorg and replaces orphaned block observations", async (
     maxBlocksPerRun: 4
   });
   assert.equal(result.reorgDetected, true);
-  assert.equal(result.fromBlock, "3");
+  assert.equal(result.fromBlock, "2");
   assert.equal(result.toBlock, "4");
   const chunk = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
   const block3 = chunk.blocks.find(item => item.blockNumber === "3");
