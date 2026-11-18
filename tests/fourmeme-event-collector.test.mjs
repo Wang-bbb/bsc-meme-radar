@@ -13,10 +13,11 @@ const hash = n => "0x" + BigInt(n).toString(16).padStart(64, "0");
 const addressWord = address => address.slice(2).toLowerCase().padStart(64, "0");
 
 class MemoryKV {
-  constructor() { this.data = new Map(); this.failKey = null; }
+  constructor() { this.data = new Map(); this.failKey = null; this.writeCount = 0; }
   async get(key) { return this.data.has(key) ? this.data.get(key) : null; }
   async put(key, value) {
     if (this.failKey === key) throw new Error("simulated KV write failure");
+    this.writeCount++;
     this.data.set(key, value);
   }
 }
@@ -65,10 +66,35 @@ test("collects only finalized bounded ranges and stores replaceable per-block re
   const state = JSON.parse(await kv.get(FOURMEME_COLLECTOR_STATE_KEY));
   assert.equal(state.cursorBlock, "4");
   assert.equal(state.checkpoints.length, 4);
-  const block2 = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "2"));
+  const chunk = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
+  const block2 = chunk.blocks.find(item => item.blockNumber === "2");
+  const block3 = chunk.blocks.find(item => item.blockNumber === "3");
   assert.equal(block2.events[0].eventName, "TradeStop");
-  const block3 = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"));
   assert.deepEqual(block3.events, []);
+  assert.equal(kv.writeCount, 2, "one chunk write plus one cursor write");
+});
+
+test("batches writes and preserves committed prefix when a chunk continues", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 8);
+  await collectFourMemeFinalizedLogs({
+    ...providers(kv, canonical, [makeLog(2, hash(2))], 4),
+    maxBlocksPerRun: 4
+  });
+  const firstWriteCount = kv.writeCount;
+  const next = await collectFourMemeFinalizedLogs({
+    ...providers(kv, canonical, [makeLog(6, hash(6), 0, 6)], 8),
+    maxBlocksPerRun: 4
+  });
+  assert.equal(next.fromBlock, "5");
+  assert.equal(next.toBlock, "8");
+  const chunk = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
+  const block2 = chunk.blocks.find(item => item.blockNumber === "2");
+  const block6 = chunk.blocks.find(item => item.blockNumber === "6");
+  assert.equal(block2.events[0].transactionHash, hash(1));
+  assert.equal(block6.events[0].transactionHash, hash(6));
+  assert.equal(kv.writeCount - firstWriteCount, 2,
+    "continuing within the same chunk uses one chunk write and one cursor write");
 });
 
 test("limits each invocation to maxBlocksPerRun", async () => {
@@ -100,8 +126,9 @@ test("detects a shallow reorg and replaces orphaned block observations", async (
   assert.equal(result.reorgDetected, true);
   assert.equal(result.fromBlock, "3");
   assert.equal(result.toBlock, "4");
-  const block3 = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"));
-  const block4 = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "4"));
+  const chunk = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
+  const block3 = chunk.blocks.find(item => item.blockNumber === "3");
+  const block4 = chunk.blocks.find(item => item.blockNumber === "4");
   assert.equal(block3.blockHash, hash(303));
   assert.equal(block3.events[0].transactionHash, hash(303));
   assert.equal(block4.blockHash, hash(404));
@@ -126,7 +153,7 @@ test("halts when a reorg reaches beyond the retained checkpoint window", async (
 
 test("does not advance cursor if a block record write fails", async () => {
   const kv = new MemoryKV();
-  kv.failKey = FOURMEME_COLLECTOR_BLOCK_PREFIX + "2";
+  kv.failKey = FOURMEME_COLLECTOR_BLOCK_PREFIX + "1";
   await assert.rejects(
     collectFourMemeFinalizedLogs({
       ...providers(kv, canonicalBlocks(), [makeLog(1, hash(1))]),
