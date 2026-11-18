@@ -23,7 +23,10 @@ current time window with the preceding window.
 
 Each observation contains `entity`, `source`, `observedAt` (Unix ms),
 `rank`, and `listSize`. Each source status is `ok`, `failed`, or
-`disabled`. Scores are derived from rank within that source's list; repeated
+`disabled`. The caller must also provide the full `expectedSources` list.
+Missing status, failed status, disabled status, or an empty expected-source list
+means coverage is incomplete; partial coverage can never be called a complete
+cross-platform signal. Scores are derived from rank within that source's list; repeated
 observations from one source contribute only their maximum score per window.
 
 ## Remaining work before any live use
