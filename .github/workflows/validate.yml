@@ -120,6 +120,12 @@ jobs:
   nodereal-finality-smoke:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Verify configured free BSC RPC finality and batch reads
         env:
           NODEREAL_RPC_URL: ${{ secrets.NODEREAL_RPC_URL }}
@@ -176,4 +182,25 @@ jobs:
           console.log("latest block:", BigInt(latest.number).toString());
           console.log("finalized block:", BigInt(finalized.number).toString());
           console.log("JSON-RPC batch block reads: passed (2/2)");
+
+          // Exercise the exact isolated adapter against the configured endpoint.
+          const { createNodeRealFourMemeRpcAdapter } =
+            await import("./fourmeme-nodereal-adapter.js");
+          const adapter = createNodeRealFourMemeRpcAdapter({ endpoint });
+          const adapterFinalized = await adapter.getFinalizedBlockNumber();
+          if (adapterFinalized !== BigInt(finalized.number).toString()) {
+            throw new Error("Adapter finalized height does not match the direct RPC result");
+          }
+          const adapterHashes = await adapter.getBlockHashes([adapterFinalized]);
+          if (!adapterHashes[adapterFinalized]) {
+            throw new Error("Adapter canonical block-hash batch read is incomplete");
+          }
+          const logFrom = BigInt(adapterFinalized) > 0n
+            ? (BigInt(adapterFinalized) - 1n).toString()
+            : adapterFinalized;
+          const adapterLogs = await adapter.getLogs(logFrom, adapterFinalized);
+          console.log("NodeReal adapter finalized-height read: passed");
+          console.log("NodeReal adapter canonical-hash batch read: passed");
+          console.log("NodeReal adapter official-contract eth_getLogs read: passed");
+          console.log("Adapter log count in bounded finalized range:", adapterLogs.length);
           NODE
