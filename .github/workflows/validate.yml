@@ -188,8 +188,10 @@ jobs:
             await import("./fourmeme-nodereal-adapter.js");
           const adapter = createNodeRealFourMemeRpcAdapter({ endpoint });
           const adapterFinalized = await adapter.getFinalizedBlockNumber();
-          if (adapterFinalized !== BigInt(finalized.number).toString()) {
-            throw new Error("Adapter finalized height does not match the direct RPC result");
+          // Finalized height may advance between the independent RPC calls.
+          // Require monotonicity, not exact equality across two different instants.
+          if (BigInt(adapterFinalized) < BigInt(finalized.number)) {
+            throw new Error("Adapter finalized height moved backwards");
           }
           const adapterHashes = await adapter.getBlockHashes([adapterFinalized]);
           if (!adapterHashes[adapterFinalized]) {
