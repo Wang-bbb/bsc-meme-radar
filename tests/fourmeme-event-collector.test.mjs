@@ -262,3 +262,49 @@ test("returns idle without RPC log scans when cursor is already finalized", asyn
   assert.equal(result.status, "idle");
   assert.equal(calls, 0);
 });
+
+
+test("rejects an oversized serialized KV chunk without advancing the cursor", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 2);
+  const state = {
+    version: 1,
+    cursorBlock: "1",
+    checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
+  };
+  const oversizedChunk = {
+    version: 1,
+    chunkStart: "1",
+    blocks: [{
+      blockNumber: "1",
+      blockHash: hash(1),
+      events: [{ eventName: "historical-placeholder", payload: "x".repeat(4096) }]
+    }]
+  };
+  kv.data.set(FOURMEME_COLLECTOR_STATE_KEY, JSON.stringify(state));
+  kv.data.set(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1", JSON.stringify(oversizedChunk));
+  const beforeChunk = await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1");
+
+  await assert.rejects(
+    collectFourMemeFinalizedLogs({
+      ...providers(kv, canonical, [], 2),
+      maxBlocksPerRun: 1,
+      maxChunkBytes: 1024
+    }),
+    /KV chunk exceeds maxChunkBytes.*cursor was not advanced/
+  );
+
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_STATE_KEY), JSON.stringify(state));
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"), beforeChunk);
+});
+
+test("rejects unsafe KV chunk byte-cap configuration", async () => {
+  const kv = new MemoryKV();
+  await assert.rejects(
+    collectFourMemeFinalizedLogs({
+      ...providers(kv, canonicalBlocks(), []),
+      maxChunkBytes: 1024 * 1024 + 1
+    }),
+    /Invalid collector bounds/
+  );
+});
