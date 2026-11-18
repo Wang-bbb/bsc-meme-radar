@@ -13,9 +13,25 @@ This is an isolated, read-only analysis library. It is not connected to the Work
 
 ## Current data-source limitation
 
-The existing `/pool-wallet-flow` route uses GeckoTerminal pool-trade samples. Its current response contains aggregate counts and concentration warnings for one pool. It does not provide a wallet's complete cross-token trading history, realized historical PnL, token-by-token win rate, or reliable current token balances.
+The existing `/wallet-flow` route uses GeckoTerminal pool-trade samples. Its current response contains aggregate counts and concentration warnings for one pool. It does not provide a wallet's complete cross-token trading history, realized historical PnL, token-by-token win rate, or reliable current token balances.
 
 Therefore, the current scanner cannot honestly populate the historical fields required by `evaluateWalletQuality`. A pool's recent trades must not be presented as a wallet's long-term performance. Nor should "bought but no sell seen in this sample" be labeled as "still holding".
+
+## Practical collection design and attribution limits
+
+### BSC first, limited to already-discovered pools
+
+- The lowest-cost first experiment is to reuse the existing NodeReal BSC RPC and monitor only a small, explicit set of pools already selected by the radar. Do not scan every token or every DEX pool.
+- For V2-style pools, `eth_getLogs` can retrieve pool `Swap` events. The event identifies token-side amounts and a transaction hash, but it does not identify the end-user wallet. A separate `eth_getTransactionByHash` lookup can provide the transaction's `from` address; record this as the **transaction initiator**, not a proven beneficial owner. Routers, aggregators, relayers, and smart accounts can make this attribution differ from the human trader.
+- V3-style pools have a different `Swap` event layout and need a separate decoder. Do not apply a V2 decoder to V3 logs.
+- Resolve and cache each pool's `token0`, `token1`, and decimals before interpreting amounts. Only compute USD values when the quote asset and conversion price are trustworthy; otherwise retain raw amounts and mark USD valuation unavailable.
+- Poll in small block ranges, keep a per-pool cursor, deduplicate by chain + transaction hash + log index, and retain a short reorg overlap. Advance the cursor only after the whole range has been processed successfully. If a range fails or is truncated, expose a gap and do not infer missing sells.
+- Bound the workload to a small number of candidate pools per chain and a conservative polling interval. Wallet collection must be optional, rate-limited, and unable to delay or fail the primary scanner.
+
+### Solana later, after BSC validation
+
+- The existing Alchemy Solana RPC can be checked with standard read-only methods, but pool-account signatures alone do not equal a complete wallet history.
+- Solana collection requires protocol-specific instruction decoding (for example, Raydium/PumpSwap), correct account-to-wallet attribution, token balance deltas, pagination, and slot-gap handling. Keep it disabled until a parser is tested against known transactions.
 
 ## Data required before live integration
 
@@ -44,7 +60,7 @@ The default implementation path must not introduce a recurring paid data depende
 
 ### Optional free-tier providers for validation only
 
-- Alchemy currently advertises a $0 tier with 30M Compute Units/month and support for major chains including BNB Smart Chain and Base. It is a general RPC/data platform, not proof that every enhanced wallet-history endpoint is included in the free tier. Verify the exact method and quota before depending on it: https://www.alchemy.com/pricing and https://www.alchemy.com/docs/chains.
+- Alchemy currently advertises a $0 tier with 30M Compute Units/month and lists BNB Smart Chain and Solana among supported chains. This supports a bounded standard-RPC experiment, not a promise that every enhanced wallet-history API or Solana streaming feature is free. Verify the exact app endpoint, method access, and remaining quota before relying on it: https://www.alchemy.com/pricing and https://www.alchemy.com/docs/chains.
 - Helius currently advertises a $0 Solana tier with 1M credits/month. It may be considered only if the existing Alchemy Solana RPC cannot provide the required read-only transaction coverage: https://www.helius.dev/pricing.
 - Bitquery and GoldRush are time-limited trials, not long-term free dependencies. Use them only for bounded validation; do not configure paid upgrades, archive packs, overages, or recurring billing: https://www.bitquery.io/pricing and https://goldrush.dev/pricing/.
 - Ankr's published plan pages currently describe free Freemium credits, while its Query API method page labels the address-history query feature as Premium. Do not assume indexed wallet-history methods are free until verified directly in an account: https://www.ankr.com/docs/rpc-service/service-plans/ and https://www.ankr.com/docs/advanced-api/query-methods/.
