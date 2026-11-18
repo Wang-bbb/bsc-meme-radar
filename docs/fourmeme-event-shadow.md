@@ -47,14 +47,14 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Requests canonical hashes only for sparse 250-block checkpoints, the scan-range boundaries, and blocks that actually contain matching logs; every returned log is checked against its own canonical block hash.
 - Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. Each serialized chunk is measured in UTF-8 bytes and capped at 1 MiB (configurable lower, never higher); an oversized chunk fails closed before the cursor write. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
 - Keeps a rolling checkpoint window (default 8 checkpoints), adding every 250th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
-- Writes chunk observations before cursor state. If a KV write fails or a serialized chunk exceeds its byte cap, the cursor is not advanced and the same range can be replayed. The byte cap prevents a growing observation chunk from silently exceeding the storage value limit; it does not automatically split an oversized chunk.
+- Writes chunk observations before cursor state. If a KV write fails or a serialized chunk exceeds its byte cap, the cursor is not advanced and the same range can be replayed. The byte cap does not automatically split an oversized chunk.
 - Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
 - Defaults to at most 1,000 blocks per invocation and caps each new-range canonical-hash batch at 32 block lookups (the retained checkpoint verification is a separate bounded batch). If an event-heavy range exceeds the cap, it stops before making that hash request and does not advance the cursor.
 - Even with chunked writes, keep scheduled execution at or below one run per five minutes until actual KV and RPC consumption are measured; pause on any quota error.
 
 Chunk records may contain a stale suffix after an interrupted reorg replay; any future reader must treat the cursor/checkpoint state as the committed boundary and must never consume block entries above `cursorBlock`.
 
-This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. NodeReal's BSC `eth_getBlockByNumber` API reference explicitly lists `finalized` as a supported block tag, so the documented capability is present; the user's actual API key/endpoint has not yet been live-tested. The host must still verify a successful response and implement `getBlockHashes` as one efficient JSON-RPC batch over the requested sparse block numbers. If the configured free RPC returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
+This remains a shadow library, not an active Worker collector: no scheduled polling, Worker route, or dashboard integration has been added. The isolated NodeReal adapter has passed live read-only finalized-height, canonical-hash batch, and official-contract log-read checks against the configured free BSC endpoint. If the provider returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
 
 
 ## NodeReal read-only RPC adapter shadow
@@ -74,6 +74,7 @@ A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JS
 3. Use the existing free BSC RPC only; bound block ranges and request counts. On quota/rate-limit errors, report a coverage gap and stop.
 4. Read finalized block height, persist cursor and block hashes, replay an overlap window, and deduplicate.
 5. Join TokenCreate → purchases/sales → LiquidityAdded by token contract address, never symbol.
-6. Keep Four.meme candidates in a separate observation lane until existing $5,000 liquidity and all current safety gates independently pass.\n7. Before unattended collection, measure actual KV value sizes and daily writes on a bounded test deployment; if a chunk reaches the byte cap, reduce the scan range or introduce a versioned chunk-splitting reader/writer rather than raising the cap blindly.
+6. Keep Four.meme candidates in a separate observation lane until existing $5,000 liquidity and all current safety gates independently pass.
+7. Before unattended collection, measure actual KV value sizes and daily writes on a bounded test deployment; if a chunk reaches the byte cap, reduce the scan range or introduce a versioned chunk-splitting reader/writer rather than raising the cap blindly.
 
 No paid API, private key, wallet connection, signing, transaction submission, trading, or automatic deployment is used.
