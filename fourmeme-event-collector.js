@@ -2,7 +2,7 @@ import { decodeFourMemeRawLog } from "./fourmeme-event-shadow.js";
 
 const STATE_KEY = "fourmeme:v2:collector:state";
 const BLOCK_KEY_PREFIX = "fourmeme:v2:collector:chunk:";
-const BLOCKS_PER_KV_CHUNK = 100;
+const BLOCKS_PER_KV_CHUNK = 1000;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
 function quantity(value, field) {
@@ -56,7 +56,7 @@ export async function collectFourMemeFinalizedLogs({
   getBlockHashes,
   getLogs,
   startBlock,
-  maxBlocksPerRun = 100,
+  maxBlocksPerRun = 1000,
   maxLogsPerRun = 500,
   checkpointWindow = 128,
   eventTtlSeconds = 30 * 24 * 60 * 60,
