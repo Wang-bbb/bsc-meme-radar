@@ -24,6 +24,10 @@ jobs:
         run: node --check worker.js
       - name: Run Worker route tests
         run: node --experimental-default-type=module --test tests/worker.test.mjs
+      - name: Run narrative observation shadow tests
+        run: node --experimental-default-type=module --test tests/narrative-observation.test.mjs
+      - name: Check narrative observation module syntax
+        run: node --check narrative-observation.js
       - name: Extract and check dashboard JavaScript
         run: |
           python3 - <<'PY'
