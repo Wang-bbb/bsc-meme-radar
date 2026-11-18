@@ -50,3 +50,62 @@ jobs:
         run: node --check fourmeme-event-shadow.js
       - name: Run Four.meme shadow tests
         run: node --experimental-default-type=module --test tests/fourmeme-event-shadow.test.mjs
+
+  fourmeme-public-api-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fetch one public Four.meme token-list sample (read-only)
+        continue-on-error: true
+        run: |
+          node --input-type=module <<'NODE'
+          const url = "https://four.meme/meme-api/v1/public/token/search";
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "accept": "application/json",
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              type: "NEW",
+              listType: "NOR",
+              pageIndex: 1,
+              pageSize: 1,
+              status: "PUBLISH",
+              sort: "DESC"
+            })
+          });
+          console.log("HTTP status:", response.status);
+          const raw = await response.text();
+          let payload;
+          try {
+            payload = JSON.parse(raw);
+          } catch {
+            console.log("Non-JSON response preview:", raw.slice(0, 1200));
+            process.exit(1);
+          }
+          console.log("Top-level keys:", Object.keys(payload || {}));
+          const data = payload && payload.data;
+          console.log("data type:", Array.isArray(data) ? "array" : typeof data);
+          if (Array.isArray(data)) {
+            console.log("data length:", data.length);
+            if (data[0]) {
+              console.log("first row keys:", Object.keys(data[0]));
+              console.log("first row sample:", JSON.stringify(data[0]).slice(0, 2400));
+            }
+          } else if (data && typeof data === "object") {
+            console.log("data keys:", Object.keys(data));
+            for (const [key, value] of Object.entries(data)) {
+              if (Array.isArray(value)) {
+                console.log("nested array:", key, "length:", value.length);
+                if (value[0]) {
+                  console.log("nested first-row keys:", Object.keys(value[0]));
+                  console.log("nested first-row sample:", JSON.stringify(value[0]).slice(0, 2400));
+                }
+              }
+            }
+          } else {
+            console.log("Response preview:", JSON.stringify(payload).slice(0, 2400));
+          }
+          if (!response.ok) process.exit(1);
+          NODE
