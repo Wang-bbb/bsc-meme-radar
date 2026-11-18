@@ -57,6 +57,18 @@ Chunk records may contain a stale suffix after an interrupted reorg replay; any 
 This remains a shadow library, not an active Worker collector: no scheduled polling, Worker route, or dashboard integration has been added. The isolated NodeReal adapter has passed live read-only finalized-height, canonical-hash batch, and official-contract log-read checks against the configured free BSC endpoint. If the provider returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
 
 
+## Latest live finalized-event sample (2026-11-18)
+
+The latest bounded read-only NodeReal smoke (GitHub Actions run #374) observed BSC mainnet chain ID `0x38`, latest block `134357679`, and finalized block `134357677`. Against the official TokenManager2 contract:
+
+- TokenCreate: 35 raw finalized logs; 35 ABI decodes passed in blocks `134355678–134357677`.
+- TokenPurchase: 65 raw finalized logs; 65 ABI decodes passed in the same 2,000-block window.
+- TokenSale: 35 raw finalized logs; 35 ABI decodes passed in the same 2,000-block window.
+- TradeStop: 0 matching logs in the bounded 20,000-block window `134337678–134357677`.
+- LiquidityAdded: 0 matching logs in the same bounded 20,000-block window.
+
+The three observed event types now have real finalized-chain samples, not just fixtures. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
+
 ## NodeReal read-only RPC adapter shadow
 
 A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JSON-RPC adapter for the collector's injected dependencies:
