@@ -3558,7 +3558,7 @@ export default {
         };
       });
       const validByLiquidity = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
-      // Only enrich pools that passed liquidity screening; this is the main guard
+      // Token metadata is deferred until after the liquidity filter. Only enrich pools that passed screening; this is the main guard
       // against exhausting Cloudflare's per-invocation subrequest budget.
       const valid = await mapLimit(validByLiquidity, 2, async (p) => enrichTokenMetadata(p, rpcUrl));
       const summarizeFilterStage = (events, freshRows, inspected, eligible) => ({
