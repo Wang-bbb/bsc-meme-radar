@@ -467,6 +467,10 @@ async function writeProviderCooldown(provider, response) {
   } catch (_) {}
 }
 
+// Coalesce the first GeckoTerminal request in a concurrent burst. If it is
+// rate-limited, all waiting chains reuse that 429 instead of hitting the provider.
+let geckoTerminalInitialProbePromise = null;
+
 async function fetchGeckoTerminal(endpoint) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(endpoint, { method: "GET" });
@@ -488,62 +492,83 @@ async function fetchGeckoTerminal(endpoint) {
     });
   }
 
-  let lastResponse;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(endpoint, {
-      headers: { "accept": "application/json;version=20230203" }
+  let isInitialProbe = false;
+  let resolveInitialProbe;
+  if (geckoTerminalInitialProbePromise) {
+    const sharedRateLimit = await geckoTerminalInitialProbePromise;
+    if (sharedRateLimit) return sharedRateLimit.clone();
+  } else {
+    isInitialProbe = true;
+    geckoTerminalInitialProbePromise = new Promise((resolve) => {
+      resolveInitialProbe = resolve;
     });
-    // Do not immediately retry rate-limited public APIs: cache the 429 briefly
-    // so repeated mobile refreshes do not amplify provider throttling.
-    if (response.status === 429) {
-      await writeProviderCooldown("geckoterminal", response);
-      const stateHeaders = new Headers(response.headers);
-      stateHeaders.set("x-radar-provider-state", "upstream-rate-limit");
-      stateHeaders.set("x-radar-provider", "GeckoTerminal");
-      const taggedResponse = new Response(response.clone().body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: stateHeaders
-      });
-      if (cache) {
-        const headers = new Headers(stateHeaders);
-        headers.set("x-radar-original-status", "429");
-        headers.set("cache-control", "public, max-age=15");
-        try {
-          await cache.put(cacheKey, new Response(response.clone().body, {
-            status: 200, statusText: "OK", headers
-          }));
-        } catch (_) {}
-      }
-      return taggedResponse;
-    }
-    if (response.status < 500) {
-      if (response.ok && cache) {
-        const headers = new Headers(response.headers);
-        headers.set("cache-control", "public, max-age=60");
-        try {
-          await cache.put(cacheKey, new Response(response.clone().body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers
-          }));
-        } catch (_) {}
-      }
-      return response;
-    }
-    lastResponse = response;
-    if (attempt < 2 && (response.status === 429 || response.status >= 500)) {
-      const retryAfter = Number(response.headers.get("retry-after") || 0);
-      const delay = Math.min(5000, Math.max(retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1), 500));
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    } else {
-      break;
-    }
   }
-  if (lastResponse && lastResponse.status >= 500) await writeProviderCooldown("geckoterminal", lastResponse);
-  return lastResponse || new Response("GeckoTerminal request failed", { status: 502 });
-}
 
+  try {
+    let lastResponse;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetch(endpoint, {
+        headers: { "accept": "application/json;version=20230203" }
+      });
+      // Do not immediately retry rate-limited public APIs: cache the 429 briefly
+      // so repeated mobile refreshes do not amplify provider throttling.
+      if (response.status === 429) {
+        await writeProviderCooldown("geckoterminal", response);
+        const stateHeaders = new Headers(response.headers);
+        stateHeaders.set("x-radar-provider-state", "upstream-rate-limit");
+        stateHeaders.set("x-radar-provider", "GeckoTerminal");
+        const taggedResponse = new Response(response.clone().body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: stateHeaders
+        });
+        if (cache) {
+          const headers = new Headers(stateHeaders);
+          headers.set("x-radar-original-status", "429");
+          headers.set("cache-control", "public, max-age=15");
+          try {
+            await cache.put(cacheKey, new Response(response.clone().body, {
+              status: 200, statusText: "OK", headers
+            }));
+          } catch (_) {}
+        }
+        if (isInitialProbe) resolveInitialProbe(taggedResponse.clone());
+        return taggedResponse;
+      }
+      if (response.status < 500) {
+        if (response.ok && cache) {
+          const headers = new Headers(response.headers);
+          headers.set("cache-control", "public, max-age=60");
+          try {
+            await cache.put(cacheKey, new Response(response.clone().body, {
+              status: response.status,
+              statusText: response.statusText,
+              headers
+            }));
+          } catch (_) {}
+        }
+        if (isInitialProbe) resolveInitialProbe(null);
+        return response;
+      }
+      lastResponse = response;
+      if (attempt < 2 && response.status >= 500) {
+        const retryAfter = Number(response.headers.get("retry-after") || 0);
+        const delay = Math.min(5000, Math.max(retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1), 500));
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        break;
+      }
+    }
+    if (lastResponse && lastResponse.status >= 500) await writeProviderCooldown("geckoterminal", lastResponse);
+    if (isInitialProbe) resolveInitialProbe(null);
+    return lastResponse || new Response("GeckoTerminal request failed", { status: 502 });
+  } catch (error) {
+    if (isInitialProbe) resolveInitialProbe(null);
+    throw error;
+  } finally {
+    if (isInitialProbe) geckoTerminalInitialProbePromise = null;
+  }
+}
 async function fetchDexPaprikaJson(endpoint) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(endpoint, { method: "GET" });
@@ -3558,6 +3583,8 @@ export default {
         };
       });
       const validByLiquidity = pairData.filter((p) => !p._error && Number.isFinite(p.liquidityUSD) && p.liquidityUSD >= minLiquidity);
+      // Token metadata is deferred until after the liquidity filter. Only enrich pools that passed screening; this is the main guard
+      // against exhausting Cloudflare's per-invocation subrequest budget.
       // Only enrich pools that passed liquidity screening; this is the main guard
       // against exhausting Cloudflare's per-invocation subrequest budget.
       const valid = await mapLimit(validByLiquidity, 2, async (p) => enrichTokenMetadata(p, rpcUrl));
