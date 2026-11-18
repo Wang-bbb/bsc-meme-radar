@@ -2,7 +2,7 @@ name: Validate Meme Radar
 
 on:
   push:
-    branches: [feature/multichain-meme-radar]
+    branches: [feature/multichain-meme-radar, feature/wallet-intelligence-shadow]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -22,8 +22,8 @@ jobs:
           node-version: 22
       - name: Check Worker JavaScript syntax
         run: node --check worker.js
-      - name: Run Worker route tests
-        run: node --experimental-default-type=module --test tests/worker.test.mjs
+      - name: Run Worker and module tests
+        run: node --experimental-default-type=module --test tests/*.test.mjs
       - name: Extract and check dashboard JavaScript
         run: |
           python3 - <<'PY'
