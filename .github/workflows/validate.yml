@@ -4,7 +4,7 @@ on:
   push:
     branches: [feature/multichain-meme-radar, feature/fourmeme-nodereal-adapter-sync]
   pull_request:
-    branches: [main]
+    branches: [main, feature/fourmeme-event-shadow]
   workflow_dispatch:
 
 permissions:
