@@ -54,7 +54,21 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 
 Chunk records may contain a stale suffix after an interrupted reorg replay; any future reader must treat the cursor/checkpoint state as the committed boundary and must never consume block entries above `cursorBlock`.
 
-This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. NodeReal's BSC `eth_getBlockByNumber` API reference explicitly lists `finalized` as a supported block tag, so the documented capability is present; the user's actual API key/endpoint has not yet been live-tested. The host must still verify a successful response and implement `getBlockHashes` as one efficient JSON-RPC batch over the requested sparse block numbers. If the configured free RPC returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
+This remains a shadow library, not an active Worker collector. The separate NodeReal adapter below is tested independently and is not connected to Worker routes, KV, scheduled execution, or candidate ranking. If the configured free RPC returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
+
+
+## NodeReal read-only RPC adapter shadow
+
+A separate `fourmeme-nodereal-adapter.js` module provides a bounded HTTPS JSON-RPC adapter for the collector's injected dependencies:
+
+- Reads the `finalized` block tag for the collector cursor; it does not substitute `latest` or an arbitrary confirmation count.
+- Batch-reads canonical block headers by explicit block number, validates returned block numbers and hashes, and caps each batch at 32.
+- Reads logs only from the official TokenManager2 contract address and caps each requested range at 2,000 blocks and each response at 500 logs.
+- Uses request timeouts, rejects non-HTTPS endpoints, and fails closed on HTTP/RPC errors or malformed responses. Endpoint values and credentials are not logged.
+- The adapter is not wired to Worker routes, KV, scheduled execution, or the production candidate pipeline.
+- Live CI verification checks BSC chain ID, finalized height, canonical block-hash batch reads, official-contract log reads, and a bounded real TokenCreate sample when the existing `NODEREAL_RPC_URL` Actions secret is configured. A missing secret skips the live smoke; it does not trigger another provider or a paid plan.
+- The live TokenCreate sample validates only TokenCreate against real returned logs. The other four event decoders remain unit-tested until matching real logs are independently observed.
+
 
 ## Next integration gates (not implemented here)
 
