@@ -6,6 +6,10 @@ This is an isolated, read-only analysis library. It is not connected to the Work
 
 ## What the current implementation can do
 
+- A separate, dependency-injected BSC V2 collector can read bounded `eth_getLogs` slices for already-approved pools, look up transaction initiators, deduplicate by transaction hash + log index, and write observations plus a per-pool cursor to a supplied KV interface.
+- The collector is not wired into the Worker, does not schedule itself, and does not choose or discover pools. It caps work at three pools, ten blocks per pool, and 25 logs per pool per invocation; if a chunk is too dense or a transaction/KV operation fails, it does not advance that pool's cursor. Stored observations expire after 30 days.
+- Initial collection starts with at most the latest ten blocks, so this is a bounded observation bootstrap, not historical backfill. Each saved record is explicitly marked as observed-pool-only coverage.
+
 - Parse a single BSC V2-compatible pool `Swap` log into a raw buy/sell observation when pool token metadata and the transaction response are supplied. The result records `transaction.from` as an initiator only, does not calculate USD value, and does not fetch or persist anything. V3 and Solana decoders are not implemented.
 
 - Evaluate a wallet when a caller supplies complete historical metrics: closed-token sample count, win rate, realized PnL, median return, rug/zero-value token exposure, and data coverage.
