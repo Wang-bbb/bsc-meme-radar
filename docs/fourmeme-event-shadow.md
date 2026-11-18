@@ -83,7 +83,7 @@ No paid API, private key, wallet connection, signing, transaction submission, tr
 ## Scheduled shadow integration (draft)
 
 - A ten-minute Cloudflare Cron invokes the Worker `scheduled()` handler.
-- Collection is opt-in only: unless `FOURMEME_SHADOW_ENABLED=true` is explicitly configured, each cron invocation records a disabled status and performs no NodeReal RPC calls.
+- Collection is opt-in only: unless `FOURMEME_SHADOW_ENABLED=true` is explicitly configured, each cron invocation returns disabled immediately and performs no KV writes or NodeReal RPC calls.
 - The first enabled run anchors at the then-current BSC finalized block. It does not backfill the contract's historical deployment history.
 - Each invocation is bounded to at most 250 blocks and 25 logs; if the provider returns too many logs or the KV chunk approaches its byte budget, the scheduler retries progressively smaller ranges down to one block.
 - Each stored KV chunk covers at most 250 blocks. At the ten-minute cadence, the normal path uses at most three KV writes per run (chunk, cursor, status), or about 433 writes/day including the one-time start anchor. This is below the current Free-plan 1,000 writes/day quota and leaves headroom for the existing radar; actual account usage must still be monitored. The collector still writes the cursor last and verifies canonical hashes before persisting observations.
