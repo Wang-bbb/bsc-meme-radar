@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This is a read-only, isolated foundation for observing Four.meme BSC V2 launches and their subsequent on-chain activity. It does not discover tokens on its own, call an RPC, persist cursors, run on a schedule, expose a Worker route, notify, rank, or change candidate eligibility.
+This is a read-only, isolated foundation for observing Four.meme BSC V2 launches and their subsequent on-chain activity. The decoder does not fetch RPC data; the collector accepts injected RPC/KV adapters but does not configure providers, run on a schedule, expose a Worker route, notify, rank, or change candidate eligibility.
 
 Official reference:
 - TokenManager2 BSC: `0x5c952063c7fc8610FFDB798152D69F0B9550762b`
