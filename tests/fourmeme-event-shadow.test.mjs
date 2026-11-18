@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeFourMemeEvent,
+  decodeFourMemeRawLog,
   summarizeFourMemeTokenEvents,
   FOURMEME_TOKEN_MANAGER2_BSC
 } from "../fourmeme-event-shadow.js";
@@ -26,6 +27,101 @@ function event(eventName, args, overrides = {}) {
     ...overrides
   });
 }
+
+function abiWord(value) {
+  return BigInt(value).toString(16).padStart(64, "0");
+}
+function abiAddress(value) {
+  return value.slice(2).toLowerCase().padStart(64, "0");
+}
+function abiString(value) {
+  const bytes = Buffer.from(value, "utf8");
+  const hex = bytes.toString("hex");
+  const padded = hex.padEnd(Math.ceil(hex.length / 64) * 64, "0");
+  return abiWord(bytes.length) + padded;
+}
+function rawLog(topic, data, overrides = {}) {
+  return {
+    address: FOURMEME_TOKEN_MANAGER2_BSC,
+    topics: [topic],
+    data: "0x" + data,
+    blockNumber: "0x64",
+    blockHash,
+    transactionHash: hash,
+    logIndex: "0x0",
+    ...overrides
+  };
+}
+
+test("decodes raw TokenPurchase logs using the verified V2 topic and preserves sender separately", () => {
+  const topic = "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942";
+  const data = [
+    abiAddress(token), abiAddress(buyer), abiWord(11), abiWord(22),
+    abiWord(33), abiWord(4), abiWord(55), abiWord(66)
+  ].join("");
+  const decoded = decodeFourMemeRawLog(rawLog(topic, data), {
+    finalityStatus: "finalized",
+    transactionFrom: sender
+  });
+  assert.equal(decoded.eventName, "TokenPurchase");
+  assert.equal(decoded.tokenAddress, token);
+  assert.equal(decoded.accountAddress, buyer);
+  assert.equal(decoded.transactionSenderAddress, sender);
+  assert.equal(decoded.cost, "33");
+  assert.equal(decoded.funds, "66");
+  assert.equal(decoded.blockNumber, "100");
+});
+
+test("decodes TokenCreate dynamic UTF-8 strings and all static fields", () => {
+  const topic = "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20";
+  const name = "测试 Meme";
+  const symbol = "TST";
+  const nameTail = abiString(name);
+  const symbolOffset = 256 + nameTail.length / 2;
+  const data = [
+    abiAddress(creator), abiAddress(token), abiWord(9),
+    abiWord(256), abiWord(symbolOffset), abiWord(1000),
+    abiWord(1700000000), abiWord(7),
+    nameTail, abiString(symbol)
+  ].join("");
+  const decoded = decodeFourMemeRawLog(rawLog(topic, data), { finalityStatus: "finalized" });
+  assert.equal(decoded.eventName, "TokenCreate");
+  assert.equal(decoded.name, name);
+  assert.equal(decoded.symbol, symbol);
+  assert.equal(decoded.totalSupply, "1000");
+  assert.equal(decoded.launchFee, "7");
+});
+
+test("decodes TokenSale, TradeStop and LiquidityAdded raw logs", () => {
+  const saleTopic = "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19";
+  const saleData = [
+    abiAddress(token), abiAddress(buyer), abiWord(1), abiWord(2),
+    abiWord(3), abiWord(4), abiWord(5), abiWord(6)
+  ].join("");
+  const sale = decodeFourMemeRawLog(rawLog(saleTopic, saleData), { finalityStatus: "finalized" });
+  assert.equal(sale.eventName, "TokenSale");
+  assert.equal(sale.accountRole, "seller");
+
+  const stopTopic = "0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132";
+  const stopped = decodeFourMemeRawLog(rawLog(stopTopic, abiAddress(token)), { finalityStatus: "finalized" });
+  assert.equal(stopped.eventName, "TradeStop");
+  assert.equal(stopped.tokenAddress, token);
+
+  const liquidityTopic = "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0";
+  const quote = "0x0000000000000000000000000000000000000000";
+  const liquidityData = [abiAddress(token), abiWord(999), abiAddress(quote), abiWord(1200)].join("");
+  const liquidity = decodeFourMemeRawLog(rawLog(liquidityTopic, liquidityData), { finalityStatus: "finalized" });
+  assert.equal(liquidity.eventName, "LiquidityAdded");
+  assert.equal(liquidity.offers, "999");
+  assert.equal(liquidity.quoteAddress, quote);
+});
+
+test("rejects unknown, indexed-looking, removed and malformed raw logs", () => {
+  assert.throws(() => decodeFourMemeRawLog(rawLog("0x" + "0".repeat(64), ""), { finalityStatus: "finalized" }), /Unknown/);
+  assert.throws(() => decodeFourMemeRawLog(rawLog("0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942", "", { topics: ["0x" + "0".repeat(64), hash] }), { finalityStatus: "finalized" }), /exactly topic0/);
+  assert.throws(() => decodeFourMemeRawLog(rawLog("0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132", abiAddress(token), { removed: true }), { finalityStatus: "finalized" }), /Removed/);
+  assert.throws(() => decodeFourMemeRawLog(rawLog("0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132", "00"), { finalityStatus: "finalized" }), /Truncated/);
+});
 
 test("normalizes TokenCreate using stable contract identity and string uints", () => {
   const result = event("TokenCreate", {
