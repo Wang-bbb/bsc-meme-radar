@@ -68,11 +68,11 @@ test("first enabled run anchors at finalized height and uses bounded collection 
   assert.equal(result.status, "ok");
   assert.equal(adapterOptions.timeoutMs, 12000);
   assert.equal(adapterOptions.maxHashLookups, 32);
-  assert.equal(adapterOptions.maxBlockSpan, 100);
+  assert.equal(adapterOptions.maxBlockSpan, 250);
   assert.equal(collectOptions.startBlock, "123456");
-  assert.equal(collectOptions.maxBlocksPerRun, 100);
+  assert.equal(collectOptions.maxBlocksPerRun, 250);
   assert.equal(collectOptions.maxLogsPerRun, 25);
-  assert.equal(collectOptions.blocksPerKvChunk, 100);
+  assert.equal(collectOptions.blocksPerKvChunk, 250);
   assert.equal(await kv.get(START_BLOCK_KEY), "123456");
   assert.equal(JSON.parse(await kv.get(STATUS_KEY)).status, "ok");
 });
@@ -98,7 +98,7 @@ test("observer retries smaller ranges when a log batch exceeds its bound", async
       return { status: "ok", processedBlocks: options.maxBlocksPerRun };
     }
   });
-  assert.deepEqual(attempted, [100, 50, 25, 12, 6]);
+  assert.deepEqual(attempted, [250, 125, 62, 31, 15, 7, 3, 1]);
   assert.equal(result.status, "ok");
   assert.equal(result.maxBlocksPerRun, 6);
 });
