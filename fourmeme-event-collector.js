@@ -108,7 +108,7 @@ export async function collectFourMemeFinalizedLogs({
   if (finalizedHeight < cursor) throw new Error("Finalized height regressed below the saved cursor");
 
   if (checkpoints.length) {
-    const checkpointNumbers = checkpoints.slice(-maxHashLookupsPerRun).map(item => item.blockNumber.toString());
+    const checkpointNumbers = checkpoints.map(item => item.blockNumber.toString());
     const canonical = await getBlockHashes(checkpointNumbers);
     let firstMismatch = -1;
     for (let i = 0; i < checkpoints.length; i++) {
