@@ -5,7 +5,7 @@ const STATUS_KEY = "fourmeme:v2:collector:status";
 const START_BLOCK_KEY = "fourmeme:v2:collector:start-block";
 const STATUS_TTL_SECONDS = 7 * 24 * 60 * 60;
 const START_BLOCK_TTL_SECONDS = 365 * 24 * 60 * 60;
-const BLOCK_RETRY_STEPS = [25, 12, 6, 3, 1];
+const BLOCK_RETRY_STEPS = [100, 50, 25, 12, 6, 3, 1];
 
 function parseStored(value) {
   if (value == null) return null;
@@ -85,7 +85,7 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
       endpoint: env.NODEREAL_RPC_URL,
       timeoutMs: 12000,
       maxHashLookups: 32,
-      maxBlockSpan: 25
+      maxBlockSpan: 100
     });
     const finalizedHeight = String(await adapter.getFinalizedBlockNumber());
     let startBlock = await kv.get(START_BLOCK_KEY);
@@ -109,7 +109,7 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
           getLogs: adapter.getLogs,
           startBlock: String(startBlock),
           maxBlocksPerRun,
-          maxLogsPerRun: 100,
+          maxLogsPerRun: 50,
           checkpointWindow: 8,
           maxHashLookupsPerRun: 32,
           maxChunkBytes: 768 * 1024,
