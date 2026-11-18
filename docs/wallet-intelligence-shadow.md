@@ -42,7 +42,7 @@ Therefore, the current scanner cannot honestly populate the historical fields re
 ## Observed wallet summary
 
 - A pure summary helper groups saved observations by chain and transaction initiator, and reports only observed buy/sell counts, unique observed tokens/pools, and observed time bounds.
-- It explicitly leaves realized PnL, win rate, median return, rug exposure, and wallet balance unknown. It accepts only records explicitly marked `observed_pool_only`.
+- It explicitly leaves realized PnL, win rate, median return, rug exposure, and wallet balance unknown. It accepts only classified records explicitly marked `observed_pool_only`; unclassified observations are retained for diagnostics but excluded from wallet activity counts.
 - This summary is not enough to populate the wallet-quality score; a broader, validated trade-history source and valuation methodology would still be required.
 
 ## Data required before live integration
