@@ -9,8 +9,8 @@ const STATUS_KEY = "fourmeme:v2:collector:status";
 const START_BLOCK_KEY = "fourmeme:v2:collector:start-block";
 
 class MemoryKV {
-  constructor() { this.data = new Map(); }
-  async get(key) { return this.data.has(key) ? this.data.get(key) : null; }
+  constructor() { this.data = new Map(); this.readCount = 0; }
+  async get(key) { this.readCount++; return this.data.has(key) ? this.data.get(key) : null; }
   async put(key, value) { this.data.set(key, value); }
 }
 
@@ -120,15 +120,17 @@ test("provider errors are recorded without exposing the RPC endpoint", async () 
   assert.equal(JSON.stringify(await readFourMemeShadowStatus(kv, true)).includes(secret), false);
 });
 
-test("status endpoint reports disabled state without erasing last-run time", async () => {
+test("disabled status endpoint does not read KV or expose stale run state", async () => {
   const kv = new MemoryKV();
   await kv.put(STATUS_KEY, JSON.stringify({
     status: "ok",
     enabled: true,
     updatedAt: "2026-11-18T00:00:00.000Z"
   }));
+  kv.readCount = 0;
   const status = await readFourMemeShadowStatus(kv, false);
   assert.equal(status.enabled, false);
   assert.equal(status.status, "disabled");
-  assert.equal(status.lastRunAt, "2026-11-18T00:00:00.000Z");
+  assert.equal(status.lastRunAt, null);
+  assert.equal(kv.readCount, 0);
 });
