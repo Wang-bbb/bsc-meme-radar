@@ -120,9 +120,20 @@ export function summarizeFourMemeTokenEvents(events) {
   const byToken = new Map();
   const seen = new Set();
 
-  for (const event of events) {
-    if (!event || !EVENT_NAMES.has(event.eventName)) continue;
-    if (event.finalityStatus !== "finalized") continue;
+  const orderedEvents = events
+    .filter(event => event && EVENT_NAMES.has(event.eventName) &&
+      event.finalityStatus === "finalized" &&
+      UINT_RE.test(String(event.blockNumber)) &&
+      Number.isSafeInteger(Number(event.logIndex)) && Number(event.logIndex) >= 0)
+    .slice()
+    .sort((a, b) => {
+      const aBlock = BigInt(a.blockNumber);
+      const bBlock = BigInt(b.blockNumber);
+      if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;
+      return Number(a.logIndex) - Number(b.logIndex);
+    });
+
+  for (const event of orderedEvents) {
     const tokenAddress = String(event.tokenAddress || "").toLowerCase();
     if (!ADDRESS_RE.test(tokenAddress)) continue;
     const eventId = String(event.eventId || "");
@@ -139,6 +150,7 @@ export function summarizeFourMemeTokenEvents(events) {
         sellEventCount: 0,
         tradeStopped: false,
         liquidityAdded: false,
+        liquidityDetails: null,
         distinctBuyAccounts: [],
         distinctTransactionSenders: [],
         totalBuyCostRaw: "0",
@@ -182,6 +194,12 @@ export function summarizeFourMemeTokenEvents(events) {
       summary.tradeStopped = true;
     } else if (event.eventName === "LiquidityAdded") {
       summary.liquidityAdded = true;
+      summary.liquidityDetails = {
+        quoteAddress: event.quoteAddress,
+        lpTokenAmountRaw: event.offers,
+        cumulativeFundsRaw: event.funds,
+        blockNumber: event.blockNumber
+      };
       summary.latestFundsRaw = event.funds;
     }
   }
