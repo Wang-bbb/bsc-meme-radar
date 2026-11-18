@@ -45,8 +45,8 @@ test("collects only a bounded V2 pool slice and persists observation plus cursor
   const result = await collectBscV2WalletObservations({ rpc, kv, pools: [pool], latestBlock: 1000 });
   assert.equal(result.status, "ok");
   assert.equal(result.savedObservations, 1);
-  assert.equal(result.pools[0].fromBlock, 990);
-  assert.equal(result.pools[0].toBlock, 999);
+  assert.equal(result.pools[0].fromBlock, 991);
+  assert.equal(result.pools[0].toBlock, 1000);
   assert.ok([...kv.values.keys()].some(key => key.includes(":cursor:")));
   assert.ok([...kv.values.keys()].some(key => key.includes(hash)));
   assert.equal(calls.filter(call => call.method === "eth_getLogs").length, 1);
@@ -82,7 +82,7 @@ test("deduplicates identical transaction/log events by deterministic KV key", as
     ? [makeLog(), makeLog()]
     : { from: initiator };
   const result = await collectBscV2WalletObservations({ rpc, kv, pools: [pool], latestBlock: 1000 });
-  assert.equal(result.savedObservations, 2);
+  assert.equal(result.savedObservations, 1);
   const observationKeys = [...kv.values.keys()].filter(key => key.includes(hash));
   assert.equal(observationKeys.length, 1);
 });
