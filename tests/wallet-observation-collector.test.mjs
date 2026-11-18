@@ -65,6 +65,39 @@ test("does not advance cursor when transaction attribution is unavailable", asyn
   assert.equal(kv.values.has("wallet-observation:v1:bsc:cursor:" + pool.address), false);
 });
 
+test("stores ambiguous swap directions as unknown instead of silently dropping them", async () => {
+  const kv = memoryKv();
+  const ambiguous = {
+    ...makeLog(),
+    data: "0x" + [1, 5, 100, 0].map(word).join("")
+  };
+  const rpc = async method => {
+    if (method === "eth_getLogs") return [ambiguous];
+    if (method === "eth_getTransactionByHash") return { from: initiator };
+    throw new Error("unexpected method");
+  };
+  const result = await collectBscV2WalletObservations({ rpc, kv, pools: [pool], latestBlock: 1000 });
+  assert.equal(result.status, "ok");
+  assert.equal(result.savedObservations, 0);
+  assert.equal(result.savedUnknownObservations, 1);
+  const record = [...kv.values.entries()].find(([key]) => key.includes(hash));
+  assert.equal(JSON.parse(record[1]).status, "unknown");
+  assert.equal(JSON.parse(record[1]).side, "unknown");
+});
+
+test("does not advance cursor when pool token metadata is invalid", async () => {
+  const kv = memoryKv();
+  let rpcCalls = 0;
+  const rpc = async () => { rpcCalls++; return []; };
+  const result = await collectBscV2WalletObservations({
+    rpc, kv, pools: [{ ...pool, targetToken: "invalid" }], latestBlock: 1000
+  });
+  assert.equal(result.status, "partial");
+  assert.equal(result.pools[0].status, "invalid_pool_metadata");
+  assert.equal(rpcCalls, 0);
+  assert.equal(kv.values.has("wallet-observation:v1:bsc:cursor:" + pool.address), false);
+});
+
 test("does not advance cursor when a log has no stable log index", async () => {
   const kv = memoryKv();
   const rpc = async method => method === "eth_getLogs"
