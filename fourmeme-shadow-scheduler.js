@@ -61,9 +61,7 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
   const collect = dependencies.collect || collectFourMemeFinalizedLogs;
 
   if (!enabled) {
-    const result = { status: "disabled", enabled: false, updatedAt: now() };
-    await writeStatus(kv, result);
-    return result;
+    return { status: "disabled", enabled: false, updatedAt: now() };
   }
   if (!kv || typeof kv.get !== "function" || typeof kv.put !== "function" ||
       !env?.NODEREAL_RPC_URL) {
