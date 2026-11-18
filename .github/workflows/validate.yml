@@ -203,4 +203,34 @@ jobs:
           console.log("NodeReal adapter canonical-hash batch read: passed");
           console.log("NodeReal adapter official-contract eth_getLogs read: passed");
           console.log("Adapter log count in bounded finalized range:", adapterLogs.length);
+
+          // Sample the sparse TokenCreate event over a wider finalized window.
+          // Decode only actual raw logs returned by the configured BSC RPC.
+          const { decodeFourMemeRawLog, FOURMEME_TOKEN_MANAGER2_BSC } =
+            await import("./fourmeme-event-shadow.js");
+          const sampleTo = BigInt(adapterFinalized);
+          const sampleFrom = sampleTo > 1999n ? sampleTo - 1999n : 0n;
+          const createTopic = "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20";
+          const createLogs = await rpc("eth_getLogs", [{
+            address: FOURMEME_TOKEN_MANAGER2_BSC,
+            fromBlock: "0x" + sampleFrom.toString(16),
+            toBlock: "0x" + sampleTo.toString(16),
+            topics: [createTopic]
+          }], 44);
+          if (!Array.isArray(createLogs)) throw new Error("TokenCreate log sample is not an array");
+          if (createLogs.length > 500) throw new Error("TokenCreate sample exceeds the bounded 500-log limit");
+          const decodedCreates = createLogs.map(log =>
+            decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
+          );
+          if (decodedCreates.some(event => event.eventName !== "TokenCreate" || !event.tokenAddress)) {
+            throw new Error("A real TokenCreate log failed event normalization");
+          }
+          console.log("Finalized TokenCreate sample range:", sampleFrom.toString(), "-", sampleTo.toString());
+          console.log("Finalized TokenCreate raw logs:", createLogs.length);
+          console.log("Finalized TokenCreate ABI decodes:", decodedCreates.length);
+          if (decodedCreates.length > 0) {
+            console.log("Live Four.meme TokenCreate decode: passed");
+          } else {
+            console.log("Live Four.meme TokenCreate decode: no matching event in sample window; decoder remains unit-tested only");
+          }
           NODE
