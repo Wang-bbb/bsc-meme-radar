@@ -71,7 +71,7 @@ test("first enabled run anchors at finalized height and uses bounded collection 
   assert.equal(adapterOptions.maxBlockSpan, 100);
   assert.equal(collectOptions.startBlock, "123456");
   assert.equal(collectOptions.maxBlocksPerRun, 100);
-  assert.equal(collectOptions.maxLogsPerRun, 50);
+  assert.equal(collectOptions.maxLogsPerRun, 25);
   assert.equal(collectOptions.blocksPerKvChunk, 100);
   assert.equal(await kv.get(START_BLOCK_KEY), "123456");
   assert.equal(JSON.parse(await kv.get(STATUS_KEY)).status, "ok");
