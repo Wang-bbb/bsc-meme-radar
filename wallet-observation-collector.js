@@ -93,7 +93,7 @@ export async function collectBscV2WalletObservations({
       const savedCursor = await kv.get(cursorKey, "json");
       const cursor = savedCursor && asSafeBlock(savedCursor.lastCompleteBlock);
       const fromBlock = cursor === null
-        ? Math.max(0, latest - blockLimit)
+        ? Math.max(0, latest - blockLimit + 1)
         : cursor + 1;
       if (fromBlock > latest) {
         result.processedPools++;
@@ -115,7 +115,11 @@ export async function collectBscV2WalletObservations({
         continue;
       }
 
-      const txHashes = [...new Set(logs.map(log => String(log && log.transactionHash || "").toLowerCase()))];
+      const uniqueLogs = [...new Map(logs.map(log => [
+        String(log && log.transactionHash || "").toLowerCase() + ":" + String(log && log.logIndex || "").toLowerCase(),
+        log
+      ])).values()];
+      const txHashes = [...new Set(uniqueLogs.map(log => String(log && log.transactionHash || "").toLowerCase()))];
       if (txHashes.some(hash => !/^0x[a-f0-9]{64}$/.test(hash))) {
         throw new Error("Swap 日志缺少有效 transactionHash；游标未推进");
       }
@@ -126,7 +130,7 @@ export async function collectBscV2WalletObservations({
       });
       const txByHash = new Map(txEntries);
       let savedForPool = 0;
-      for (const log of logs) {
+      for (const log of uniqueLogs) {
         const parsed = parseBscV2SwapObservation({
           log,
           transaction: txByHash.get(String(log.transactionHash).toLowerCase()),
@@ -150,7 +154,7 @@ export async function collectBscV2WalletObservations({
       }), { expirationTtl: ttl });
       result.processedPools++;
       result.savedObservations += savedForPool;
-      result.pools.push({ poolAddress, status: "processed", fromBlock, toBlock, logCount: logs.length, savedObservations: savedForPool });
+      result.pools.push({ poolAddress, status: "processed", fromBlock, toBlock, logCount: uniqueLogs.length, savedObservations: savedForPool });
     } catch (error) {
       result.status = "partial";
       const message = String(error && error.message || error).slice(0, 180);
