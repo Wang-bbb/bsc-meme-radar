@@ -27,7 +27,7 @@ The decoder does not fetch logs, infer transaction senders, determine finality, 
 
 ## Deliberate boundaries
 
-- Input must already be decoded against the official V2 ABI. This module does not guess topic hashes or decode raw `eth_getLogs` data.
+- Raw `eth_getLogs` data is decoded only for the five documented V2 event signatures; unknown topics and unexpected indexed arguments are rejected.
 - Event source must be the canonical TokenManager2 contract. V1 is not included.
 - Integer values stay decimal strings; no unsafe JavaScript number conversion.
 - `TokenPurchase.account` is explicitly a recipient and is **not necessarily** the transaction sender. The optional transaction sender is kept in a separate field.
@@ -35,7 +35,7 @@ The decoder does not fetch logs, infer transaction senders, determine finality, 
 - `TradeStop` marks the end of bonding-curve trading; it does not prove a successful DEX migration.
 - `LiquidityAdded.base` is the token; `quote == address(0)` means BNB. Its `offers` field is the token amount added to LP, not remaining curve offers.
 - Only events explicitly marked `finalized` contribute to summaries. Confirmed/unfinalized events are ignored so an unstable chain tip cannot silently become evidence.
-- Event identity is transaction hash + log index. Reorg-safe persistence still requires a future collector to store block hashes, rewind/replay an overlap window, and reconcile replaced blocks before advancing its cursor.
+- Event identity is transaction hash + log index. The separate collector shadow stores canonical block hashes, rewinds/replays on detected reorgs, and advances its cursor only after observation writes succeed.
 - A summary is on-chain observation only. It does not imply sellability, safe contract code, adequate DEX liquidity, profitable wallets, or future price appreciation.
 
 ## Bounded collector shadow
@@ -45,12 +45,13 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Requires an explicit finalized-height provider; it never reads the unstable latest tip itself.
 - Bounds each invocation by block count and log count.
 - Requires canonical block hashes for every block in the scan range and checks every returned log against its block hash.
-- Stores replaceable per-block KV records, including empty blocks, so replay can overwrite orphaned observations.
+- Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
 - Keeps a rolling per-block hash checkpoint window (default 128 blocks). A detected shallow reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
-- Writes block observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
-- Uses a 30-day TTL for per-block event records; cursor/checkpoint state has no TTL.
+- Writes chunk observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
+- Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
+- Defaults to at most 1,000 blocks per invocation. Even with chunked writes, keep scheduled execution at or below one run per five minutes until actual KV and RPC consumption are measured; pause on any quota error.
 
-This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. BNB Chain's BSC JSON-RPC documentation defines the `finalized` block tag for `eth_getBlockByNumber`; the existing NodeReal endpoint used by this project has not yet been live-tested for that tag. The host must implement `getBlockHashes` efficiently (prefer JSON-RPC batching) and must prove that `getFinalizedBlockNumber` returns that finalized height. If the configured free RPC does not support it, collection must remain disabled rather than silently falling back to `latest` or an arbitrary confirmation count.
+This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. NodeReal's BSC `eth_getBlockByNumber` API reference explicitly lists `finalized` as a supported block tag, so the documented capability is present; the user's actual API key/endpoint has not yet been live-tested. The host must still verify a successful response and implement `getBlockHashes` efficiently (prefer JSON-RPC batching). If the configured free RPC returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
 
 ## Next integration gates (not implemented here)
 
