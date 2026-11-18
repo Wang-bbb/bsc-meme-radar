@@ -39,6 +39,12 @@ Therefore, the current scanner cannot honestly populate the historical fields re
 - The existing Alchemy Solana RPC can be checked with standard read-only methods, but pool-account signatures alone do not equal a complete wallet history.
 - Solana collection requires protocol-specific instruction decoding (for example, Raydium/PumpSwap), correct account-to-wallet attribution, token balance deltas, pagination, and slot-gap handling. Keep it disabled until a parser is tested against known transactions.
 
+## Observed wallet summary
+
+- A pure summary helper groups saved observations by chain and transaction initiator, and reports only observed buy/sell counts, unique observed tokens/pools, and observed time bounds.
+- It explicitly leaves realized PnL, win rate, median return, rug exposure, and wallet balance unknown. It accepts only records explicitly marked `observed_pool_only`.
+- This summary is not enough to populate the wallet-quality score; a broader, validated trade-history source and valuation methodology would still be required.
+
 ## Data required before live integration
 
 A future adapter must provide, per wallet and chain:
