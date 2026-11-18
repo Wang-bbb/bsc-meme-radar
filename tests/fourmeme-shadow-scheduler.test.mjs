@@ -26,7 +26,7 @@ test("scheduled observer is disabled by default and does not create an RPC adapt
   });
   assert.equal(result.status, "disabled");
   assert.equal(adapterCreated, false);
-  assert.equal(JSON.parse(await kv.get(STATUS_KEY)).status, "disabled");
+  assert.equal(await kv.get(STATUS_KEY), null, "disabled runs must not consume KV writes");
 });
 
 test("enabled observer reports missing bindings without calling the provider", async () => {
