@@ -26,7 +26,7 @@ Official reference:
 ## Next integration gates (not implemented here)
 
 1. Verify raw RPC log decoding against independently observed official contract events.
-2. Verify a real public REST token-search response before writing a parser. Do not infer a schema from CLI flags or documentation examples.
+2. Verify a real public REST token-search response before writing a parser. Do not infer a schema from CLI flags or documentation examples. The current GitHub Actions smoke request received HTTP 403 with a location-restriction HTML page, so no REST response schema has been captured; do not attempt to bypass that restriction.
 3. Use the existing free BSC RPC only; bound block ranges and request counts. On quota/rate-limit errors, report a coverage gap and stop.
 4. Read finalized block height, persist cursor and block hashes, replay an overlap window, and deduplicate.
 5. Join TokenCreate → purchases/sales → LiquidityAdded by token contract address, never symbol.
