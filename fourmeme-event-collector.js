@@ -3,6 +3,7 @@ import { decodeFourMemeRawLog } from "./fourmeme-event-shadow.js";
 const STATE_KEY = "fourmeme:v2:collector:state";
 const BLOCK_KEY_PREFIX = "fourmeme:v2:collector:chunk:";
 const BLOCKS_PER_KV_CHUNK = 1000;
+const BLOCK_CHECKPOINT_INTERVAL = 100;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
 function quantity(value, field) {
@@ -92,7 +93,7 @@ export async function collectFourMemeFinalizedLogs({
     }));
     if (checkpoints.some(item => !HASH_RE.test(item.blockHash)) ||
         checkpoints.some((item, index) => index > 0 &&
-          item.blockNumber !== checkpoints[index - 1].blockNumber + 1n) ||
+          item.blockNumber <= checkpoints[index - 1].blockNumber) ||
         (checkpoints.length && checkpoints[checkpoints.length - 1].blockNumber !== cursor)) {
       throw new TypeError("Collector checkpoint history is invalid");
     }
@@ -105,10 +106,8 @@ export async function collectFourMemeFinalizedLogs({
   if (finalizedHeight < cursor) throw new Error("Finalized height regressed below the saved cursor");
 
   if (checkpoints.length) {
-    const canonical = await getBlockHashes(
-      checkpoints[0].blockNumber.toString(),
-      checkpoints[checkpoints.length - 1].blockNumber.toString()
-    );
+    const checkpointNumbers = checkpoints.map(item => item.blockNumber.toString());
+    const canonical = await getBlockHashes(checkpointNumbers);
     let firstMismatch = -1;
     for (let i = 0; i < checkpoints.length; i++) {
       const checkpoint = checkpoints[i];
@@ -139,17 +138,25 @@ export async function collectFourMemeFinalizedLogs({
     };
   }
 
-  const canonicalHashes = await getBlockHashes(fromBlock.toString(), toBlock.toString());
-  const blockHashes = new Map();
-  for (let block = fromBlock; block <= toBlock; block++) {
-    blockHashes.set(block.toString(), hashAt(canonicalHashes, block));
-  }
-
   const rawLogs = await getLogs(fromBlock.toString(), toBlock.toString());
   if (!Array.isArray(rawLogs)) throw new TypeError("getLogs must return an array");
   if (rawLogs.length > maxLogsPerRun) {
     throw new Error("Four.meme log batch exceeds maxLogsPerRun; cursor was not advanced");
   }
+
+  const checkpointNumbers = new Set([fromBlock.toString(), toBlock.toString()]);
+  for (let block = fromBlock; block <= toBlock; block++) {
+    if ((block - configuredStart) % BigInt(BLOCK_CHECKPOINT_INTERVAL) === 0n) {
+      checkpointNumbers.add(block.toString());
+    }
+  }
+  const logBlockNumbers = new Set(rawLogs.map(log => quantity(log?.blockNumber, "log blockNumber").toString()));
+  const requestedHashNumbers = [...new Set([...checkpointNumbers, ...logBlockNumbers])]
+    .sort((a, b) => BigInt(a) === BigInt(b) ? 0 : BigInt(a) < BigInt(b) ? -1 : 1);
+  const canonicalHashes = await getBlockHashes(requestedHashNumbers);
+  const blockHashes = new Map(
+    requestedHashNumbers.map(number => [number, hashAt(canonicalHashes, BigInt(number))])
+  );
 
   const grouped = new Map();
   const seen = new Set();
@@ -210,7 +217,7 @@ export async function collectFourMemeFinalizedLogs({
     }
     chunks.get(chunkKey).push({
       blockNumber: block.toString(),
-      blockHash: blockHashes.get(block.toString()),
+      blockHash: blockHashes.get(block.toString()) || null,
       events: grouped.get(block.toString()) || []
     });
   }
@@ -229,14 +236,19 @@ export async function collectFourMemeFinalizedLogs({
 
   const nextCheckpoints = [
     ...checkpoints,
-    ...[...blockHashes.entries()].map(([blockNumber, blockHash]) => ({
-      blockNumber: BigInt(blockNumber),
-      blockHash
-    }))
-  ].slice(-checkpointWindow).map(item => ({
-    blockNumber: item.blockNumber.toString(),
-    blockHash: item.blockHash
-  }));
+    ...[...checkpointNumbers, ...logBlockNumbers]
+      .map(blockNumber => ({
+        blockNumber: BigInt(blockNumber),
+        blockHash: blockHashes.get(blockNumber)
+      }))
+      .filter(item => item.blockHash)
+  ].sort((a, b) => a.blockNumber === b.blockNumber ? 0 : a.blockNumber < b.blockNumber ? -1 : 1)
+    .filter((item, index, all) => index === 0 || item.blockNumber !== all[index - 1].blockNumber)
+    .slice(-checkpointWindow)
+    .map(item => ({
+      blockNumber: item.blockNumber.toString(),
+      blockHash: item.blockHash
+    }));
 
   const nextState = {
     version: 1,
