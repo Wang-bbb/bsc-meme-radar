@@ -19,6 +19,9 @@ function requireAddress(value, field) {
 }
 
 function requireUint(value, field) {
+  if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new TypeError(`Invalid ${field}: unsafe numeric input`);
+  }
   const normalized = typeof value === "bigint" ? value.toString() : String(value);
   if (!UINT_RE.test(normalized)) throw new TypeError(`Invalid ${field}`);
   return normalized;
