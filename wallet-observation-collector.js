@@ -93,12 +93,21 @@ export async function collectBscV2WalletObservations({
     { length: Math.min(poolLimit, pools.length) },
     (_, offset) => pools[(rotationIndex + offset) % pools.length]
   );
-  const result = { status: "ok", processedPools: 0, savedObservations: 0, skippedPools: 0, errors: [], pools: [] };
+  const result = { status: "ok", processedPools: 0, savedObservations: 0, savedUnknownObservations: 0, skippedPools: 0, errors: [], pools: [] };
 
   for (const pool of selectedPools) {
     const poolAddress = normalizeAddress(pool && pool.address);
-    if (!/^0x[a-f0-9]{40}$/.test(poolAddress)) {
+    const token0 = normalizeAddress(pool && pool.token0);
+    const token1 = normalizeAddress(pool && pool.token1);
+    const targetToken = normalizeAddress(pool && pool.targetToken);
+    const quoteToken = normalizeAddress(pool && pool.quoteToken);
+    const validTokenMetadata = [token0, token1, targetToken, quoteToken].every(value => /^0x[a-f0-9]{40}$/.test(value)) &&
+      token0 !== token1 && targetToken !== quoteToken &&
+      ((targetToken === token0 && quoteToken === token1) || (targetToken === token1 && quoteToken === token0));
+    if (!/^0x[a-f0-9]{40}$/.test(poolAddress) || !validTokenMetadata) {
       result.skippedPools++;
+      result.status = "partial";
+      result.errors.push("池 " + (poolAddress || "unknown") + " 缺少有效 token0/token1/targetToken/quoteToken 元数据");
       result.pools.push({ poolAddress: poolAddress || null, status: "invalid_pool_metadata" });
       continue;
     }
@@ -135,7 +144,9 @@ export async function collectBscV2WalletObservations({
       ])).values()];
       if (uniqueLogs.some(log =>
         !/^0x[a-f0-9]{64}$/i.test(String(log && log.transactionHash || "")) ||
-        !/^0x[a-f0-9]+$/i.test(String(log && log.logIndex || ""))
+        !/^0x[a-f0-9]+$/i.test(String(log && log.logIndex || "")) ||
+        !/^0x[a-f0-9]+$/i.test(String(log && log.blockNumber || "")) ||
+        log.removed === true
       )) {
         throw new Error("Swap 日志缺少有效 transactionHash/logIndex；游标未推进");
       }
@@ -150,21 +161,35 @@ export async function collectBscV2WalletObservations({
       });
       const txByHash = new Map(txEntries);
       let savedForPool = 0;
+      let savedUnknownForPool = 0;
       for (const log of uniqueLogs) {
-        const parsed = parseBscV2SwapObservation({
-          log,
-          transaction: txByHash.get(String(log.transactionHash).toLowerCase()),
-          pool
-        });
-        if (parsed.status !== "observed") continue;
-        const key = observationKey(parsed);
-        await kv.put(key, JSON.stringify({
-          ...parsed,
+        const transaction = txByHash.get(String(log.transactionHash).toLowerCase());
+        const parsed = parseBscV2SwapObservation({ log, transaction, pool });
+        const identity = {
+          chain: "bsc",
+          poolAddress,
+          transactionHash: String(log.transactionHash).toLowerCase(),
+          logIndex: String(log.logIndex)
+        };
+        const record = parsed.status === "observed"
+          ? parsed
+          : {
+              ...identity,
+              status: "unknown",
+              reason: parsed.reason || "Swap 事件未能可靠分类",
+              initiatorAddress: normalizeAddress(transaction && transaction.from) || null,
+              attribution: "transaction_initiator_only",
+              side: "unknown",
+              blockNumber: String(log.blockNumber)
+            };
+        await kv.put(observationKey({ ...identity, chain: "bsc" }), JSON.stringify({
+          ...record,
           observedAt: Math.floor(Date.now() / 1000),
           source: "bsc_rpc_v2_swap",
           coverage: "observed_pool_only"
         }), { expirationTtl: ttl });
-        savedForPool++;
+        if (parsed.status === "observed") savedForPool++;
+        else savedUnknownForPool++;
       }
       // Cursor advances only after every transaction lookup and every KV write succeeds.
       await kv.put(cursorKey, JSON.stringify({
@@ -174,7 +199,8 @@ export async function collectBscV2WalletObservations({
       }), { expirationTtl: ttl });
       result.processedPools++;
       result.savedObservations += savedForPool;
-      result.pools.push({ poolAddress, status: "processed", fromBlock, toBlock, logCount: uniqueLogs.length, savedObservations: savedForPool });
+      result.savedUnknownObservations += savedUnknownForPool;
+      result.pools.push({ poolAddress, status: "processed", fromBlock, toBlock, logCount: uniqueLogs.length, savedObservations: savedForPool, savedUnknownObservations: savedUnknownForPool });
     } catch (error) {
       result.status = "partial";
       const message = String(error && error.message || error).slice(0, 180);
