@@ -44,14 +44,14 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 
 - Requires an explicit finalized-height provider; it never reads the unstable latest tip itself.
 - Bounds each invocation by block count and log count.
-- Requires canonical block hashes for every block in the scan range and checks every returned log against its block hash.
+- Requests canonical hashes only for sparse 100-block checkpoints, the scan-range boundaries, and blocks that actually contain matching logs; every returned log is checked against its own canonical block hash.
 - Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
-- Keeps a rolling per-block hash checkpoint window (default 128 blocks). A detected shallow reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
+- Keeps a rolling checkpoint window (default 128 checkpoints), adding every 100th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
 - Writes chunk observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
 - Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
 - Defaults to at most 1,000 blocks per invocation. Even with chunked writes, keep scheduled execution at or below one run per five minutes until actual KV and RPC consumption are measured; pause on any quota error.
 
-This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. NodeReal's BSC `eth_getBlockByNumber` API reference explicitly lists `finalized` as a supported block tag, so the documented capability is present; the user's actual API key/endpoint has not yet been live-tested. The host must still verify a successful response and implement `getBlockHashes` efficiently (prefer JSON-RPC batching). If the configured free RPC returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
+This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. NodeReal's BSC `eth_getBlockByNumber` API reference explicitly lists `finalized` as a supported block tag, so the documented capability is present; the user's actual API key/endpoint has not yet been live-tested. The host must still verify a successful response and implement `getBlockHashes` as one efficient JSON-RPC batch over the requested sparse block numbers. If the configured free RPC returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
 
 ## Next integration gates (not implemented here)
 
