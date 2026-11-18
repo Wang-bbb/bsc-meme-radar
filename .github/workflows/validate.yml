@@ -36,3 +36,143 @@ jobs:
           Path("/tmp/dashboard.js").write_text(html[start + 8:end], encoding="utf-8")
           PY
           node --check /tmp/dashboard.js
+
+  fourmeme-shadow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Four.meme shadow module syntax
+        run: |
+          node --check fourmeme-event-shadow.js
+          node --check fourmeme-event-collector.js
+      - name: Run Four.meme shadow tests
+        run: node --experimental-default-type=module --test tests/fourmeme-event-shadow.test.mjs tests/fourmeme-event-collector.test.mjs
+
+  fourmeme-public-api-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fetch one public Four.meme token-list sample (read-only)
+        continue-on-error: true
+        run: |
+          node --input-type=module <<'NODE'
+          const url = "https://four.meme/meme-api/v1/public/token/search";
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "accept": "application/json",
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              type: "NEW",
+              listType: "NOR",
+              pageIndex: 1,
+              pageSize: 1,
+              status: "PUBLISH",
+              sort: "DESC"
+            })
+          });
+          console.log("HTTP status:", response.status);
+          const raw = await response.text();
+          let payload;
+          try {
+            payload = JSON.parse(raw);
+          } catch {
+            console.log("Non-JSON response preview:", raw.slice(0, 2000));
+            if (response.status === 403) {
+              console.log("Public API sample unavailable: HTTP 403 returned a location-restriction page; no response schema inferred.");
+              process.exit(0);
+            }
+            process.exit(1);
+          }
+          console.log("Top-level keys:", Object.keys(payload || {}));
+          const data = payload && payload.data;
+          console.log("data type:", Array.isArray(data) ? "array" : typeof data);
+          if (Array.isArray(data)) {
+            console.log("data length:", data.length);
+            if (data[0]) {
+              console.log("first row keys:", Object.keys(data[0]));
+              console.log("first row sample:", JSON.stringify(data[0]).slice(0, 2400));
+            }
+          } else if (data && typeof data === "object") {
+            console.log("data keys:", Object.keys(data));
+            for (const [key, value] of Object.entries(data)) {
+              if (Array.isArray(value)) {
+                console.log("nested array:", key, "length:", value.length);
+                if (value[0]) {
+                  console.log("nested first-row keys:", Object.keys(value[0]));
+                  console.log("nested first-row sample:", JSON.stringify(value[0]).slice(0, 2400));
+                }
+              }
+            }
+          } else {
+            console.log("Response preview:", JSON.stringify(payload).slice(0, 2400));
+          }
+          if (!response.ok) process.exit(1);
+          NODE
+
+  nodereal-finality-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify configured free BSC RPC finality and batch reads
+        env:
+          NODEREAL_RPC_URL: ${{ secrets.NODEREAL_RPC_URL }}
+        run: |
+          if [ -z "$NODEREAL_RPC_URL" ]; then
+            echo "Skipped: add the existing free BSC RPC endpoint as the repository Actions secret NODEREAL_RPC_URL to enable this read-only smoke test."
+            exit 0
+          fi
+          node --input-type=module <<'NODE'
+          const endpoint = process.env.NODEREAL_RPC_URL;
+          async function rpc(method, params, id = 1) {
+            const response = await fetch(endpoint, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+              signal: AbortSignal.timeout(15000)
+            });
+            if (!response.ok) throw new Error("RPC HTTP request failed");
+            const payload = await response.json();
+            if (payload.error || payload.result == null) throw new Error("RPC method failed");
+            return payload.result;
+          }
+          const [chainId, latest, finalized] = await Promise.all([
+            rpc("eth_chainId", []),
+            rpc("eth_getBlockByNumber", ["latest", false]),
+            rpc("eth_getBlockByNumber", ["finalized", false])
+          ]);
+          if (chainId !== "0x38") throw new Error("Endpoint is not BNB Smart Chain mainnet");
+          if (!latest?.number || !latest?.hash || !finalized?.number || !finalized?.hash) {
+            throw new Error("Latest/finalized block response is incomplete");
+          }
+          if (BigInt(finalized.number) > BigInt(latest.number)) {
+            throw new Error("Finalized height is ahead of latest height");
+          }
+          const batchNumbers = [finalized.number, (BigInt(finalized.number) - 1n).toString(16).replace(/^/, "0x")];
+          const batchResponse = await fetch(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(batchNumbers.map((number, index) => ({
+              jsonrpc: "2.0",
+              id: index + 10,
+              method: "eth_getBlockByNumber",
+              params: [number, false]
+            }))),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (!batchResponse.ok) throw new Error("RPC batch HTTP request failed");
+          const batchPayload = await batchResponse.json();
+          if (!Array.isArray(batchPayload) || batchPayload.length !== 2 ||
+              batchPayload.some(item => item.error || !item.result?.hash || !item.result?.number)) {
+            throw new Error("RPC JSON-RPC batch response is invalid");
+          }
+          console.log("BSC chainId:", chainId);
+          console.log("latest block:", BigInt(latest.number).toString());
+          console.log("finalized block:", BigInt(finalized.number).toString());
+          console.log("JSON-RPC batch block reads: passed (2/2)");
+          NODE
