@@ -24,20 +24,18 @@ async function writeStatus(kv, value) {
 
 export async function readFourMemeShadowStatus(kv, enabled) {
   const active = enabled === true;
+  // Disabled status checks must not touch KV; the feature's off state is
+  // intentionally a zero-read, zero-write, zero-RPC path.
+  if (!active) {
+    return { enabled: false, status: "disabled", lastRunAt: null };
+  }
   let lastStatus = null;
   try {
     if (kv && typeof kv.get === "function") {
       lastStatus = parseStored(await kv.get(STATUS_KEY));
     }
   } catch {
-    return { enabled: active, status: "status_unavailable" };
-  }
-  if (!active) {
-    return {
-      enabled: false,
-      status: "disabled",
-      lastRunAt: lastStatus?.updatedAt || null
-    };
+    return { enabled: true, status: "status_unavailable" };
   }
   if (!kv || typeof kv.get !== "function") {
     return { enabled: true, status: "not_configured", reason: "RADAR_KV binding missing" };
