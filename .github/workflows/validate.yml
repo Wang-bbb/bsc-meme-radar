@@ -234,4 +234,32 @@ jobs:
           } else {
             console.log("Live Four.meme TokenCreate decode: no matching event in sample window; decoder remains unit-tested only");
           }
+
+          // Probe the other four event signatures in a short, bounded finalized window.
+          // Empty results mean "not observed in this sample", not a decoder failure.
+          const recentFrom = sampleTo > 199n ? sampleTo - 199n : 0n;
+          const additionalTopics = {
+            TokenPurchase: "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942",
+            TokenSale: "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19",
+            TradeStop: "0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132",
+            LiquidityAdded: "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0"
+          };
+          for (const [eventName, topic] of Object.entries(additionalTopics)) {
+            const logs = await rpc("eth_getLogs", [{
+              address: FOURMEME_TOKEN_MANAGER2_BSC,
+              fromBlock: "0x" + recentFrom.toString(16),
+              toBlock: "0x" + sampleTo.toString(16),
+              topics: [topic]
+            }], 50 + Object.keys(additionalTopics).indexOf(eventName));
+            if (!Array.isArray(logs)) throw new Error(eventName + " sample is not an array");
+            if (logs.length > 500) throw new Error(eventName + " sample exceeds the bounded 500-log limit");
+            const decoded = logs.map(log =>
+              decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
+            );
+            if (decoded.some(event => event.eventName !== eventName || !event.tokenAddress)) {
+              throw new Error("A real " + eventName + " log failed event normalization");
+            }
+            console.log("Live " + eventName + " raw logs:", logs.length);
+            console.log("Live " + eventName + " ABI decodes:", decoded.length);
+          }
           NODE
