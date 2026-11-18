@@ -100,6 +100,25 @@ test("batches writes and preserves committed prefix when a chunk continues", asy
     "continuing within the same chunk uses one chunk write and one cursor write");
 });
 
+test("uses sparse block-hash reads instead of fetching every block header", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 1000);
+  let requested = [];
+  const result = await collectFourMemeFinalizedLogs({
+    ...providers(kv, canonical, [makeLog(333, hash(333))], 1000),
+    maxBlocksPerRun: 1000,
+    getBlockHashes: async blockNumbers => {
+      requested = blockNumbers;
+      const response = {};
+      for (const value of blockNumbers) response[String(value)] = canonical.get(String(value));
+      return response;
+    }
+  });
+  assert.equal(result.processedBlocks, 1000);
+  assert.ok(requested.length < 20, `expected sparse hash requests, got ${requested.length}`);
+  assert.ok(requested.includes("333"), "event-bearing block hash must be independently checked");
+});
+
 test("limits each invocation to maxBlocksPerRun", async () => {
   const kv = new MemoryKV();
   const canonical = canonicalBlocks(1, 10);
