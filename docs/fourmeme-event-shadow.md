@@ -45,9 +45,9 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Requires an explicit finalized-height provider; it never reads the unstable latest tip itself.
 - Bounds each invocation by block count and log count.
 - Requests canonical hashes only for sparse 250-block checkpoints, the scan-range boundaries, and blocks that actually contain matching logs; every returned log is checked against its own canonical block hash.
-- Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
+- Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. Each serialized chunk is measured in UTF-8 bytes and capped at 1 MiB (configurable lower, never higher); an oversized chunk fails closed before the cursor write. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
 - Keeps a rolling checkpoint window (default 8 checkpoints), adding every 250th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
-- Writes chunk observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
+- Writes chunk observations before cursor state. If a KV write fails or a serialized chunk exceeds its byte cap, the cursor is not advanced and the same range can be replayed. The byte cap prevents a growing observation chunk from silently exceeding the storage value limit; it does not automatically split an oversized chunk.
 - Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
 - Defaults to at most 1,000 blocks per invocation and caps each new-range canonical-hash batch at 32 block lookups (the retained checkpoint verification is a separate bounded batch). If an event-heavy range exceeds the cap, it stops before making that hash request and does not advance the cursor.
 - Even with chunked writes, keep scheduled execution at or below one run per five minutes until actual KV and RPC consumption are measured; pause on any quota error.
@@ -74,6 +74,6 @@ A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JS
 3. Use the existing free BSC RPC only; bound block ranges and request counts. On quota/rate-limit errors, report a coverage gap and stop.
 4. Read finalized block height, persist cursor and block hashes, replay an overlap window, and deduplicate.
 5. Join TokenCreate → purchases/sales → LiquidityAdded by token contract address, never symbol.
-6. Keep Four.meme candidates in a separate observation lane until existing $5,000 liquidity and all current safety gates independently pass.
+6. Keep Four.meme candidates in a separate observation lane until existing $5,000 liquidity and all current safety gates independently pass.\n7. Before unattended collection, measure actual KV value sizes and daily writes on a bounded test deployment; if a chunk reaches the byte cap, reduce the scan range or introduce a versioned chunk-splitting reader/writer rather than raising the cap blindly.
 
 No paid API, private key, wallet connection, signing, transaction submission, trading, or automatic deployment is used.
