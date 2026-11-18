@@ -233,4 +233,35 @@ jobs:
           } else {
             console.log("Live Four.meme TokenCreate decode: no matching event in sample window; decoder remains unit-tested only");
           }
+
+          // Validate the remaining event decoders against actual finalized logs.
+          // Query each topic independently so a busy event type cannot hide another.
+          const liveEventTopics = [
+            ["TokenPurchase", "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942"],
+            ["TokenSale", "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19"],
+            ["TradeStop", "0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132"],
+            ["LiquidityAdded", "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0"]
+          ];
+          for (const [eventName, topic] of liveEventTopics) {
+            const rawLogs = await rpc("eth_getLogs", [{
+              address: FOURMEME_TOKEN_MANAGER2_BSC,
+              fromBlock: "0x" + sampleFrom.toString(16),
+              toBlock: "0x" + sampleTo.toString(16),
+              topics: [topic]
+            }], 50 + liveEventTopics.findIndex(item => item[0] === eventName));
+            if (!Array.isArray(rawLogs)) throw new Error(eventName + " log sample is not an array");
+            if (rawLogs.length > 500) {
+              throw new Error(eventName + " sample exceeds the bounded 500-log limit");
+            }
+            const decoded = rawLogs.map(log =>
+              decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
+            );
+            if (decoded.some(event => event.eventName !== eventName)) {
+              throw new Error(eventName + " topic returned a mismatched decoded event");
+            }
+            console.log("Finalized " + eventName + " raw logs:", rawLogs.length);
+            console.log("Finalized " + eventName + " ABI decodes:", decoded.length);
+            console.log("Live Four.meme " + eventName + " decode:",
+              decoded.length > 0 ? "passed" : "no matching event in sample window; decoder remains unit-tested only");
+          }
           NODE
