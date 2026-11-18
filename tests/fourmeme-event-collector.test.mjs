@@ -37,9 +37,12 @@ function providers(kv, canonical, logs, finalized = 4) {
     kv,
     startBlock: 1,
     getFinalizedBlockNumber: async () => finalized,
-    getBlockHashes: async (from, to) => {
+    getBlockHashes: async blockNumbers => {
       const result = {};
-      for (let n = BigInt(from); n <= BigInt(to); n++) result[n.toString()] = canonical.get(n.toString());
+      for (const value of blockNumbers) {
+        const n = BigInt(value);
+        result[n.toString()] = canonical.get(n.toString());
+      }
       return result;
     },
     getLogs: async () => logs
