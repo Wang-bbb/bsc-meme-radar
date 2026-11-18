@@ -121,3 +121,16 @@ test("tracks sell pressure and liquidity migration without assigning a safety sc
   assert.equal(result.evidenceStatus, "onchain_observed_not_safety_verified");
   assert.equal("safetyScore" in result, false);
 });
+
+
+test("records TradeStop as a lifecycle event, not a safety verdict", () => {
+  const stopped = event("TradeStop", { token }, {
+    transactionHash: "0x" + "d".repeat(64),
+    logIndex: 2
+  });
+  const result = summarizeFourMemeTokenEvents([stopped])[0];
+  assert.equal(stopped.tokenAddress, token);
+  assert.equal(result.tradeStopped, true);
+  assert.equal(result.evidenceStatus, "onchain_observed_not_safety_verified");
+  assert.equal("safetyScore" in result, false);
+});
