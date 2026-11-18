@@ -69,7 +69,13 @@ test("fails closed on HTTP errors, RPC errors, invalid blocks and oversized batc
   });
   await assert.rejects(httpFailure.getFinalizedBlockNumber(), /HTTP status 429/);
 
-  const rpcFailure = createNodeRealMemeRpcAdapterForTest();
+  const rpcFailure = createNodeRealFourMemeRpcAdapter({
+    endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
+    fetchImpl: async (_url, init) => {
+      const request = JSON.parse(init.body);
+      return response({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "quota" } });
+    }
+  });
   await assert.rejects(rpcFailure.getFinalizedBlockNumber(), /method failed/);
 
   const invalidBlock = createNodeRealMemeRpcAdapterForTest({ number: "0x7b", hash: "0x1234" });
