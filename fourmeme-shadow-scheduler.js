@@ -109,7 +109,7 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
           getLogs: adapter.getLogs,
           startBlock: String(startBlock),
           maxBlocksPerRun,
-          maxLogsPerRun: 50,
+          maxLogsPerRun: 25,
           checkpointWindow: 8,
           maxHashLookupsPerRun: 32,
           maxChunkBytes: 768 * 1024,
