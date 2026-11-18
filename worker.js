@@ -467,6 +467,10 @@ async function writeProviderCooldown(provider, response) {
   } catch (_) {}
 }
 
+// Coalesce the first GeckoTerminal request in a concurrent burst. If it is
+// rate-limited, all waiting chains reuse that 429 instead of hitting the provider.
+let geckoTerminalInitialProbePromise = null;
+
 async function fetchGeckoTerminal(endpoint) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(endpoint, { method: "GET" });
