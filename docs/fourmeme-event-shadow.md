@@ -50,7 +50,7 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Writes block observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
 - Uses a 30-day TTL for per-block event records; cursor/checkpoint state has no TTL.
 
-This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. The host must implement `getBlockHashes` efficiently (prefer JSON-RPC batching) and must prove that `getFinalizedBlockNumber` is genuinely finalized for BSC. If the RPC cannot provide a trustworthy finalized height, collection must remain disabled.
+This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. BNB Chain's BSC JSON-RPC documentation defines the `finalized` block tag for `eth_getBlockByNumber`; the existing NodeReal endpoint used by this project has not yet been live-tested for that tag. The host must implement `getBlockHashes` efficiently (prefer JSON-RPC batching) and must prove that `getFinalizedBlockNumber` returns that finalized height. If the configured free RPC does not support it, collection must remain disabled rather than silently falling back to `latest` or an arbitrary confirmation count.
 
 ## Next integration gates (not implemented here)
 
