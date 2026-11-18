@@ -119,6 +119,12 @@ export async function collectBscV2WalletObservations({
         String(log && log.transactionHash || "").toLowerCase() + ":" + String(log && log.logIndex || "").toLowerCase(),
         log
       ])).values()];
+      if (uniqueLogs.some(log =>
+        !/^0x[a-f0-9]{64}$/i.test(String(log && log.transactionHash || "")) ||
+        !/^0x[a-f0-9]+$/i.test(String(log && log.logIndex || ""))
+      )) {
+        throw new Error("Swap 日志缺少有效 transactionHash/logIndex；游标未推进");
+      }
       const txHashes = [...new Set(uniqueLogs.map(log => String(log && log.transactionHash || "").toLowerCase()))];
       if (txHashes.some(hash => !/^0x[a-f0-9]{64}$/.test(hash))) {
         throw new Error("Swap 日志缺少有效 transactionHash；游标未推进");
