@@ -46,10 +46,10 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Bounds each invocation by block count and log count.
 - Requests canonical hashes only for sparse 250-block checkpoints, the scan-range boundaries, and blocks that actually contain matching logs; every returned log is checked against its own canonical block hash.
 - Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
-- Keeps a rolling checkpoint window (default 16 checkpoints), adding every 250th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
+- Keeps a rolling checkpoint window (default 8 checkpoints), adding every 250th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
 - Writes chunk observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
 - Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
-- Defaults to at most 1,000 blocks per invocation and caps each new-range canonical-hash batch at 64 block lookups (the retained checkpoint verification is a separate bounded batch). If an event-heavy range exceeds the cap, it stops before making that hash request and does not advance the cursor.
+- Defaults to at most 1,000 blocks per invocation and caps each new-range canonical-hash batch at 32 block lookups (the retained checkpoint verification is a separate bounded batch). If an event-heavy range exceeds the cap, it stops before making that hash request and does not advance the cursor.
 - Even with chunked writes, keep scheduled execution at or below one run per five minutes until actual KV and RPC consumption are measured; pause on any quota error.
 
 Chunk records may contain a stale suffix after an interrupted reorg replay; any future reader must treat the cursor/checkpoint state as the committed boundary and must never consume block entries above `cursorBlock`.
