@@ -2,9 +2,9 @@ name: Validate Meme Radar
 
 on:
   push:
-    branches: [feature/multichain-meme-radar, feature/fourmeme-nodereal-adapter]
+    branches: [feature/multichain-meme-radar, feature/fourmeme-nodereal-adapter, fix/fourmeme-kv-chunk-byte-cap]
   pull_request:
-    branches: [main]
+    branches: [main, feature/fourmeme-nodereal-adapter]
   workflow_dispatch:
 
 permissions:
