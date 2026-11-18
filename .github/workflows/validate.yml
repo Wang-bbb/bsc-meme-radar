@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  syntax:
+  wallet-module:
+    name: Wallet intelligence module
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,10 +23,34 @@ jobs:
           node-version: 22
       - name: Check Worker JavaScript syntax
         run: node --check worker.js
-      - name: Run wallet intelligence module tests
+      - name: Check wallet module syntax
+        run: node --experimental-default-type=module --check wallet-intelligence.js
+      - name: Run wallet module tests
         run: node --experimental-default-type=module --test tests/wallet-intelligence.test.mjs
+
+  legacy-worker-tests:
+    name: Existing Worker route tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Run existing Worker route tests
         run: node --experimental-default-type=module --test tests/worker.test.mjs
+
+  dashboard:
+    name: Dashboard syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Extract and check dashboard JavaScript
         run: |
           python3 - <<'PY'
