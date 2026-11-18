@@ -36,3 +36,17 @@ jobs:
           Path("/tmp/dashboard.js").write_text(html[start + 8:end], encoding="utf-8")
           PY
           node --check /tmp/dashboard.js
+
+  fourmeme-shadow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check Four.meme shadow module syntax
+        run: node --check fourmeme-event-shadow.js
+      - name: Run Four.meme shadow tests
+        run: node --experimental-default-type=module --test tests/fourmeme-event-shadow.test.mjs
