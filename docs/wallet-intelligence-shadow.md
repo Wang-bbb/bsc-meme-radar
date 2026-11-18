@@ -6,6 +6,8 @@ This is an isolated, read-only analysis library. It is not connected to the Work
 
 ## What the current implementation can do
 
+- Parse a single BSC V2-compatible pool `Swap` log into a raw buy/sell observation when pool token metadata and the transaction response are supplied. The result records `transaction.from` as an initiator only, does not calculate USD value, and does not fetch or persist anything. V3 and Solana decoders are not implemented.
+
 - Evaluate a wallet when a caller supplies complete historical metrics: closed-token sample count, win rate, realized PnL, median return, rug/zero-value token exposure, and data coverage.
 - Summarize an early-buyer cohort when a caller supplies observed holding states and optional funding/synchronized-buy group identifiers.
 - Return `unknown` when required evidence is missing or below the minimum coverage threshold.
