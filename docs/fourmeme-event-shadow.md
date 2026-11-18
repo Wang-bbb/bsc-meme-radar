@@ -38,6 +38,20 @@ The decoder does not fetch logs, infer transaction senders, determine finality, 
 - Event identity is transaction hash + log index. Reorg-safe persistence still requires a future collector to store block hashes, rewind/replay an overlap window, and reconcile replaced blocks before advancing its cursor.
 - A summary is on-chain observation only. It does not imply sellability, safe contract code, adequate DEX liquidity, profitable wallets, or future price appreciation.
 
+## Bounded collector shadow
+
+A separate `fourmeme-event-collector.js` module now provides a dependency-injected, read-only collector core:
+
+- Requires an explicit finalized-height provider; it never reads the unstable latest tip itself.
+- Bounds each invocation by block count and log count.
+- Requires canonical block hashes for every block in the scan range and checks every returned log against its block hash.
+- Stores replaceable per-block KV records, including empty blocks, so replay can overwrite orphaned observations.
+- Keeps a rolling per-block hash checkpoint window (default 128 blocks). A detected shallow reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
+- Writes block observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
+- Uses a 30-day TTL for per-block event records; cursor/checkpoint state has no TTL.
+
+This is still a shadow library, not an active Worker collector. No RPC adapter, scheduler, Worker route, or dashboard integration has been added. The host must implement `getBlockHashes` efficiently (prefer JSON-RPC batching) and must prove that `getFinalizedBlockNumber` is genuinely finalized for BSC. If the RPC cannot provide a trustworthy finalized height, collection must remain disabled.
+
 ## Next integration gates (not implemented here)
 
 1. Verify raw RPC log decoding against independently observed official contract events.
