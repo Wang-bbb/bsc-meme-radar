@@ -6,7 +6,7 @@ This is a read-only, isolated foundation for observing Four.meme BSC V2 launches
 
 Official reference:
 - TokenManager2 BSC: `0x5c952063c7fc8610FFDB798152D69F0B9550762b`
-- V2 events: `TokenCreate`, `TokenPurchase`, `TokenSale`, `LiquidityAdded`
+- V2 events: `TokenCreate`, `TokenPurchase`, `TokenSale`, `TradeStop`, `LiquidityAdded`
 - Official ABI: https://github.com/four-meme-community/fourmeme-docs/blob/main/contracts/interfaces/ITokenManager2.sol
 - Event listening guide: https://github.com/four-meme-community/four-meme-ai/blob/main/skills/four-meme-integration/references/event-listening.md
 
@@ -17,7 +17,8 @@ Official reference:
 - Integer values stay decimal strings; no unsafe JavaScript number conversion.
 - `TokenPurchase.account` is explicitly a recipient and is **not necessarily** the transaction sender. The optional transaction sender is kept in a separate field.
 - `TokenSale.account` is the seller.
-- `LiquidityAdded.base` is the token; `quote == address(0)` means BNB.
+- `TradeStop` marks the end of bonding-curve trading; it does not prove a successful DEX migration.
+- `LiquidityAdded.base` is the token; `quote == address(0)` means BNB. Its `offers` field is the token amount added to LP, not remaining curve offers.
 - Only events explicitly marked `finalized` contribute to summaries. Confirmed/unfinalized events are ignored so an unstable chain tip cannot silently become evidence.
 - Event identity is transaction hash + log index. Reorg-safe persistence still requires a future collector to store block hashes, rewind/replay an overlap window, and reconcile replaced blocks before advancing its cursor.
 - A summary is on-chain observation only. It does not imply sellability, safe contract code, adequate DEX liquidity, profitable wallets, or future price appreciation.
