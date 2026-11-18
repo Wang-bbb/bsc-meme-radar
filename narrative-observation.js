@@ -29,6 +29,7 @@ export function evaluateNarrativeEvidence({
   nowMs = Date.now(),
   windowMs = DEFAULT_WINDOW_MS,
   minSources = 2,
+  expectedSources = [],
   minMomentum = 1.3
 } = {}) {
   const now = finiteNumber(nowMs);
@@ -55,9 +56,14 @@ export function evaluateNarrativeEvidence({
     bucket.set(source, Math.max(bucket.get(source) ?? 0, score));
   }
 
+  const expected = [...new Set(expectedSources.map(String).filter(Boolean))];
+  const unavailableSources = expected.filter(source => statusBySource.get(source) !== "ok");
   const failedSources = [...statusBySource.entries()]
-    .filter(([, status]) => status === "failed")
+    .filter(([, status]) => status !== "ok")
     .map(([source]) => source);
+  for (const source of unavailableSources) {
+    if (!failedSources.includes(source)) failedSources.push(source);
+  }
   const output = [];
 
   for (const [entity, group] of groups) {
@@ -66,7 +72,7 @@ export function evaluateNarrativeEvidence({
     const currentScore = [...group.current.values()].reduce((sum, value) => sum + value, 0);
     const previousScore = [...group.previous.values()].reduce((sum, value) => sum + value, 0);
     const momentum = previousScore > 0 ? Math.round((currentScore / previousScore) * 100) / 100 : null;
-    const coverageComplete = failedSources.length === 0;
+    const coverageComplete = expected.length > 0 && unavailableSources.length === 0;
     const enoughSpread = currentSources.length >= minSources;
     const state = !enoughSpread || !coverageComplete
       ? "insufficient_coverage"
