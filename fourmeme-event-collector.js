@@ -3,7 +3,7 @@ import { decodeFourMemeRawLog } from "./fourmeme-event-shadow.js";
 const STATE_KEY = "fourmeme:v2:collector:state";
 const BLOCK_KEY_PREFIX = "fourmeme:v2:collector:chunk:";
 const BLOCKS_PER_KV_CHUNK = 1000;
-const BLOCK_CHECKPOINT_INTERVAL = 100;
+const BLOCK_CHECKPOINT_INTERVAL = 250;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
 function quantity(value, field) {
@@ -59,7 +59,8 @@ export async function collectFourMemeFinalizedLogs({
   startBlock,
   maxBlocksPerRun = 1000,
   maxLogsPerRun = 500,
-  checkpointWindow = 128,
+  checkpointWindow = 16,
+  maxHashLookupsPerRun = 64,
   eventTtlSeconds = 30 * 24 * 60 * 60,
   now = () => new Date().toISOString()
 }) {
@@ -72,7 +73,8 @@ export async function collectFourMemeFinalizedLogs({
   }
   if (!Number.isSafeInteger(maxBlocksPerRun) || maxBlocksPerRun < 1 || maxBlocksPerRun > 1000 ||
       !Number.isSafeInteger(maxLogsPerRun) || maxLogsPerRun < 1 ||
-      !Number.isSafeInteger(checkpointWindow) || checkpointWindow < 2) {
+      !Number.isSafeInteger(checkpointWindow) || checkpointWindow < 2 ||
+      !Number.isSafeInteger(maxHashLookupsPerRun) || maxHashLookupsPerRun < 1) {
     throw new TypeError("Invalid collector bounds");
   }
 
@@ -106,7 +108,7 @@ export async function collectFourMemeFinalizedLogs({
   if (finalizedHeight < cursor) throw new Error("Finalized height regressed below the saved cursor");
 
   if (checkpoints.length) {
-    const checkpointNumbers = checkpoints.map(item => item.blockNumber.toString());
+    const checkpointNumbers = checkpoints.slice(-maxHashLookupsPerRun).map(item => item.blockNumber.toString());
     const canonical = await getBlockHashes(checkpointNumbers);
     let firstMismatch = -1;
     for (let i = 0; i < checkpoints.length; i++) {
@@ -153,6 +155,9 @@ export async function collectFourMemeFinalizedLogs({
   const logBlockNumbers = new Set(rawLogs.map(log => quantity(log?.blockNumber, "log blockNumber").toString()));
   const requestedHashNumbers = [...new Set([...checkpointNumbers, ...logBlockNumbers])]
     .sort((a, b) => BigInt(a) === BigInt(b) ? 0 : BigInt(a) < BigInt(b) ? -1 : 1);
+  if (requestedHashNumbers.length > maxHashLookupsPerRun) {
+    throw new Error("Canonical block-hash lookup budget exceeded; reduce the scan range or retry later");
+  }
   const canonicalHashes = await getBlockHashes(requestedHashNumbers);
   const blockHashes = new Map(
     requestedHashNumbers.map(number => [number, hashAt(canonicalHashes, BigInt(number))])
