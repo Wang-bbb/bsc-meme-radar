@@ -134,3 +134,33 @@ test("records TradeStop as a lifecycle event, not a safety verdict", () => {
   assert.equal(result.evidenceStatus, "onchain_observed_not_safety_verified");
   assert.equal("safetyScore" in result, false);
 });
+
+
+test("orders out-of-order logs before selecting the latest funds and preserves migration quote details", () => {
+  const earlierBuy = event("TokenPurchase", {
+    token, account: buyer, price: 1, amount: 2, cost: 10,
+    fee: 1, offers: 4, funds: 100
+  }, {
+    blockNumber: "101",
+    transactionHash: "0x" + "e".repeat(64),
+    logIndex: 0
+  });
+  const laterLiquidity = event("LiquidityAdded", {
+    base: token, quote: "0x0000000000000000000000000000000000000000",
+    offers: 900, funds: 120
+  }, {
+    blockNumber: "102",
+    transactionHash: "0x" + "f".repeat(64),
+    logIndex: 1
+  });
+  const result = summarizeFourMemeTokenEvents([laterLiquidity, earlierBuy])[0];
+  assert.equal(result.lastEventBlock, "102");
+  assert.equal(result.latestFundsRaw, "120");
+  assert.equal(result.liquidityAdded, true);
+  assert.deepEqual(result.liquidityDetails, {
+    quoteAddress: "0x0000000000000000000000000000000000000000",
+    lpTokenAmountRaw: "900",
+    cumulativeFundsRaw: "120",
+    blockNumber: "102"
+  });
+});
