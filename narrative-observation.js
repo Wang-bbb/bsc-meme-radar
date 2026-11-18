@@ -6,7 +6,7 @@ function finiteNumber(value) {
 }
 
 function normalizeEntity(value) {
-  return String(value ?? "").trim().toLocaleLowerCase().replace(/\\s+/g, " ");
+  return String(value ?? "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
 
 function rankScore(rank, listSize) {
