@@ -25,8 +25,10 @@ jobs:
         run: node --check worker.js
       - name: Check wallet module syntax
         run: node --experimental-default-type=module --check wallet-intelligence.js
-      - name: Run wallet module tests
-        run: node --experimental-default-type=module --test tests/wallet-intelligence.test.mjs
+      - name: Check BSC observation parser syntax
+        run: node --experimental-default-type=module --check wallet-observation.js
+      - name: Run wallet intelligence tests
+        run: node --experimental-default-type=module --test tests/wallet-intelligence.test.mjs tests/wallet-observation.test.mjs
 
   legacy-worker-tests:
     name: Existing Worker route tests
