@@ -2609,3 +2609,28 @@ test("multichain candidate disposition excludes severe dumps and deprioritizes r
   assert.equal(balanced.candidateDisposition, "unclassified_review");
   assert.equal(balanced.walletRouteStatus, "not_verified");
 });
+
+
+test("Four.meme shadow status route is visible but disabled by default", async () => {
+  const res = await worker.fetch(request("/fourmeme-shadow/status"), {});
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.enabled, false);
+  assert.equal(data.status, "disabled");
+});
+
+test("scheduled Four.meme observer is a no-op unless explicitly enabled", async () => {
+  const values = new Map();
+  const kv = {
+    async get(key) { return values.has(key) ? values.get(key) : null; },
+    async put(key, value) { values.set(key, value); }
+  };
+  let task;
+  worker.scheduled({}, { RADAR_KV: kv }, { waitUntil(promise) { task = promise; } });
+  assert.ok(task, "scheduled handler should register its bounded task");
+  const result = await task;
+  assert.equal(result.status, "disabled");
+  assert.equal(result.enabled, false);
+  assert.equal(values.get("fourmeme:v2:collector:status") != null, true);
+});
