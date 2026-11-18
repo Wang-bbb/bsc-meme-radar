@@ -75,6 +75,13 @@ test("rejects unrecognized events and malformed addresses", () => {
   }), /Invalid token/);
 });
 
+test("rejects unsafe JavaScript numbers instead of silently accepting rounded uints", () => {
+  assert.throws(() => event("TokenCreate", {
+    creator, token, requestId: Number.MAX_SAFE_INTEGER + 1, name: "X", symbol: "X",
+    totalSupply: 1, launchTime: 1, launchFee: 1
+  }), /unsafe numeric input/);
+});
+
 test("requires explicit finality and valid block identity", () => {
   assert.throws(() => event("TokenCreate", {
     creator, token, requestId: 1, name: "X", symbol: "X",
