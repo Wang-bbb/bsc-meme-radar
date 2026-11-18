@@ -2,7 +2,7 @@ name: Validate Meme Radar
 
 on:
   push:
-    branches: [feature/multichain-meme-radar]
+    branches: [feature/multichain-meme-radar, feature/fourmeme-nodereal-adapter]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -50,8 +50,9 @@ jobs:
         run: |
           node --check fourmeme-event-shadow.js
           node --check fourmeme-event-collector.js
+          node --check fourmeme-nodereal-adapter.js
       - name: Run Four.meme shadow tests
-        run: node --experimental-default-type=module --test tests/fourmeme-event-shadow.test.mjs tests/fourmeme-event-collector.test.mjs
+        run: node --experimental-default-type=module --test tests/fourmeme-event-shadow.test.mjs tests/fourmeme-event-collector.test.mjs tests/fourmeme-nodereal-adapter.test.mjs
 
   fourmeme-public-api-sample:
     runs-on: ubuntu-latest
@@ -119,6 +120,12 @@ jobs:
   nodereal-finality-smoke:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Verify configured free BSC RPC finality and batch reads
         env:
           NODEREAL_RPC_URL: ${{ secrets.NODEREAL_RPC_URL }}
@@ -175,4 +182,103 @@ jobs:
           console.log("latest block:", BigInt(latest.number).toString());
           console.log("finalized block:", BigInt(finalized.number).toString());
           console.log("JSON-RPC batch block reads: passed (2/2)");
+
+          // Exercise the exact isolated adapter against the configured endpoint.
+          const { createNodeRealFourMemeRpcAdapter } =
+            await import("./fourmeme-nodereal-adapter.js");
+          const adapter = createNodeRealFourMemeRpcAdapter({ endpoint });
+          const adapterFinalized = await adapter.getFinalizedBlockNumber();
+          // Finalized height may advance between the direct smoke read and adapter read.
+          // The adapter's own finalized-height result is validated by its canonical hash lookup below.
+          const adapterHashes = await adapter.getBlockHashes([adapterFinalized]);
+          if (!adapterHashes[adapterFinalized]) {
+            throw new Error("Adapter canonical block-hash batch read is incomplete");
+          }
+          const logFrom = BigInt(adapterFinalized) > 0n
+            ? (BigInt(adapterFinalized) - 1n).toString()
+            : adapterFinalized;
+          const adapterLogs = await adapter.getLogs(logFrom, adapterFinalized);
+          console.log("NodeReal adapter finalized-height read: passed");
+          console.log("NodeReal adapter canonical-hash batch read: passed");
+          console.log("NodeReal adapter official-contract eth_getLogs read: passed");
+          console.log("Adapter log count in bounded finalized range:", adapterLogs.length);
+
+          // Sample the sparse TokenCreate event over a wider finalized window.
+          // Decode only actual raw logs returned by the configured BSC RPC.
+          const { decodeFourMemeRawLog, FOURMEME_TOKEN_MANAGER2_BSC } =
+            await import("./fourmeme-event-shadow.js");
+          const sampleTo = BigInt(adapterFinalized);
+          const sampleFrom = sampleTo > 1999n ? sampleTo - 1999n : 0n;
+          const createTopic = "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20";
+          const createLogs = await rpc("eth_getLogs", [{
+            address: FOURMEME_TOKEN_MANAGER2_BSC,
+            fromBlock: "0x" + sampleFrom.toString(16),
+            toBlock: "0x" + sampleTo.toString(16),
+            topics: [createTopic]
+          }], 44);
+          if (!Array.isArray(createLogs)) throw new Error("TokenCreate log sample is not an array");
+          if (createLogs.length > 500) throw new Error("TokenCreate sample exceeds the bounded 500-log limit");
+          const decodedCreates = createLogs.map(log =>
+            decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
+          );
+          if (decodedCreates.some(event => event.eventName !== "TokenCreate" || !event.tokenAddress)) {
+            throw new Error("A real TokenCreate log failed event normalization");
+          }
+          console.log("Finalized TokenCreate sample range:", sampleFrom.toString(), "-", sampleTo.toString());
+          console.log("Finalized TokenCreate raw logs:", createLogs.length);
+          console.log("Finalized TokenCreate ABI decodes:", decodedCreates.length);
+          if (decodedCreates.length > 0) {
+            console.log("Live Four.meme TokenCreate decode: passed");
+          } else {
+            console.log("Live Four.meme TokenCreate decode: no matching event in sample window; decoder remains unit-tested only");
+          }
+
+          // Validate the remaining event decoders against actual finalized logs.
+          // Query each topic independently so a busy event type cannot hide another.
+          const liveEventTopics = [
+            ["TokenPurchase", "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942"],
+            ["TokenSale", "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19"],
+            ["TradeStop", "0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132"],
+            ["LiquidityAdded", "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0"]
+          ];
+          for (const [eventName, topic] of liveEventTopics) {
+            // Lifecycle events are sparse. Probe up to 20,000 finalized blocks
+            // in bounded 2,000-block requests; keep busy trade events on 2,000.
+            const sparseLifecycle = eventName === "TradeStop" || eventName === "LiquidityAdded";
+            const eventFrom = sparseLifecycle
+              ? (sampleTo > 19999n ? sampleTo - 19999n : 0n)
+              : sampleFrom;
+            const chunkSize = 2000n;
+            const rawLogs = [];
+            let chunks = 0;
+            for (let from = eventFrom; from <= sampleTo; from += chunkSize) {
+              const to = from + chunkSize - 1n < sampleTo
+                ? from + chunkSize - 1n
+                : sampleTo;
+              const chunkLogs = await rpc("eth_getLogs", [{
+                address: FOURMEME_TOKEN_MANAGER2_BSC,
+                fromBlock: "0x" + from.toString(16),
+                toBlock: "0x" + to.toString(16),
+                topics: [topic]
+              }], 60 + liveEventTopics.findIndex(item => item[0] === eventName) * 10 + chunks);
+              if (!Array.isArray(chunkLogs)) throw new Error(eventName + " log sample is not an array");
+              rawLogs.push(...chunkLogs);
+              chunks += 1;
+              if (rawLogs.length > 500) {
+                throw new Error(eventName + " sample exceeds the bounded 500-log limit");
+              }
+            }
+            const decoded = rawLogs.map(log =>
+              decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
+            );
+            if (decoded.some(event => event.eventName !== eventName)) {
+              throw new Error(eventName + " topic returned a mismatched decoded event");
+            }
+            console.log("Finalized " + eventName + " sample range:", eventFrom.toString(), "-", sampleTo.toString());
+            console.log("Finalized " + eventName + " bounded query chunks:", chunks);
+            console.log("Finalized " + eventName + " raw logs:", rawLogs.length);
+            console.log("Finalized " + eventName + " ABI decodes:", decoded.length);
+            console.log("Live Four.meme " + eventName + " decode:",
+              decoded.length > 0 ? "passed" : "no matching event in sample window; decoder remains unit-tested only");
+          }
           NODE
