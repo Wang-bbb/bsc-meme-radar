@@ -46,7 +46,7 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Bounds each invocation by block count and log count.
 - Requests canonical hashes only for sparse 100-block checkpoints, the scan-range boundaries, and blocks that actually contain matching logs; every returned log is checked against its own canonical block hash.
 - Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
-- Keeps a rolling checkpoint window (default 128 checkpoints), adding every 100th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
+- Keeps a rolling checkpoint window (default 16 checkpoints), adding every 100th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
 - Writes chunk observations before cursor state. If a KV write fails, the cursor is not advanced and the same range can be replayed.
 - Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
 - Defaults to at most 1,000 blocks per invocation. Even with chunked writes, keep scheduled execution at or below one run per five minutes until actual KV and RPC consumption are measured; pause on any quota error.
