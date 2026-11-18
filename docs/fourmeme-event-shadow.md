@@ -10,6 +10,21 @@ Official reference:
 - Official ABI: https://github.com/four-meme-community/fourmeme-docs/blob/main/contracts/interfaces/ITokenManager2.sol
 - Event listening guide: https://github.com/four-meme-community/four-meme-ai/blob/main/skills/four-meme-integration/references/event-listening.md
 
+## Raw RPC log decoding
+
+The shadow module now exports `decodeFourMemeRawLog(log, { finalityStatus, transactionFrom })`.
+It decodes the five non-indexed V2 events from raw `eth_getLogs` entries after checking:
+
+- The emitting address is the canonical BSC TokenManager2 contract.
+- Exactly one topic is present (topic0); the official V2 event declarations have no indexed arguments.
+- Topic0 matches one of the five canonical event signatures.
+- ABI head lengths, address word padding, dynamic string offsets/lengths, and UTF-8 validity.
+- The log is not marked `removed`; block/transaction identity and explicit finality are then validated by the normalizer.
+
+Topic0 values are kept next to the decoder and exercised by raw-log fixtures. The TokenPurchase topic is also cross-checked against an independent published Four.meme event reference. The Keccak implementation used to derive the signature constants was checked against the canonical empty-input and ERC-20 Transfer vectors; no runtime hashing dependency is added.
+
+The decoder does not fetch logs, infer transaction senders, determine finality, or manage reorgs. A caller may supply transaction sender metadata separately; for TokenPurchase, the event's `account` remains the recipient, not a proven sender.
+
 ## Deliberate boundaries
 
 - Input must already be decoded against the official V2 ABI. This module does not guess topic hashes or decode raw `eth_getLogs` data.
