@@ -156,7 +156,9 @@ export async function collectFourMemeFinalizedLogs({
     const blockA = quantity(a?.blockNumber, "log blockNumber");
     const blockB = quantity(b?.blockNumber, "log blockNumber");
     if (blockA !== blockB) return blockA < blockB ? -1 : 1;
-    return Number(quantity(a?.logIndex, "logIndex") - quantity(b?.logIndex, "logIndex"));
+    const indexA = quantity(a?.logIndex, "logIndex");
+    const indexB = quantity(b?.logIndex, "logIndex");
+    return indexA === indexB ? 0 : indexA < indexB ? -1 : 1;
   });
 
   let storedEventCount = 0;
