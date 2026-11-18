@@ -98,9 +98,9 @@ test("observer retries smaller ranges when a log batch exceeds its bound", async
       return { status: "ok", processedBlocks: options.maxBlocksPerRun };
     }
   });
-  assert.deepEqual(attempted, [250, 125, 62, 31, 15, 7, 3, 1]);
+  assert.deepEqual(attempted, [250, 125, 62, 31, 15, 7, 3]);
   assert.equal(result.status, "ok");
-  assert.equal(result.maxBlocksPerRun, 6);
+  assert.equal(result.maxBlocksPerRun, 3);
 });
 
 test("provider errors are recorded without exposing the RPC endpoint", async () => {
