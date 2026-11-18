@@ -3,6 +3,7 @@ import { decodeFourMemeRawLog } from "./fourmeme-event-shadow.js";
 const STATE_KEY = "fourmeme:v2:collector:state";
 const BLOCK_KEY_PREFIX = "fourmeme:v2:collector:chunk:";
 const BLOCKS_PER_KV_CHUNK = 1000;
+const MAX_KV_CHUNK_BYTES = 1024 * 1024;
 const BLOCK_CHECKPOINT_INTERVAL = 250;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
@@ -61,6 +62,7 @@ export async function collectFourMemeFinalizedLogs({
   maxLogsPerRun = 500,
   checkpointWindow = 8,
   maxHashLookupsPerRun = 32,
+  maxChunkBytes = MAX_KV_CHUNK_BYTES,
   eventTtlSeconds = 30 * 24 * 60 * 60,
   now = () => new Date().toISOString()
 }) {
@@ -75,7 +77,8 @@ export async function collectFourMemeFinalizedLogs({
       !Number.isSafeInteger(maxLogsPerRun) || maxLogsPerRun < 1 ||
       !Number.isSafeInteger(checkpointWindow) || checkpointWindow < 2 ||
       !Number.isSafeInteger(maxHashLookupsPerRun) || maxHashLookupsPerRun < 1 ||
-      checkpointWindow > maxHashLookupsPerRun) {
+      checkpointWindow > maxHashLookupsPerRun ||
+      !Number.isSafeInteger(maxChunkBytes) || maxChunkBytes < 1024 || maxChunkBytes > MAX_KV_CHUNK_BYTES) {
     throw new TypeError("Invalid collector bounds");
   }
 
@@ -233,11 +236,16 @@ export async function collectFourMemeFinalizedLogs({
       const right = BigInt(b.blockNumber);
       return left === right ? 0 : left < right ? -1 : 1;
     });
-    await kv.put(BLOCK_KEY_PREFIX + chunkStart, JSON.stringify({
+    const serializedChunk = JSON.stringify({
       version: 1,
       chunkStart,
       blocks
-    }), { expirationTtl: eventTtlSeconds });
+    });
+    const chunkBytes = new TextEncoder().encode(serializedChunk).byteLength;
+    if (chunkBytes > maxChunkBytes) {
+      throw new Error(`Four.meme KV chunk exceeds maxChunkBytes (${chunkBytes} > ${maxChunkBytes}); cursor was not advanced`);
+    }
+    await kv.put(BLOCK_KEY_PREFIX + chunkStart, serializedChunk, { expirationTtl: eventTtlSeconds });
   }
 
   const nextCheckpoints = [
@@ -279,3 +287,4 @@ export async function collectFourMemeFinalizedLogs({
 
 export const FOURMEME_COLLECTOR_STATE_KEY = STATE_KEY;
 export const FOURMEME_COLLECTOR_BLOCK_PREFIX = BLOCK_KEY_PREFIX;
+export const FOURMEME_COLLECTOR_MAX_KV_CHUNK_BYTES = MAX_KV_CHUNK_BYTES;
