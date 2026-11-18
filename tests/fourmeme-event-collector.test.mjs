@@ -68,7 +68,7 @@ test("collects only finalized bounded ranges and stores replaceable per-block re
   assert.equal(result.storedEvents, 1);
   const state = JSON.parse(await kv.get(FOURMEME_COLLECTOR_STATE_KEY));
   assert.equal(state.cursorBlock, "4");
-  assert.equal(state.checkpoints.length, 4);
+  assert.equal(state.checkpoints.length, 3);
   const chunk = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
   const block2 = chunk.blocks.find(item => item.blockNumber === "2");
   const block3 = chunk.blocks.find(item => item.blockNumber === "3");
@@ -117,6 +117,32 @@ test("uses sparse block-hash reads instead of fetching every block header", asyn
   assert.equal(result.processedBlocks, 1000);
   assert.ok(requested.length < 20, `expected sparse hash requests, got ${requested.length}`);
   assert.ok(requested.includes("333"), "event-bearing block hash must be independently checked");
+});
+
+test("fails closed when event-heavy blocks exceed the RPC hash lookup budget", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 1000);
+  const logs = Array.from({ length: 65 }, (_, index) => {
+    const block = index + 1;
+    return makeLog(block, hash(block), 0, block);
+  });
+  let hashCalls = 0;
+  await assert.rejects(
+    collectFourMemeFinalizedLogs({
+      ...providers(kv, canonical, logs, 1000),
+      maxBlocksPerRun: 1000,
+      maxHashLookupsPerRun: 64,
+      getBlockHashes: async numbers => {
+        hashCalls++;
+        const response = {};
+        for (const value of numbers) response[String(value)] = canonical.get(String(value));
+        return response;
+      }
+    }),
+    /lookup budget exceeded/
+  );
+  assert.equal(hashCalls, 0, "over-budget request must stop before spending RPC units");
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_STATE_KEY), null);
 });
 
 test("limits each invocation to maxBlocksPerRun", async () => {
