@@ -1,7 +1,8 @@
 import { decodeFourMemeRawLog } from "./fourmeme-event-shadow.js";
 
 const STATE_KEY = "fourmeme:v2:collector:state";
-const BLOCK_KEY_PREFIX = "fourmeme:v2:collector:block:";
+const BLOCK_KEY_PREFIX = "fourmeme:v2:collector:chunk:";
+const BLOCKS_PER_KV_CHUNK = 100;
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
 function quantity(value, field) {
@@ -182,17 +183,48 @@ export async function collectFourMemeFinalizedLogs({
     storedEventCount++;
   }
 
-  // Replace every block record in the replay range, including empty blocks.
-  // This clears stale events from a replaced fork without needing KV list/delete.
+  // Store up to 100 blocks in one KV value. Preserve only the already-committed
+  // prefix of a partially filled chunk; replayed/orphaned suffix blocks are replaced.
+  const chunks = new Map();
   for (let block = fromBlock; block <= toBlock; block++) {
-    const key = BLOCK_KEY_PREFIX + block.toString();
-    const record = {
-      version: 1,
+    const chunkStart = configuredStart +
+      ((block - configuredStart) / BigInt(BLOCKS_PER_KV_CHUNK)) * BigInt(BLOCKS_PER_KV_CHUNK);
+    const chunkKey = chunkStart.toString();
+    if (!chunks.has(chunkKey)) {
+      const blocks = [];
+      if (chunkStart < fromBlock) {
+        const previous = await readJson(kv, BLOCK_KEY_PREFIX + chunkKey);
+        if (previous != null) {
+          if (previous.version !== 1 || !Array.isArray(previous.blocks)) {
+            throw new TypeError(`Corrupt collector chunk at ${chunkKey}`);
+          }
+          for (const item of previous.blocks) {
+            const previousNumber = quantity(item.blockNumber, "stored blockNumber");
+            if (previousNumber <= cursor && previousNumber >= chunkStart) {
+              blocks.push(item);
+            }
+          }
+        }
+      }
+      chunks.set(chunkKey, blocks);
+    }
+    chunks.get(chunkKey).push({
       blockNumber: block.toString(),
       blockHash: blockHashes.get(block.toString()),
       events: grouped.get(block.toString()) || []
-    };
-    await kv.put(key, JSON.stringify(record), { expirationTtl: eventTtlSeconds });
+    });
+  }
+  for (const [chunkStart, blocks] of chunks) {
+    blocks.sort((a, b) => {
+      const left = BigInt(a.blockNumber);
+      const right = BigInt(b.blockNumber);
+      return left === right ? 0 : left < right ? -1 : 1;
+    });
+    await kv.put(BLOCK_KEY_PREFIX + chunkStart, JSON.stringify({
+      version: 1,
+      chunkStart,
+      blocks
+    }), { expirationTtl: eventTtlSeconds });
   }
 
   const nextCheckpoints = [
