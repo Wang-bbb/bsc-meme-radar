@@ -1,3 +1,4 @@
+import { runFourMemeShadowSchedule, readFourMemeShadowStatus } from "./fourmeme-shadow-scheduler.js";
 const USDT = "0x55d398326f99059ff775485246999027b3197955";
 const USDT_TOPIC = "0x" + USDT.slice(2).toLowerCase().padStart(64, "0");
 const FACTORY = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
@@ -2372,6 +2373,11 @@ export default {
     const url = new URL(request.url);
     const rpcUrl = env.NODEREAL_RPC_URL;
     if (request.method === "OPTIONS") return new Response(null, { headers: HEADERS });
+    if (url.pathname === "/fourmeme-shadow/status") {
+      const enabled = String(env.FOURMEME_SHADOW_ENABLED || "").toLowerCase() === "true";
+      const shadowStatus = await readFourMemeShadowStatus(env.RADAR_KV, enabled);
+      return json({ ok: true, ...shadowStatus });
+    }
     if (!rpcUrl && ["/scan", "/history"].includes(url.pathname)) {
       return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
     }
@@ -4210,5 +4216,8 @@ export default {
         hint: "请检查 NodeReal RPC 配额、端点和 eth_getLogs 权限；不要将错误当成没有新池。"
       }, 502);
     }
+  },
+  scheduled(controller, env, ctx) {
+    ctx.waitUntil(runFourMemeShadowSchedule(env));
   }
 };
