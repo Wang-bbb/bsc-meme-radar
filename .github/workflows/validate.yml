@@ -282,3 +282,21 @@ jobs:
               decoded.length > 0 ? "passed" : "no matching event in sample window; decoder remains unit-tested only");
           }
           NODE
+
+  wallet-shadow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check wallet shadow module syntax
+        run: |
+          node --experimental-default-type=module --check wallet-intelligence.js
+          node --experimental-default-type=module --check wallet-observation.js
+          node --experimental-default-type=module --check wallet-observation-collector.js
+          node --experimental-default-type=module --check wallet-observation-summary.js
+      - name: Run wallet shadow tests
+        run: node --experimental-default-type=module --test tests/wallet-intelligence.test.mjs tests/wallet-observation.test.mjs tests/wallet-observation-collector.test.mjs tests/wallet-observation-summary.test.mjs
