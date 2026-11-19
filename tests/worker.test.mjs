@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics, solanaRpcCallRaw } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -73,6 +73,28 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcJsonErrorShape: null,
     rpcJsonTopLevelKeys: []
   });
+});
+
+test("Solana RPC producer emits only allow-listed JSON shape hints", async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    message: "route not found",
+    status_code: 404,
+    api_key: "must-not-leak",
+    endpoint: "https://private.example/secret"
+  }), {
+    status: 404,
+    headers: { "content-type": "application/json" }
+  });
+
+  await assert.rejects(
+    solanaRpcCallRaw("https://rpc.invalid.test", "getHealth", []),
+    error => {
+      assert.match(error.message, /shape object/);
+      assert.match(error.message, /json_keys message\+status_code/);
+      assert.doesNotMatch(error.message, /api_key|must-not-leak|private\.example|secret/i);
+      return true;
+    }
+  );
 });
 
 test("Solana quote liquidity uses USD stablecoin reserves or a valid SOL/USD price", () => {
