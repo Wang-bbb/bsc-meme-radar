@@ -43,7 +43,7 @@ export function isWxPusherCandidateEligible(pool) {
 
 // WxPusher delivery is intentionally isolated from scanning and ranking logic.
 // Only newly observed, conservative priority-watchlist BSC tokens are notified.
-async function notifyWxPusherForNewBscCandidates(env, payload) {
+export async function notifyWxPusherForNewBscCandidates(env, payload) {
   const appToken = String(env && env.WXPUSHER_APP_TOKEN || "").trim();
   const uid = String(env && env.WXPUSHER_UID || "").trim();
   const kv = env && env.RADAR_KV;
@@ -107,7 +107,8 @@ async function notifyWxPusherForNewBscCandidates(env, payload) {
         summary: "BSC 新增 " + selected.length + " 个优先观察候选",
         contentType: 1,
         uids: [uid]
-      })
+      }),
+      signal: AbortSignal.timeout(8000)
     });
     const result = await response.json();
     if (!response.ok || !result || result.code !== 1000 || result.success !== true) {
