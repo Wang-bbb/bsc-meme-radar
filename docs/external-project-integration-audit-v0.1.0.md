@@ -136,3 +136,47 @@ The X-monitor key-validation implementation is unsafe: Base64 is reversible enco
 ## Integration gate decision
 
 At this stage, PR #106 is a documentation-only audit and its CI passed. Keep #100, #102, and #105 as Draft until their respective runtime, data-quality, coverage, and deployment gates are met. No external repository code has been copied into production, and no production deployment has been performed.
+
+
+## User direction: combine the strongest ideas into future intelligence briefings
+
+The user explicitly wants future intelligence/push reports to combine the useful strengths of the reviewed projects, not merely list seven repositories. Adopt ideas selectively by evidence value, portability, licensing, and operational safety.
+
+### Adopt / reimplement
+
+| Capability | Source inspiration | Decision and constraints |
+|---|---|---|
+| Multi-platform narrative heat | meme-narrative-radar | Adopt normalized topic observations, source freshness, source-health coverage, cross-source momentum and trend ranking. Reuse MIT code only with attribution; otherwise independently implement the schema. |
+| Social/webhook candidate hints | X-monitor | Adopt only the sanitized inbound-hint concept (post URL/id, author handle, timestamp, text/media metadata). No cookies, session tokens, private keys, remote validator, or trading code. Source must be lawfully configured and its terms checked. |
+| Multi-factor candidate research | meme-signal-monitor | Adopt the analysis dimensions: token metadata, market change, audit, deployer/project history, wallet cohort, and market-pattern context. Reimplement independently unless a clear license is obtained. Security gates remain hard vetoes, not weighted score inputs. |
+| Wallet-flow observation | solana-meme-monitor + existing wallet shadow | Adopt bounded sampling, retry/failover, time windows, and cohort labels. Keep chain-specific decoders and finality rules. Never call an observed transaction initiator a proven beneficial owner. |
+| Four.meme event verification | fourmeme_newcoin_monitor | Keep only the idea of a secondary listing/ticker cross-check. The authoritative signal remains finalized on-chain TokenManager2 events and verified migrated pool state. |
+| Public market presentation | TIGER-POWER-Terminal | Adopt only a clean read-only market/flow presentation concept. No wallet login, account connection, transfers, signatures, order entry, or auto-trading. |
+| BSC fast event scanning | BSC- PR | Reuse only independently verified read-only event-decoding ideas where useful. No sniper, private-key, copy-trading, or transaction-submission code. |
+
+### Evidence hierarchy for the combined daily intelligence report
+
+1. **Chain truth (highest authority):** finalized creation/migration/swap events, verified factory/pool/token addresses, canonical quote-token contract, RPC block/finality evidence.
+2. **Independent market confirmation:** at least two independent market-data sources where available; compare liquidity, price, volume, buys/sells and pair age. Disagreement is shown, not averaged away blindly.
+3. **Security and liquidity hard gates:** sellability/honeypot checks, owner permissions, taxes, holder concentration, LP state and liquidity trend. Unknown means review, never pass.
+4. **Wallet/flow context:** early-buyer cohort, repeat participation, observed buy/sell balance, retention/exit and known watch-address interactions. Label coverage and attribution limits; never let a whale label bypass safety.
+5. **Narrative and social attention:** cross-platform topic momentum, engagement/rank changes, source breadth and freshness. Narrative is a discovery/priority hint, not proof of token identity or safety.
+6. **Human-readable context:** project links, official announcements, community discussion and notable uncertainty. Separate facts, interpretations and hypotheses.
+
+### Source roles and current API caveats
+
+- Keep GeckoTerminal, DexScreener and DexPaprika as complementary market-data providers rather than treating one as universal truth. Their endpoints, rate limits, latency and availability must be measured and cooldowns preserved.
+- DexScreener's current API reference distinguishes pair/token endpoints (300 requests/minute) from profile/boost/order endpoints (60 requests/minute). Profiles, boosts and paid promotion signals may surface attention, but paid boosts must be explicitly labelled as promotion and must never be treated as organic demand or safety evidence.
+- GeckoTerminal's official support page currently describes its public API as beta with a 30 calls/minute free limit. Plan request budgets accordingly and surface cooldowns/partial coverage.
+- DexPaprika's current pricing page lists a free API-key tier with 100K credits/month and 30 requests/minute; its free tier has data-freshness limitations relative to paid plans. Do not assume the old unkeyed endpoint is an unlimited production fallback.
+- X and Reddit must not be treated as free, unrestricted firehoses. Use only supported, authorized API access or a user-configured lawful feed; honor platform policy, approval, authentication and limits. If no lawful stable feed is available, report social coverage as unavailable rather than scraping around restrictions.
+
+### Report behavior
+
+- Produce one merged report with chain-separated candidates, age buckets (<1h, 1–6h, 6–24h), ranked evidence, and explicit pass/review/reject reasons.
+- Each candidate should include source provenance, timestamps, source freshness, coverage, quote-token contract, pool/token identity, liquidity/volume/trade windows, safety evidence, wallet-flow caveats, narrative references and direct explorer/DEX links.
+- De-duplicate by chain + token contract + pool address, not symbol/name. A symbol collision must never merge two tokens.
+- Show source disagreements and unavailable sources. A provider outage, rate limit, disabled integration, or missing history must never be presented as “zero activity” or “no new tokens.”
+- Distinguish organic market activity from paid boosts/ads, influencer claims, and unverified community reports.
+- Keep a strict read-only boundary. No wallet connection, private key, signing, transfer, order placement, automated buy/sell, or trade execution.
+- No scheduled push is active merely because this design is documented. Enable delivery only after the report has passed data-quality, coverage, security and false-positive validation, with explicit user-facing deployment confirmation.
