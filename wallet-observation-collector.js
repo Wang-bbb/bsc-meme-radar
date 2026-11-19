@@ -12,7 +12,7 @@ function asSafeBlock(value) {
       const parsed = Number.parseInt(value.slice(2), 16);
       return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
     }
-    if (!/^\\d+$/.test(value)) return null;
+    if (!/^\d+$/.test(value)) return null;
   }
   const n = Number(value);
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
@@ -112,7 +112,7 @@ export async function collectBscV2WalletObservations({
     const validTokenMetadata = [token0, token1, targetToken, quoteToken].every(value => /^0x[a-f0-9]{40}$/.test(value)) &&
       token0 !== token1 && targetToken !== quoteToken &&
       ((targetToken === token0 && quoteToken === token1) || (targetToken === token1 && quoteToken === token0));
-    if (!/^0x[a-f0-9]{40}$/.test(poolAddress) || !validTokenMetadata) {
+    if (!/^\d+$/.test(value)) return null;
       result.skippedPools++;
       result.status = "partial";
       result.errors.push("池 " + (poolAddress || "unknown") + " 缺少有效 token0/token1/targetToken/quoteToken 元数据");
@@ -158,7 +158,7 @@ export async function collectBscV2WalletObservations({
         const logIndex = String(log && log.logIndex || "").toLowerCase();
         const blockNumber = asSafeBlock(log && log.blockNumber);
         const logAddress = normalizeAddress(log && log.address);
-        if (!/^0x[a-f0-9]{64}$/.test(txHash) ||
+    if (!/^\d+$/.test(value)) return null;
             !/^0x[a-f0-9]+$/.test(logIndex) ||
             blockNumber === null || blockNumber < fromBlock || blockNumber > toBlock ||
             logAddress !== poolAddress || log.removed === true) {
