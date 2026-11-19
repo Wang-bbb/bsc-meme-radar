@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics, isWxPusherCandidateEligible } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -2606,4 +2606,25 @@ test("multichain candidate disposition excludes severe dumps and deprioritizes r
   assert.equal(balanced.quoteAssetGroup, "usdt_direct_pool");
   assert.equal(balanced.candidateDisposition, "unclassified_review");
   assert.equal(balanced.walletRouteStatus, "not_verified");
+});
+
+
+test("WxPusher alert gate rejects malformed numeric metrics", () => {
+  const candidate = {
+    priorityWatchlistEligible: true,
+    watchlistTier: "priority_watchlist",
+    userReportedRiskStatus: "none",
+    historicalRiskStatus: "stable",
+    tradeFlowStatus: "mixed_flow",
+    liquidityUSDApprox: 6000,
+    earlySignalScore: 80,
+    watchlistExclusionReasons: []
+  };
+  assert.equal(isWxPusherCandidateEligible(candidate), true);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, liquidityUSDApprox: undefined }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, liquidityUSDApprox: "not-a-number" }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, earlySignalScore: undefined }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, earlySignalScore: "NaN" }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, liquidityUSDApprox: 4999.99 }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, earlySignalScore: 64.99 }), false);
 });
