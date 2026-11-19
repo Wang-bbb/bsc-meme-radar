@@ -158,7 +158,7 @@ export async function collectBscV2WalletObservations({
         const logIndex = String(log && log.logIndex || "").toLowerCase();
         const blockNumber = asSafeBlock(log && log.blockNumber);
         const logAddress = normalizeAddress(log && log.address);
-    if (!/^\d+$/.test(value)) return null;
+        if (!/^0x[a-f0-9]{64}$/.test(txHash) ||
             !/^0x[a-f0-9]+$/.test(logIndex) ||
             blockNumber === null || blockNumber < fromBlock || blockNumber > toBlock ||
             logAddress !== poolAddress || log.removed === true) {
