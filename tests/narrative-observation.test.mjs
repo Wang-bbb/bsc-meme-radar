@@ -116,3 +116,25 @@ test("empty expected sources never imply complete coverage", () => {
   });
   assert.deepEqual(result, []);
 });
+
+
+test("conflicting duplicate source health states fail closed", () => {
+  const result = evaluateNarrativeEvidence({
+    nowMs: now,
+    expectedSources: ["weibo", "douyin"],
+    sourceStatuses: [
+      { source: "weibo", status: "ok" },
+      { source: "weibo", status: "failed" },
+      { source: "douyin", status: "ok" }
+    ],
+    observations: [
+      row("weibo", now - 1000),
+      row("douyin", now - 1000),
+      row("weibo", now - 7 * 60 * 60 * 1000),
+      row("douyin", now - 7 * 60 * 60 * 1000)
+    ]
+  });
+  assert.equal(result[0].coverageComplete, false);
+  assert.equal(result[0].state, "insufficient_coverage");
+  assert.deepEqual(result[0].failedSources, ["weibo"]);
+});
