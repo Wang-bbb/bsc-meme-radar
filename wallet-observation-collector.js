@@ -112,7 +112,7 @@ export async function collectBscV2WalletObservations({
     const validTokenMetadata = [token0, token1, targetToken, quoteToken].every(value => /^0x[a-f0-9]{40}$/.test(value)) &&
       token0 !== token1 && targetToken !== quoteToken &&
       ((targetToken === token0 && quoteToken === token1) || (targetToken === token1 && quoteToken === token0));
-    if (!/^\d+$/.test(value)) return null;
+    if (!/^0x[a-f0-9]{40}$/.test(poolAddress) || !validTokenMetadata) {
       result.skippedPools++;
       result.status = "partial";
       result.errors.push("池 " + (poolAddress || "unknown") + " 缺少有效 token0/token1/targetToken/quoteToken 元数据");
