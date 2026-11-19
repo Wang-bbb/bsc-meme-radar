@@ -1570,6 +1570,7 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     let responseHint = "unknown_response";
     let jsonErrorCode = "";
     let jsonErrorKind = "";
+    let jsonShape = null;
     const responseContentType = String(response.headers.get("content-type") || "").toLowerCase();
     let responseText = "";
     try { responseText = await response.text(); } catch (_) {}
@@ -1579,7 +1580,7 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
       responseHint = "json_response";
       try {
         const parsedError = JSON.parse(responseText);
-        const jsonShape = describeSolanaRpcJsonShape(parsedError);
+        jsonShape = describeSolanaRpcJsonShape(parsedError);
         const rawCode = parsedError && parsedError.error && parsedError.error.code;
         if (rawCode !== undefined && rawCode !== null) {
           jsonErrorCode = String(rawCode).slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "");
