@@ -1,5 +1,8 @@
 # Wallet Intelligence Shadow Module
 
+**Workstream:** `GPT-Radar-Wallet-v0.1.1`  
+**Scope:** isolated BSC-only shadow analysis; not production-integrated.
+
 ## Status
 
 This is an isolated, read-only analysis library. It is not connected to the Worker scan path, dashboard, KV, or any external wallet-history provider. It must not be treated as a live wallet rating or buy signal.
@@ -12,6 +15,7 @@ This is an isolated, read-only analysis library. It is not connected to the Work
 
 - Parse a single BSC V2-compatible pool `Swap` log into a raw buy/sell observation when pool token metadata and the transaction response are supplied. The result records `transaction.from` as an initiator only, does not calculate USD value, and does not fetch or persist anything. V3 and Solana decoders are not implemented.
 
+- Validate a strict 20-byte EVM address and the currently supported `bsc` chain before any wallet-quality label is calculated.
 - Evaluate a wallet when a caller supplies complete historical metrics: closed-token sample count, win rate, realized PnL, median return, rug/zero-value token exposure, and data coverage.
 - Summarize an early-buyer cohort when a caller supplies observed holding states and optional funding/synchronized-buy group identifiers.
 - Return `unknown` when required evidence is missing or below the minimum coverage threshold.
@@ -41,7 +45,7 @@ Therefore, the current scanner cannot honestly populate the historical fields re
 
 ## Observed wallet summary
 
-- A pure summary helper groups saved observations by chain and transaction initiator, and reports only observed buy/sell counts, unique observed tokens/pools, and observed time bounds.
+- A pure summary helper accepts only syntactically valid 20-byte EVM initiator addresses and groups saved observations by chain and transaction initiator, and reports only observed buy/sell counts, unique observed tokens/pools, and observed time bounds.
 - It explicitly leaves realized PnL, win rate, median return, rug exposure, and wallet balance unknown. It accepts only classified records explicitly marked `observed_pool_only`; unclassified observations are retained for diagnostics but excluded from wallet activity counts.
 - This summary is not enough to populate the wallet-quality score; a broader, validated trade-history source and valuation methodology would still be required.
 
