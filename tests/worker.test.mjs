@@ -31,7 +31,19 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcHttpStatus: 404,
     rpcResponseHint: "json_rpc_error",
     rpcJsonErrorCode: "-32000",
-    rpcJsonErrorKind: "route_not_found"
+    rpcJsonErrorKind: "route_not_found",
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
+  });
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics(
+    "Solana RPC HTTP 404 (json_error, code 404, kind route_not_found, shape object, json_keys code+message+status_code)"
+  ), {
+    rpcHttpStatus: 404,
+    rpcResponseHint: "json_error",
+    rpcJsonErrorCode: "404",
+    rpcJsonErrorKind: "route_not_found",
+    rpcJsonErrorShape: "object",
+    rpcJsonTopLevelKeys: ["code", "message", "status_code"]
   });
   assert.deepEqual(parseSolanaRpcErrorDiagnostics(
     "Solana RPC HTTP 429 (provider cooldown)"
@@ -39,7 +51,9 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcHttpStatus: 429,
     rpcResponseHint: null,
     rpcJsonErrorCode: null,
-    rpcJsonErrorKind: null
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
   });
   assert.deepEqual(parseSolanaRpcErrorDiagnostics(
     "Solana RPC shared cooldown HTTP 429"
@@ -47,13 +61,17 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcHttpStatus: 429,
     rpcResponseHint: null,
     rpcJsonErrorCode: null,
-    rpcJsonErrorKind: null
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
   });
   assert.deepEqual(parseSolanaRpcErrorDiagnostics("network timeout"), {
     rpcHttpStatus: null,
     rpcResponseHint: null,
     rpcJsonErrorCode: null,
-    rpcJsonErrorKind: null
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
   });
 });
 
