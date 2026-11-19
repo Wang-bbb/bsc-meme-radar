@@ -120,6 +120,20 @@ test("provider errors are recorded without exposing the RPC endpoint", async () 
   assert.equal(JSON.stringify(await readFourMemeShadowStatus(kv, true)).includes(secret), false);
 });
 
+test("enabled status reports corrupt persisted JSON instead of claiming not_started", async () => {
+  const kv = new MemoryKV();
+  kv.data.set(STATUS_KEY, "{invalid-json");
+  const status = await readFourMemeShadowStatus(kv, true);
+  assert.deepEqual(status, { enabled: true, status: "status_corrupt" });
+});
+
+test("enabled status rejects structurally invalid persisted records", async () => {
+  const kv = new MemoryKV();
+  kv.data.set(STATUS_KEY, JSON.stringify({ enabled: true, updatedAt: "2026-11-19T00:00:00.000Z" }));
+  const status = await readFourMemeShadowStatus(kv, true);
+  assert.deepEqual(status, { enabled: true, status: "status_corrupt" });
+});
+
 test("disabled status endpoint does not read KV or expose stale run state", async () => {
   const kv = new MemoryKV();
   await kv.put(STATUS_KEY, JSON.stringify({
