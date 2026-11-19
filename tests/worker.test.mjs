@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics, isWxPusherCandidateEligible, notifyWxPusherForNewBscCandidates } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -2608,4 +2608,85 @@ test("multichain candidate disposition excludes severe dumps and deprioritizes r
   assert.equal(balanced.quoteAssetGroup, "usdt_direct_pool");
   assert.equal(balanced.candidateDisposition, "unclassified_review");
   assert.equal(balanced.walletRouteStatus, "not_verified");
+});
+
+
+test("WxPusher alert gate rejects malformed numeric metrics", () => {
+  const candidate = {
+    priorityWatchlistEligible: true,
+    watchlistTier: "priority_watchlist",
+    userReportedRiskStatus: "none",
+    historicalRiskStatus: "stable",
+    tradeFlowStatus: "mixed_flow",
+    liquidityUSDApprox: 6000,
+    earlySignalScore: 80,
+    watchlistExclusionReasons: []
+  };
+  assert.equal(isWxPusherCandidateEligible(candidate), true);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, liquidityUSDApprox: undefined }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, liquidityUSDApprox: "not-a-number" }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, earlySignalScore: undefined }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, earlySignalScore: "NaN" }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, liquidityUSDApprox: 4999.99 }), false);
+  assert.equal(isWxPusherCandidateEligible({ ...candidate, earlySignalScore: 64.99 }), false);
+});
+
+
+test("WxPusher notifier rejects KV read failures without sending", async () => {
+  let sends = 0;
+  globalThis.fetch = async () => { sends++; return response({ code: 1000, success: true }); };
+  const result = await notifyWxPusherForNewBscCandidates({
+    WXPUSHER_APP_TOKEN: "test-token", WXPUSHER_UID: "test-uid",
+    RADAR_KV: { get: async () => { throw new Error("KV unavailable"); }, put: async () => {} }
+  }, { ok: true, priorityWatchlist: [{
+    tokenAddress: "0x1111111111111111111111111111111111111111",
+    priorityWatchlistEligible: true, watchlistTier: "priority_watchlist",
+    userReportedRiskStatus: "none", historicalRiskStatus: "stable",
+    tradeFlowStatus: "mixed_flow", liquidityUSDApprox: 6000, earlySignalScore: 80,
+    watchlistExclusionReasons: []
+  }] });
+  assert.equal(result.status, "dedupe_unavailable");
+  assert.equal(sends, 0);
+});
+
+test("WxPusher notifier treats provider rejection as failure and does not mark tokens sent", async () => {
+  let writes = 0;
+  globalThis.fetch = async () => response({ code: 4001, success: false }, 502);
+  const result = await notifyWxPusherForNewBscCandidates({
+    WXPUSHER_APP_TOKEN: "test-token", WXPUSHER_UID: "test-uid",
+    RADAR_KV: { get: async () => null, put: async () => { writes++; } }
+  }, { ok: true, priorityWatchlist: [{
+    tokenAddress: "0x1111111111111111111111111111111111111111",
+    priorityWatchlistEligible: true, watchlistTier: "priority_watchlist",
+    userReportedRiskStatus: "none", historicalRiskStatus: "stable",
+    tradeFlowStatus: "mixed_flow", liquidityUSDApprox: 6000, earlySignalScore: 80,
+    watchlistExclusionReasons: [], poolUrl: "https://evil.example/phishing"
+  }] });
+  assert.equal(result.status, "send_failed");
+  assert.equal(writes, 0);
+});
+
+test("WxPusher notifier sends deterministic token links and records accepted delivery", async () => {
+  let body;
+  const writes = [];
+  globalThis.fetch = async (_url, options) => {
+    body = JSON.parse(options.body);
+    assert.equal(options.signal instanceof AbortSignal, true);
+    return response({ code: 1000, success: true });
+  };
+  const result = await notifyWxPusherForNewBscCandidates({
+    WXPUSHER_APP_TOKEN: "test-token", WXPUSHER_UID: "test-uid",
+    RADAR_KV: { get: async () => null, put: async (...args) => { writes.push(args); } }
+  }, { ok: true, priorityWatchlist: [{
+    tokenAddress: "0x1111111111111111111111111111111111111111",
+    priorityWatchlistEligible: true, watchlistTier: "priority_watchlist",
+    userReportedRiskStatus: "none", historicalRiskStatus: "stable",
+    tradeFlowStatus: "mixed_flow", liquidityUSDApprox: 6000, earlySignalScore: 80,
+    watchlistExclusionReasons: [], poolUrl: "https://evil.example/phishing"
+  }] });
+  assert.equal(result.status, "accepted");
+  assert.equal(result.notifiedCount, 1);
+  assert.match(body.content, /https:\/\/bscscan\.com\/token\/0x1111111111111111111111111111111111111111/);
+  assert.equal(body.content.includes("evil.example"), false);
+  assert.equal(writes.length, 1);
 });
