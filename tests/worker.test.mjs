@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics, solanaRpcCallRaw } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -31,7 +31,19 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcHttpStatus: 404,
     rpcResponseHint: "json_rpc_error",
     rpcJsonErrorCode: "-32000",
-    rpcJsonErrorKind: "route_not_found"
+    rpcJsonErrorKind: "route_not_found",
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
+  });
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics(
+    "Solana RPC HTTP 404 (json_error, code 404, kind route_not_found, shape object, json_keys code+message+status_code)"
+  ), {
+    rpcHttpStatus: 404,
+    rpcResponseHint: "json_error",
+    rpcJsonErrorCode: "404",
+    rpcJsonErrorKind: "route_not_found",
+    rpcJsonErrorShape: "object",
+    rpcJsonTopLevelKeys: ["code", "message", "status_code"]
   });
   assert.deepEqual(parseSolanaRpcErrorDiagnostics(
     "Solana RPC HTTP 429 (provider cooldown)"
@@ -39,7 +51,9 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcHttpStatus: 429,
     rpcResponseHint: null,
     rpcJsonErrorCode: null,
-    rpcJsonErrorKind: null
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
   });
   assert.deepEqual(parseSolanaRpcErrorDiagnostics(
     "Solana RPC shared cooldown HTTP 429"
@@ -47,14 +61,40 @@ test("Solana RPC errors expose structured sanitized HTTP and JSON diagnostics", 
     rpcHttpStatus: 429,
     rpcResponseHint: null,
     rpcJsonErrorCode: null,
-    rpcJsonErrorKind: null
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
   });
   assert.deepEqual(parseSolanaRpcErrorDiagnostics("network timeout"), {
     rpcHttpStatus: null,
     rpcResponseHint: null,
     rpcJsonErrorCode: null,
-    rpcJsonErrorKind: null
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
   });
+});
+
+test("Solana RPC producer emits only allow-listed JSON shape hints", async () => {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    message: "route not found",
+    status_code: 404,
+    api_key: "must-not-leak",
+    endpoint: "https://private.example/secret"
+  }), {
+    status: 404,
+    headers: { "content-type": "application/json" }
+  });
+
+  await assert.rejects(
+    solanaRpcCallRaw("https://rpc.invalid.test", "getHealth", []),
+    error => {
+      assert.match(error.message, /shape object/);
+      assert.match(error.message, /json_keys message\+status_code/);
+      assert.doesNotMatch(error.message, /api_key|must-not-leak|private\.example|secret/i);
+      return true;
+    }
+  );
 });
 
 test("Solana quote liquidity uses USD stablecoin reserves or a valid SOL/USD price", () => {
@@ -2608,4 +2648,46 @@ test("multichain candidate disposition excludes severe dumps and deprioritizes r
   assert.equal(balanced.quoteAssetGroup, "usdt_direct_pool");
   assert.equal(balanced.candidateDisposition, "unclassified_review");
   assert.equal(balanced.walletRouteStatus, "not_verified");
+});
+
+
+test("Solana RPC JSON diagnostics expose only sanitized top-level shape hints", () => {
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics(
+    "Solana RPC HTTP 404 (json_error, code 404, kind route_not_found, shape object, json_keys code+message+status_code)"
+  ), {
+    rpcHttpStatus: 404,
+    rpcResponseHint: "json_error",
+    rpcJsonErrorCode: "404",
+    rpcJsonErrorKind: "route_not_found",
+    rpcJsonErrorShape: "object",
+    rpcJsonTopLevelKeys: ["code", "message", "status_code"]
+  });
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics(
+    "Solana RPC HTTP 429 (provider cooldown)"
+  ), {
+    rpcHttpStatus: 429,
+    rpcResponseHint: null,
+    rpcJsonErrorCode: null,
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
+  });
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics(
+    "Solana RPC shared cooldown HTTP 429"
+  ), {
+    rpcHttpStatus: 429,
+    rpcResponseHint: null,
+    rpcJsonErrorCode: null,
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
+  });
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics("network timeout"), {
+    rpcHttpStatus: null,
+    rpcResponseHint: null,
+    rpcJsonErrorCode: null,
+    rpcJsonErrorKind: null,
+    rpcJsonErrorShape: null,
+    rpcJsonTopLevelKeys: []
+  });
 });

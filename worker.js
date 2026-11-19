@@ -1507,15 +1507,19 @@ export function parseSolanaRpcErrorDiagnostics(error) {
   const hintMatch = message.match(/\((empty_response|json_response|json_rpc_error|json_error|html_error_page|text_response|unknown_response)(?:,|\))/i);
   const codeMatch = message.match(/,\s*code\s+([a-zA-Z0-9_-]{1,24})/i);
   const kindMatch = message.match(/,\s*kind\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
+  const shapeMatch = message.match(/,\s*shape\s+(object|array|scalar)/i);
+  const keysMatch = message.match(/,\s*json_keys\s+([a-z_+]{1,64})/i);
   return {
     rpcHttpStatus: statusMatch ? Number(statusMatch[1]) : null,
     rpcResponseHint: hintMatch ? hintMatch[1].toLowerCase() : null,
     rpcJsonErrorCode: codeMatch ? codeMatch[1] : null,
-    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null
+    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null,
+    rpcJsonErrorShape: shapeMatch ? shapeMatch[1].toLowerCase() : null,
+    rpcJsonTopLevelKeys: keysMatch ? keysMatch[1].split("+") : []
   };
 }
 
-async function solanaRpcCallRaw(rpcUrl, method, params) {
+export async function solanaRpcCallRaw(rpcUrl, method, params) {
   // Cool down each RPC endpoint independently. A primary 429 must not block
   // an independently operated fallback before the fallback request is sent.
   // Store only the hostname in the cache key; never persist API-key paths/query strings.
@@ -1552,6 +1556,8 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     let responseHint = "unknown_response";
     let jsonErrorCode = "";
     let jsonErrorKind = "";
+    let jsonErrorShape = "";
+    let jsonTopLevelKeys = [];
     const responseContentType = String(response.headers.get("content-type") || "").toLowerCase();
     let responseText = "";
     try { responseText = await response.text(); } catch (_) {}
@@ -1561,6 +1567,18 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
       responseHint = "json_response";
       try {
         const parsedError = JSON.parse(responseText);
+        jsonErrorShape = Array.isArray(parsedError)
+          ? "array"
+          : parsedError !== null && typeof parsedError === "object" ? "object" : "scalar";
+        const allowedTopLevelKeys = new Set([
+          "code", "data", "error", "jsonrpc", "message", "result", "status", "status_code"
+        ]);
+        if (jsonErrorShape === "object") {
+          jsonTopLevelKeys = Object.keys(parsedError)
+            .filter(key => allowedTopLevelKeys.has(key))
+            .sort()
+            .slice(0, 8);
+        }
         const rawCode = parsedError && parsedError.error && parsedError.error.code;
         if (rawCode !== undefined && rawCode !== null) {
           jsonErrorCode = String(rawCode).slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "");
@@ -1599,7 +1617,9 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     }
     throw new Error("Solana RPC HTTP " + response.status + " (" + responseHint +
       (jsonErrorCode ? ", code " + jsonErrorCode : "") +
-      (jsonErrorKind ? ", kind " + jsonErrorKind : "") + ")");
+      (jsonErrorKind ? ", kind " + jsonErrorKind : "") +
+      (jsonErrorShape ? ", shape " + jsonErrorShape : "") +
+      (jsonTopLevelKeys.length ? ", json_keys " + jsonTopLevelKeys.join("+") : "") + ")");
   }
   let body;
   try { body = await response.json(); }
