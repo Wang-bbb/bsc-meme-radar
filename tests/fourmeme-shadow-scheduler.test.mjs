@@ -120,6 +120,49 @@ test("provider errors are recorded without exposing the RPC endpoint", async () 
   assert.equal(JSON.stringify(await readFourMemeShadowStatus(kv, true)).includes(secret), false);
 });
 
+test("enabled status marks old successful records stale after three cron intervals", async () => {
+  const kv = new MemoryKV();
+  const updatedAt = "2026-11-19T00:00:00.000Z";
+  kv.data.set(STATUS_KEY, JSON.stringify({
+    status: "ok",
+    enabled: true,
+    updatedAt
+  }));
+  const status = await readFourMemeShadowStatus(kv, true, Date.parse("2026-11-19T00:31:00.000Z"));
+  assert.equal(status.status, "stale");
+  assert.equal(status.lastRunAt, updatedAt);
+  assert.equal(status.lastStatus.status, "ok");
+  assert.equal(status.staleAfterSeconds, 1800);
+});
+
+test("enabled status includes age for a fresh persisted record", async () => {
+  const kv = new MemoryKV();
+  kv.data.set(STATUS_KEY, JSON.stringify({
+    status: "ok",
+    enabled: true,
+    updatedAt: "2026-11-19T00:00:00.000Z"
+  }));
+  const status = await readFourMemeShadowStatus(kv, true, Date.parse("2026-11-19T00:10:00.000Z"));
+  assert.equal(status.status, "ok");
+  assert.equal(status.statusAgeSeconds, 600);
+});
+
+test("enabled status rejects invalid or future timestamps", async () => {
+  const kv = new MemoryKV();
+  kv.data.set(STATUS_KEY, JSON.stringify({
+    status: "ok",
+    enabled: true,
+    updatedAt: "not-a-date"
+  }));
+  assert.equal((await readFourMemeShadowStatus(kv, true, Date.parse("2026-11-19T00:10:00.000Z"))).status, "status_corrupt");
+  kv.data.set(STATUS_KEY, JSON.stringify({
+    status: "ok",
+    enabled: true,
+    updatedAt: "2026-11-19T01:00:00.000Z"
+  }));
+  assert.equal((await readFourMemeShadowStatus(kv, true, Date.parse("2026-11-19T00:10:00.000Z"))).status, "status_corrupt");
+});
+
 test("enabled status reports corrupt persisted JSON instead of claiming not_started", async () => {
   const kv = new MemoryKV();
   kv.data.set(STATUS_KEY, "{invalid-json");
