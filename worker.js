@@ -26,6 +26,21 @@ const HEADERS = {
   "cache-control": "no-store"
 };
 const json = (data, status) => new Response(JSON.stringify(data), { status: status || 200, headers: HEADERS });
+export function isWxPusherCandidateEligible(pool) {
+  const liquidity = Number(pool && pool.liquidityUSDApprox);
+  const score = Number(pool && pool.earlySignalScore);
+  return Boolean(pool &&
+    pool.priorityWatchlistEligible === true &&
+    pool.watchlistTier === "priority_watchlist" &&
+    pool.userReportedRiskStatus === "none" &&
+    pool.historicalRiskStatus === "stable" &&
+    pool.tradeFlowStatus === "mixed_flow" &&
+    Number.isFinite(liquidity) && liquidity >= 5000 &&
+    Number.isFinite(score) && score >= 65 &&
+    Array.isArray(pool.watchlistExclusionReasons) &&
+    pool.watchlistExclusionReasons.length === 0);
+}
+
 // WxPusher delivery is intentionally isolated from scanning and ranking logic.
 // Only newly observed, conservative priority-watchlist BSC tokens are notified.
 async function notifyWxPusherForNewBscCandidates(env, payload) {
@@ -45,15 +60,7 @@ async function notifyWxPusherForNewBscCandidates(env, payload) {
     for (const pool of payload.priorityWatchlist) {
       const tokenAddress = String(pool && pool.tokenAddress || "").toLowerCase();
       if (!/^0x[a-f0-9]{40}$/.test(tokenAddress) || seenTokens.has(tokenAddress)) continue;
-      if (pool.priorityWatchlistEligible !== true ||
-          pool.watchlistTier !== "priority_watchlist" ||
-          pool.userReportedRiskStatus !== "none" ||
-          pool.historicalRiskStatus !== "stable" ||
-          pool.tradeFlowStatus !== "mixed_flow" ||
-          Number(pool.liquidityUSDApprox) < 5000 ||
-          Number(pool.earlySignalScore) < 65 ||
-          !Array.isArray(pool.watchlistExclusionReasons) ||
-          pool.watchlistExclusionReasons.length !== 0) continue;
+      if (!isWxPusherCandidateEligible(pool)) continue;
 
       seenTokens.add(tokenAddress);
       const key = "wxpusher:bsc-token-notified:v1:" + tokenAddress;
@@ -81,7 +88,7 @@ async function notifyWxPusherForNewBscCandidates(env, payload) {
       "买/卖笔数：" + (pool.buysSincePoolCreation == null ? "未知" : pool.buysSincePoolCreation) + "/" +
         (pool.sellsSincePoolCreation == null ? "未知" : pool.sellsSincePoolCreation),
       "代币：" + pool.tokenAddress,
-      pool.poolUrl || ("https://bscscan.com/token/" + pool.tokenAddress),
+      "https://bscscan.com/token/" + tokenAddress,
       ""
     );
   }
