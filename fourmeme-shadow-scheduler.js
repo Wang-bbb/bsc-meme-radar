@@ -8,9 +8,21 @@ const START_BLOCK_TTL_SECONDS = 365 * 24 * 60 * 60;
 const BLOCK_RETRY_STEPS = [250, 125, 62, 31, 15, 7, 3, 1];
 
 function parseStored(value) {
-  if (value == null) return null;
-  if (typeof value === "object") return value;
-  try { return JSON.parse(value); } catch { return null; }
+  if (value == null) return { valid: true, value: null };
+  if (typeof value === "object") {
+    return value && !Array.isArray(value) && typeof value.status === "string"
+      ? { valid: true, value }
+      : { valid: false, value: null };
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+      typeof parsed.status === "string"
+      ? { valid: true, value: parsed }
+      : { valid: false, value: null };
+  } catch {
+    return { valid: false, value: null };
+  }
 }
 
 async function writeStatus(kv, value) {
@@ -29,10 +41,10 @@ export async function readFourMemeShadowStatus(kv, enabled) {
   if (!active) {
     return { enabled: false, status: "disabled", lastRunAt: null };
   }
-  let lastStatus = null;
+  let parsedStatus = { valid: true, value: null };
   try {
     if (kv && typeof kv.get === "function") {
-      lastStatus = parseStored(await kv.get(STATUS_KEY));
+      parsedStatus = parseStored(await kv.get(STATUS_KEY));
     }
   } catch {
     return { enabled: true, status: "status_unavailable" };
@@ -40,8 +52,11 @@ export async function readFourMemeShadowStatus(kv, enabled) {
   if (!kv || typeof kv.get !== "function") {
     return { enabled: true, status: "not_configured", reason: "RADAR_KV binding missing" };
   }
-  return lastStatus
-    ? { enabled: true, ...lastStatus }
+  if (!parsedStatus.valid) {
+    return { enabled: true, status: "status_corrupt" };
+  }
+  return parsedStatus.value
+    ? { ...parsedStatus.value, enabled: true }
     : { enabled: true, status: "not_started" };
 }
 
