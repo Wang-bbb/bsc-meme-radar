@@ -4,6 +4,7 @@ import { createNodeRealFourMemeRpcAdapter } from "./fourmeme-nodereal-adapter.js
 const STATUS_KEY = "fourmeme:v2:collector:status";
 const START_BLOCK_KEY = "fourmeme:v2:collector:start-block";
 const STATUS_TTL_SECONDS = 7 * 24 * 60 * 60;
+const STATUS_STALE_AFTER_MS = 30 * 60 * 1000;
 const START_BLOCK_TTL_SECONDS = 365 * 24 * 60 * 60;
 const BLOCK_RETRY_STEPS = [250, 125, 62, 31, 15, 7, 3, 1];
 
@@ -34,7 +35,7 @@ async function writeStatus(kv, value) {
   }
 }
 
-export async function readFourMemeShadowStatus(kv, enabled) {
+export async function readFourMemeShadowStatus(kv, enabled, nowMs = Date.now()) {
   const active = enabled === true;
   // Disabled status checks must not touch KV; the feature's off state is
   // intentionally a zero-read, zero-write, zero-RPC path.
@@ -55,9 +56,31 @@ export async function readFourMemeShadowStatus(kv, enabled) {
   if (!parsedStatus.valid) {
     return { enabled: true, status: "status_corrupt" };
   }
-  return parsedStatus.value
-    ? { ...parsedStatus.value, enabled: true }
-    : { enabled: true, status: "not_started" };
+  if (!parsedStatus.value) {
+    return { enabled: true, status: "not_started" };
+  }
+  const updatedAtMs = Date.parse(parsedStatus.value.updatedAt);
+  if (!Number.isFinite(updatedAtMs) || !Number.isFinite(nowMs)) {
+    return { enabled: true, status: "status_corrupt" };
+  }
+  const ageMs = nowMs - updatedAtMs;
+  if (ageMs < -5 * 60 * 1000) {
+    return { enabled: true, status: "status_corrupt" };
+  }
+  if (ageMs > STATUS_STALE_AFTER_MS) {
+    return {
+      enabled: true,
+      status: "stale",
+      lastRunAt: parsedStatus.value.updatedAt,
+      staleAfterSeconds: STATUS_STALE_AFTER_MS / 1000,
+      lastStatus: parsedStatus.value
+    };
+  }
+  return {
+    ...parsedStatus.value,
+    enabled: true,
+    statusAgeSeconds: Math.max(0, Math.floor(ageMs / 1000))
+  };
 }
 
 /**
