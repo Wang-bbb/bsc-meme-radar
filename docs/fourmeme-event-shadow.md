@@ -1,8 +1,8 @@
-# Four.meme TokenManager2 event shadow
+# Four.meme TokenManager2 event shadow — GPT-Radar-FourMeme v0.1.0
 
 ## Purpose
 
-This is a read-only, isolated foundation for observing Four.meme BSC V2 launches and their subsequent on-chain activity. The decoder does not fetch RPC data; the collector accepts injected RPC/KV adapters but does not configure providers, run on a schedule, expose a Worker route, notify, rank, or change candidate eligibility.
+This is the read-only GPT-Radar-FourMeme v0.1.0 implementation. The decoder does not fetch RPC data; the collector accepts injected RPC/KV adapters. The separate opt-in scheduler described below is still a Draft integration in PR #100: it wires the existing NodeReal/KV adapters to a bounded Cron and read-only status route, but remains disabled unless `FOURMEME_SHADOW_ENABLED=true` and has not been merged or deployed. Four.meme observations do not notify, rank candidates, change eligibility, or declare tokens safe.
 
 Official reference:
 - TokenManager2 BSC: `0x5c952063c7fc8610FFDB798152D69F0B9550762b`
