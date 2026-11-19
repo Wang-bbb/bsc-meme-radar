@@ -53,6 +53,13 @@ test("invalid percentages and non-finite metrics are rejected as unknown", () =>
   assert.equal(evaluateWalletQuality(goodWallet({ rugExposurePct: -1 })).status, "unknown");
 });
 
+test("malformed EVM addresses and unsupported chains remain unknown", () => {
+  assert.equal(evaluateWalletQuality(goodWallet({ address: "wallet-1" })).status, "unknown");
+  assert.equal(evaluateWalletQuality(goodWallet({ address: "0x1234" })).status, "unknown");
+  assert.equal(evaluateWalletQuality(goodWallet({ chain: "solana" })).status, "unknown");
+  assert.equal(evaluateWalletQuality(goodWallet({ chain: "bsc " })).status, "higher_quality");
+});
+
 test("zero and burn addresses are excluded from wallet scoring", () => {
   assert.equal(isExcludedSystemAddress("0x0000000000000000000000000000000000000000"), true);
   assert.equal(isExcludedSystemAddress("0x000000000000000000000000000000000000dEaD"), true);
@@ -65,10 +72,10 @@ test("zero and burn addresses are excluded from wallet scoring", () => {
 
 test("cohort retention is calculated only with at least five known positions", () => {
   const result = analyzeEarlyBuyerCohort([
-    { address: "a", holdingStatus: "holding" },
-    { address: "b", holdingStatus: "sold" },
-    { address: "c", holdingStatus: "unknown" },
-    { address: "d", holdingStatus: "holding" }
+    { address: "0x0000000000000000000000000000000000000001", holdingStatus: "holding" },
+    { address: "0x0000000000000000000000000000000000000002", holdingStatus: "sold" },
+    { address: "0x0000000000000000000000000000000000000003", holdingStatus: "unknown" },
+    { address: "0x0000000000000000000000000000000000000004", holdingStatus: "holding" }
   ]);
   assert.equal(result.retentionRatePct, null);
   assert.equal(result.status, "insufficient");
@@ -76,7 +83,7 @@ test("cohort retention is calculated only with at least five known positions", (
 
 test("low early-buyer retention raises a review flag", () => {
   const wallets = Array.from({ length: 5 }, (_, i) => ({
-    address: `wallet-${i}`,
+    address: "0x" + (i + 10).toString(16).padStart(40, "0"),
     holdingStatus: i === 0 ? "holding" : "sold"
   }));
   const result = analyzeEarlyBuyerCohort(wallets);
@@ -86,7 +93,7 @@ test("low early-buyer retention raises a review flag", () => {
 
 test("shared funding and synchronized buys are correlation flags, not ownership claims", () => {
   const wallets = Array.from({ length: 5 }, (_, i) => ({
-    address: `wallet-${i}`,
+    address: "0x" + (i + 20).toString(16).padStart(40, "0"),
     holdingStatus: "holding",
     fundingSourceId: i < 3 ? "funding-cluster-a" : `funding-${i}`,
     synchronizedBuyGroupId: i < 4 ? "sync-group-a" : ""
@@ -100,8 +107,8 @@ test("shared funding and synchronized buys are correlation flags, not ownership 
 
 test("duplicate addresses and burn addresses do not inflate cohort size", () => {
   const result = analyzeEarlyBuyerCohort([
-    { address: "0xABC", holdingStatus: "holding" },
-    { address: "0xabc", holdingStatus: "sold" },
+    { address: "0x00000000000000000000000000000000000000ab", holdingStatus: "holding" },
+    { address: "0x00000000000000000000000000000000000000AB", holdingStatus: "sold" },
     { address: "0x000000000000000000000000000000000000dead", holdingStatus: "holding" }
   ]);
   assert.equal(result.cohortSize, 1);
