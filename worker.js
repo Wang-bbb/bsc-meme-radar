@@ -1502,7 +1502,7 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // It deliberately does NOT manufacture pool candidates: pool address, token
 // side, liquidity and tradeability require a protocol-specific decoder.
 const SOLANA_RPC_JSON_DIAGNOSTIC_KEYS = new Set([
-  "code", "message", "status", "error", "data", "details", "errors", "result", "id", "jsonrpc"
+  "code", "message", "status", "status_code", "error", "data", "details", "errors", "result", "id", "jsonrpc"
 ]);
 
 export function describeSolanaRpcJsonShape(value) {
@@ -1522,6 +1522,10 @@ export function parseSolanaRpcErrorDiagnostics(error) {
   const codeMatch = message.match(/,\s*code\s+([a-zA-Z0-9_-]{1,24})/i);
   const kindMatch = message.match(/,\s*kind\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
   const shapeMatch = message.match(/,\s*shape\s+(object|array|scalar)/i);
+  const keysMatch = message.match(/,\\s*json_keys\\s+([a-z_+]{1,128})/i);
+  const allowedKeys = new Set(SOLANA_RPC_JSON_DIAGNOSTIC_KEYS);
+  const safeKeys = keysMatch ? [...new Set(keysMatch[1].toLowerCase().split("+"))]
+    .filter(key => allowedKeys.has(key)).slice(0, 8).sort() : [];
   const keysMatch = message.match(/,\s*json_keys\s+([a-z_+]{1,64})/i);
   return {
     rpcHttpStatus: statusMatch ? Number(statusMatch[1]) : null,
