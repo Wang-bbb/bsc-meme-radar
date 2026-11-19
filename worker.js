@@ -80,6 +80,7 @@ export async function notifyWxPusherForNewBscCandidates(env, payload) {
     ""
   ];
   for (const { pool } of selected) {
+    const tokenAddress = String(pool.tokenAddress).toLowerCase();
     lines.push(
       (pool.name || pool.symbol || "未命名代币") + (pool.symbol ? " (" + pool.symbol + ")" : ""),
       "流动性估算：$" + Math.round(Number(pool.liquidityUSDApprox) || 0).toLocaleString("en-US"),
