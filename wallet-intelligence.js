@@ -10,6 +10,8 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const finiteNumber = value => value !== null && value !== undefined &&
   value !== "" && Number.isFinite(Number(value));
 const normalizeAddress = value => typeof value === "string" ? value.trim().toLowerCase() : "";
+const EVM_ADDRESS_RE = /^0x[a-f0-9]{40}$/;
+const isValidEvmAddress = value => EVM_ADDRESS_RE.test(normalizeAddress(value));
 
 const BURN_OR_NULL_ADDRESSES = new Set([
   "0x0000000000000000000000000000000000000000",
@@ -31,9 +33,14 @@ export function isExcludedSystemAddress(address) {
  */
 export function evaluateWalletQuality(wallet) {
   const address = normalizeAddress(wallet && wallet.address);
-  const chain = typeof (wallet && wallet.chain) === "string" ? wallet.chain.toLowerCase() : "";
-  if (!address || !chain) {
-    return { status: "unknown", score: null, reasons: ["钱包地址或链信息缺失"], evidenceComplete: false };
+  const chain = typeof (wallet && wallet.chain) === "string" ? wallet.chain.trim().toLowerCase() : "";
+  if (!isValidEvmAddress(address) || chain !== "bsc") {
+    return {
+      status: "unknown",
+      score: null,
+      reasons: ["钱包地址格式无效，或链不是当前已验证的 BSC"],
+      evidenceComplete: false
+    };
   }
   if (isExcludedSystemAddress(address)) {
     return { status: "excluded", score: null, reasons: ["零地址或销毁地址不作为普通钱包质量样本"], evidenceComplete: false };
@@ -100,7 +107,7 @@ export function analyzeEarlyBuyerCohort(wallets, options = {}) {
   const cohort = [];
   for (const item of input) {
     const address = normalizeAddress(item && item.address);
-    if (!address || isExcludedSystemAddress(address) || seen.has(address)) continue;
+    if (!isValidEvmAddress(address) || isExcludedSystemAddress(address) || seen.has(address)) continue;
     seen.add(address);
     cohort.push({ ...item, address });
   }
