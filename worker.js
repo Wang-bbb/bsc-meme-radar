@@ -1501,6 +1501,20 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // launch/DEX programs and extracts explicit SPL mint-initialization evidence.
 // It deliberately does NOT manufacture pool candidates: pool address, token
 // side, liquidity and tradeability require a protocol-specific decoder.
+const SOLANA_RPC_JSON_DIAGNOSTIC_KEYS = new Set([
+  "code", "message", "status", "error", "data", "details", "errors", "result", "id", "jsonrpc"
+]);
+
+export function describeSolanaRpcJsonShape(value) {
+  const shape = value !== null && typeof value === "object"
+    ? Array.isArray(value) ? "array" : "object"
+    : "scalar";
+  const keys = shape === "object"
+    ? Object.keys(value).filter(key => SOLANA_RPC_JSON_DIAGNOSTIC_KEYS.has(key)).sort().slice(0, 8)
+    : [];
+  return { shape, keys };
+}
+
 export function parseSolanaRpcErrorDiagnostics(error) {
   const message = String(error || "");
   const statusMatch = message.match(/Solana RPC (?:shared cooldown )?HTTP\s+(\d{3})/i);
@@ -1515,7 +1529,7 @@ export function parseSolanaRpcErrorDiagnostics(error) {
     rpcJsonErrorCode: codeMatch ? codeMatch[1] : null,
     rpcJsonErrorKind: kindMatch ? kindMatch[1] : null,
     rpcJsonErrorShape: shapeMatch ? shapeMatch[1].toLowerCase() : null,
-    rpcJsonTopLevelKeys: keysMatch ? keysMatch[1].split("+") : []
+    rpcJsonTopLevelKeys: safeKeys
   };
 }
 
@@ -1565,6 +1579,7 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
       responseHint = "json_response";
       try {
         const parsedError = JSON.parse(responseText);
+        const jsonShape = describeSolanaRpcJsonShape(parsedError);
         const rawCode = parsedError && parsedError.error && parsedError.error.code;
         if (rawCode !== undefined && rawCode !== null) {
           jsonErrorCode = String(rawCode).slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "");
@@ -1603,7 +1618,9 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     }
     throw new Error("Solana RPC HTTP " + response.status + " (" + responseHint +
       (jsonErrorCode ? ", code " + jsonErrorCode : "") +
-      (jsonErrorKind ? ", kind " + jsonErrorKind : "") + ")");
+      (jsonErrorKind ? ", kind " + jsonErrorKind : "") +
+      (jsonShape ? ", shape " + jsonShape.shape : "") +
+      (jsonShape && jsonShape.keys.length ? ", json_keys " + jsonShape.keys.join("+") : "") + ")");
   }
   let body;
   try { body = await response.json(); }
