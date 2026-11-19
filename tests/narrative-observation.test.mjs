@@ -114,6 +114,5 @@ test("empty expected sources never imply complete coverage", () => {
     nowMs: now,
     observations: [row("weibo", now - 1000), row("douyin", now - 2000)]
   });
-  assert.equal(result[0].coverageComplete, false);
-  assert.equal(result[0].state, "insufficient_coverage");
+  assert.deepEqual(result, []);
 });
