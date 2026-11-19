@@ -1501,20 +1501,6 @@ const SOLANA_DISCOVERY_PROGRAMS = [
 // launch/DEX programs and extracts explicit SPL mint-initialization evidence.
 // It deliberately does NOT manufacture pool candidates: pool address, token
 // side, liquidity and tradeability require a protocol-specific decoder.
-const SOLANA_RPC_JSON_DIAGNOSTIC_KEYS = new Set([
-  "code", "message", "status", "status_code", "error", "data", "details", "errors", "result", "id", "jsonrpc"
-]);
-
-export function describeSolanaRpcJsonShape(value) {
-  const shape = value !== null && typeof value === "object"
-    ? Array.isArray(value) ? "array" : "object"
-    : "scalar";
-  const keys = shape === "object"
-    ? Object.keys(value).filter(key => SOLANA_RPC_JSON_DIAGNOSTIC_KEYS.has(key)).sort().slice(0, 8)
-    : [];
-  return { shape, keys };
-}
-
 export function parseSolanaRpcErrorDiagnostics(error) {
   const message = String(error || "");
   const statusMatch = message.match(/Solana RPC (?:shared cooldown )?HTTP\s+(\d{3})/i);
@@ -1522,17 +1508,14 @@ export function parseSolanaRpcErrorDiagnostics(error) {
   const codeMatch = message.match(/,\s*code\s+([a-zA-Z0-9_-]{1,24})/i);
   const kindMatch = message.match(/,\s*kind\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
   const shapeMatch = message.match(/,\s*shape\s+(object|array|scalar)/i);
-  const keysMatch = message.match(/,\s*json_keys\s+([a-z_+]{1,128})/i);
-  const allowedKeys = new Set(SOLANA_RPC_JSON_DIAGNOSTIC_KEYS);
-  const safeKeys = keysMatch ? [...new Set(keysMatch[1].toLowerCase().split("+"))]
-    .filter(key => allowedKeys.has(key)).slice(0, 8).sort() : [];
+  const keysMatch = message.match(/,\s*json_keys\s+([a-z_+]{1,64})/i);
   return {
     rpcHttpStatus: statusMatch ? Number(statusMatch[1]) : null,
     rpcResponseHint: hintMatch ? hintMatch[1].toLowerCase() : null,
     rpcJsonErrorCode: codeMatch ? codeMatch[1] : null,
     rpcJsonErrorKind: kindMatch ? kindMatch[1] : null,
     rpcJsonErrorShape: shapeMatch ? shapeMatch[1].toLowerCase() : null,
-    rpcJsonTopLevelKeys: safeKeys
+    rpcJsonTopLevelKeys: keysMatch ? keysMatch[1].split("+") : []
   };
 }
 
@@ -1573,7 +1556,6 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     let responseHint = "unknown_response";
     let jsonErrorCode = "";
     let jsonErrorKind = "";
-    let jsonShape = null;
     const responseContentType = String(response.headers.get("content-type") || "").toLowerCase();
     let responseText = "";
     try { responseText = await response.text(); } catch (_) {}
@@ -1583,7 +1565,6 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
       responseHint = "json_response";
       try {
         const parsedError = JSON.parse(responseText);
-        jsonShape = describeSolanaRpcJsonShape(parsedError);
         const rawCode = parsedError && parsedError.error && parsedError.error.code;
         if (rawCode !== undefined && rawCode !== null) {
           jsonErrorCode = String(rawCode).slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "");
@@ -1622,9 +1603,7 @@ async function solanaRpcCallRaw(rpcUrl, method, params) {
     }
     throw new Error("Solana RPC HTTP " + response.status + " (" + responseHint +
       (jsonErrorCode ? ", code " + jsonErrorCode : "") +
-      (jsonErrorKind ? ", kind " + jsonErrorKind : "") +
-      (jsonShape ? ", shape " + jsonShape.shape : "") +
-      (jsonShape && jsonShape.keys.length ? ", json_keys " + jsonShape.keys.join("+") : "") + ")");
+      (jsonErrorKind ? ", kind " + jsonErrorKind : "") + ")");
   }
   let body;
   try { body = await response.json(); }
