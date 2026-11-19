@@ -22,7 +22,7 @@ const makeLog = () => ({
   data: "0x" + [0, 5n, 100n, 0].map(word).join(""),
   transactionHash: hash,
   logIndex: "0x2",
-  blockNumber: "0x100"
+  blockNumber: "0x3e8"
 });
 function memoryKv() {
   const values = new Map();
