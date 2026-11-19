@@ -55,7 +55,14 @@ export function evaluateNarrativeEvidence({
   const statusBySource = new Map();
   for (const item of sourceStatuses) {
     const source = normalizeSource(item?.source);
-    if (source) statusBySource.set(source, String(item?.status ?? "unknown"));
+    if (!source) continue;
+    const status = String(item?.status ?? "unknown").trim().toLowerCase();
+    if (!statusBySource.has(source)) {
+      statusBySource.set(source, status);
+    } else if (statusBySource.get(source) !== status) {
+      // Conflicting health records for one source are ambiguous; fail closed.
+      statusBySource.set(source, "conflict");
+    }
   }
 
   const unavailableSources = expected.filter(source => statusBySource.get(source) !== "ok");
