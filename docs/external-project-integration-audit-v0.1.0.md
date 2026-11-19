@@ -74,9 +74,10 @@ The current main branch already documents or contains:
 - Solana PumpSwap and Raydium CPMM protocol-level pool decoding and bounded RPC cross-checks.
 - Four.meme TokenManager2 V2 raw event decoding for TokenCreate, TokenPurchase, TokenSale, TradeStop and LiquidityAdded.
 - Finalized-height collection, canonical block-hash checks, replay/reorg handling and bounded KV chunk writes in isolated shadow modules.
-- Narrative observation shadow evaluation and wallet-intelligence shadow evaluation.
+- Narrative and wallet-intelligence shadow work exists as prior PR history, but it is not all present on main. PR #92 (wallet intelligence shadow) and #93 (narrative observation shadow) are closed without merge; PR #102 (narrative source-coverage hardening) and #105 (wallet finality/evidence hardening) are still open Draft PRs at the time of this audit.
+- Four.meme event decoding, the NodeReal adapter, and KV chunk byte cap from #94/#96/#98 are merged into main. PR #100 (opt-in scheduled Four.meme shadow observer) remains open as a Draft PR and is disabled by default.
 
-Relevant existing PRs include #92 (wallet intelligence shadow), #93/#102 (narrative shadow), #94/#96/#98 (Four.meme event/NodeReal/KV shadow foundations), and #100 (opt-in scheduled Four.meme shadow observer, disabled by default). These are not all production-integrated; do not describe shadow-only modules as active production features.
+Do not describe closed-unmerged or Draft PR modules as active production features.
 
 ## Proposed integration architecture
 
