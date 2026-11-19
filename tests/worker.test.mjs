@@ -2636,7 +2636,13 @@ test("WxPusher notifier rejects KV read failures without sending", async () => {
   const result = await notifyWxPusherForNewBscCandidates({
     WXPUSHER_APP_TOKEN: "test-token", WXPUSHER_UID: "test-uid",
     RADAR_KV: { get: async () => { throw new Error("KV unavailable"); }, put: async () => {} }
-  }, { ok: true, priorityWatchlist: [] });
+  }, { ok: true, priorityWatchlist: [{
+    tokenAddress: "0x1111111111111111111111111111111111111111",
+    priorityWatchlistEligible: true, watchlistTier: "priority_watchlist",
+    userReportedRiskStatus: "none", historicalRiskStatus: "stable",
+    tradeFlowStatus: "mixed_flow", liquidityUSDApprox: 6000, earlySignalScore: 80,
+    watchlistExclusionReasons: []
+  }] });
   assert.equal(result.status, "dedupe_unavailable");
   assert.equal(sends, 0);
 });
