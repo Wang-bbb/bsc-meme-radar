@@ -2669,3 +2669,22 @@ test("Solana RPC JSON diagnostics expose only sanitized top-level shape hints", 
     rpcJsonTopLevelKeys: []
   });
 });
+
+
+test("Solana RPC JSON shape hints are emitted from real parsed JSON with allow-listed keys only", async () => {
+  const { describeSolanaRpcJsonShape } = await import("../worker.js");
+  assert.deepEqual(describeSolanaRpcJsonShape({
+    message: "not echoed",
+    code: 404,
+    status: "missing",
+    api_key: "must-not-leak",
+    endpoint: "must-not-leak",
+    nested: { secret: true }
+  }), { shape: "object", keys: ["code", "message", "status"] });
+  assert.deepEqual(describeSolanaRpcJsonShape([1, 2]), { shape: "array", keys: [] });
+  assert.deepEqual(describeSolanaRpcJsonShape("provider text"), { shape: "scalar", keys: [] });
+  assert.deepEqual(describeSolanaRpcJsonShape(null), { shape: "scalar", keys: [] });
+  assert.deepEqual(parseSolanaRpcErrorDiagnostics(
+    "Solana RPC HTTP 404 (json_error, code 404, kind route_not_found, shape object, json_keys api_key+code+message+endpoint+status)"
+  ).rpcJsonTopLevelKeys, ["code", "message", "status"]);
+});
