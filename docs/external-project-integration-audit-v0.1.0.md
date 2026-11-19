@@ -108,3 +108,31 @@ Do not describe closed-unmerged or Draft PR modules as active production feature
 ## Safety note
 
 The X-monitor key-validation implementation is unsafe: Base64 is reversible encoding, not signing. Its hard-coded HTTP request transmits the encoded key material to a remote host. Never provide that project with real wallet credentials.
+
+
+## Follow-up source-level review of existing shadow PRs (2026-11-20)
+
+### Narrative shadow PR #102
+
+- The evaluator is intentionally pure and currently has no real source adapters, scheduler, storage, or entity-to-contract resolver. It is therefore not a live social monitor and cannot yet discover meme tokens by itself.
+- The coverage rule is conservative: all configured expected sources must report `ok`; missing/failed/disabled sources make coverage incomplete. Keep the expected-source list limited to sources actually enabled for that deployment, and expose each source's health in any future report.
+- The two-window momentum calculation requires the same minimum number of sources in both windows. This reduces false acceleration caused by a newly added source, but it does not establish that a narrative refers to a particular token. Human-reviewed entity mapping remains mandatory.
+- Recommendation: retain as a shadow evaluator; do not merge as a complete feature until source adapters, persistent observations, freshness/coverage reporting, mapping review, and historical false-positive tests exist.
+
+### Wallet shadow PR #105
+
+- The wallet evaluator requires supplied closed-token metrics and at least 80% data coverage; it is not a wallet-history provider. No currently verified source in this PR populates full cross-token closed positions, realized PnL, or win rate.
+- The collector is BSC V2-pool-only and only for pools supplied by a caller. It stores transaction initiator observations, not beneficial-owner identities. Routers, relayers and smart accounts can make `transaction.from` differ from the end trader.
+- The collector does not discover pools, calculate USD values, decode V3, or decode Solana transactions. It uses a bounded recent bootstrap and explicitly labels coverage as `observed_pool_only`.
+- The PR documentation itself notes the absence of canonical block-hash checkpoints and same-height reorg rewind in this wallet collector. Finalized height is a strong boundary, but unattended collection should still have a tested canonical checkpoint/reconciliation strategy and visible gaps.
+- Recommendation: do not label wallets as “Smart Money” from these observations. At most display “observed transaction initiator” and observed buy/sell counts for the exact monitored pools. Keep wallet-quality status `unknown` until full history and coverage are independently sourced.
+
+### Four.meme scheduled observer PR #100
+
+- The scheduled handler and Cron trigger are production-facing Worker/config changes even though the feature flag defaults off. A disabled-by-default test is useful but does not make the code documentation-only.
+- Before considering merge/deployment, independently inspect the exact production diff, verify disabled mode causes no RPC/KV writes, verify opt-in configuration cannot be accidentally enabled, measure KV consumption and provider quota, and validate rollback behavior.
+- The first enabled run anchors at the then-current finalized height and intentionally performs no historical backfill. The daily report must not imply that this gives complete historical coverage.
+
+## Integration gate decision
+
+At this stage, PR #106 is a documentation-only audit and its CI passed. Keep #100, #102, and #105 as Draft until their respective runtime, data-quality, coverage, and deployment gates are met. No external repository code has been copied into production, and no production deployment has been performed.
