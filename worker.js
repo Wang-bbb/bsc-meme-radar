@@ -1507,11 +1507,15 @@ export function parseSolanaRpcErrorDiagnostics(error) {
   const hintMatch = message.match(/\((empty_response|json_response|json_rpc_error|json_error|html_error_page|text_response|unknown_response)(?:,|\))/i);
   const codeMatch = message.match(/,\s*code\s+([a-zA-Z0-9_-]{1,24})/i);
   const kindMatch = message.match(/,\s*kind\s+(auth_rejected|access_denied|route_not_found|quota_or_rate_limit|method_unsupported|provider_json_error_other|json_object_without_recognized_error)/i);
+  const shapeMatch = message.match(/,\s*shape\s+(object|array|scalar)/i);
+  const keysMatch = message.match(/,\s*json_keys\s+([a-z_+]{1,64})/i);
   return {
     rpcHttpStatus: statusMatch ? Number(statusMatch[1]) : null,
     rpcResponseHint: hintMatch ? hintMatch[1].toLowerCase() : null,
     rpcJsonErrorCode: codeMatch ? codeMatch[1] : null,
-    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null
+    rpcJsonErrorKind: kindMatch ? kindMatch[1] : null,
+    rpcJsonErrorShape: shapeMatch ? shapeMatch[1].toLowerCase() : null,
+    rpcJsonTopLevelKeys: keysMatch ? keysMatch[1].split("+") : []
   };
 }
 
