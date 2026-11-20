@@ -2634,3 +2634,15 @@ test("scheduled Four.meme observer is a no-op unless explicitly enabled", async 
   assert.equal(result.enabled, false);
   assert.equal(values.has("fourmeme:v2:collector:status"), false, "disabled cron must not write KV");
 });
+
+test("scheduled Four.meme observer rejects a missing configuration outcome", async () => {
+  let task;
+  worker.scheduled({}, { FOURMEME_SHADOW_ENABLED: "true" }, {
+    waitUntil(promise) { task = promise; }
+  });
+  assert.ok(task, "scheduled handler should register its task");
+  await assert.rejects(
+    task,
+    /Four\.meme scheduled observer did not complete cleanly \(not_configured\)/
+  );
+});
