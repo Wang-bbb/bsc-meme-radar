@@ -59,12 +59,12 @@ This feature branch contains the isolated decoder, collector, and NodeReal adapt
 
 ## Latest live finalized-event sample (2026-11-20)
 
-The latest bounded read-only NodeReal smoke (GitHub Actions run #416) observed BSC mainnet chain ID `0x38`, latest block `134738999`, and finalized block `134738997`. Against the official TokenManager2 contract:
+The latest bounded read-only NodeReal smoke (GitHub Actions run #417) observed BSC mainnet chain ID `0x38`, latest block `134739285`, and finalized block `134739283`. Against the official TokenManager2 contract:
 
-- TokenCreate: 6 raw finalized logs; 6 ABI decodes passed in blocks `134736998–134738997`.
+- TokenCreate: 5 raw finalized logs; 5 ABI decodes passed in blocks `134737284–134739283`.
 - TokenPurchase: 47 raw finalized logs; 47 ABI decodes passed in the same 2,000-block window.
-- TokenSale: 56 raw finalized logs; 56 ABI decodes passed in the same 2,000-block window.
-- TradeStop: 0 matching logs in the bounded 20,000-block window `134718998–134738997`.
+- TokenSale: 60 raw finalized logs; 60 ABI decodes passed in the same 2,000-block window.
+- TradeStop: 0 matching logs in the bounded 20,000-block window `134719284–134739283`.
 - LiquidityAdded: 0 matching logs in the same 20,000-block window.
 
 The three observed event types have real finalized-chain samples. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
