@@ -1,4 +1,4 @@
-import { runFourMemeShadowSchedule, readFourMemeShadowStatus } from "./fourmeme-shadow-scheduler.js";
+import { runFourMemeShadowScheduledInvocation, readFourMemeShadowStatus } from "./fourmeme-shadow-scheduler.js";
 const USDT = "0x55d398326f99059ff775485246999027b3197955";
 const USDT_TOPIC = "0x" + USDT.slice(2).toLowerCase().padStart(64, "0");
 const FACTORY = "0xca143ce32fe78f1f7019d7d551a6402fc5350c73";
@@ -4218,6 +4218,6 @@ export default {
     }
   },
   scheduled(controller, env, ctx) {
-    ctx.waitUntil(runFourMemeShadowSchedule(env));
+    ctx.waitUntil(runFourMemeShadowScheduledInvocation(env));
   }
 };
