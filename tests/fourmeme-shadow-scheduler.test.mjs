@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   readFourMemeShadowStatus,
-  runFourMemeShadowSchedule
+  runFourMemeShadowSchedule,
+  runFourMemeShadowScheduledInvocation
 } from "../fourmeme-shadow-scheduler.js";
 
 const STATUS_KEY = "fourmeme:v2:collector:status";
@@ -190,4 +191,24 @@ test("disabled status endpoint does not read KV or expose stale run state", asyn
   assert.equal(status.status, "disabled");
   assert.equal(status.lastRunAt, null);
   assert.equal(kv.readCount, 0);
+});
+
+test("scheduled invocation rejects error, missing configuration, and unknown outcomes", async () => {
+  await assert.rejects(
+    runFourMemeShadowScheduledInvocation({}, async () => ({ status: "error" })),
+    /did not complete cleanly \(error\)/
+  );
+  await assert.rejects(
+    runFourMemeShadowScheduledInvocation({}, async () => ({ status: "not_configured" })),
+    /did not complete cleanly \(not_configured\)/
+  );
+  await assert.rejects(
+    runFourMemeShadowScheduledInvocation({}, async () => ({ status: "unexpected" })),
+    /did not complete cleanly \(unexpected\)/
+  );
+  const disabled = await runFourMemeShadowScheduledInvocation(
+    {},
+    async () => ({ status: "disabled", enabled: false })
+  );
+  assert.equal(disabled.status, "disabled");
 });
