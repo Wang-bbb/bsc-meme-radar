@@ -191,3 +191,21 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
     return result;
   }
 }
+
+/**
+ * Convert persisted scheduler outcomes into the Cron invocation outcome.
+ * Disabled is an intentional no-op; only completed collection states are
+ * successful. Error, missing configuration, and unknown states must reject
+ * so Cloudflare's Cron telemetry cannot report a false success.
+ */
+export async function runFourMemeShadowScheduledInvocation(
+  env,
+  runSchedule = runFourMemeShadowSchedule
+) {
+  const result = await runSchedule(env);
+  const status = typeof result?.status === "string" ? result.status : "invalid_status";
+  if (!["disabled", "ok", "idle"].includes(status)) {
+    throw new Error(`Four.meme scheduled observer did not complete cleanly (${status})`);
+  }
+  return result;
+}
