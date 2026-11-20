@@ -54,20 +54,20 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 
 Chunk records may contain a stale suffix after an interrupted reorg replay; any future reader must treat the cursor/checkpoint state as the committed boundary and must never consume block entries above `cursorBlock`.
 
-This remains a shadow library, not an active Worker collector: no scheduled polling, Worker route, or dashboard integration has been added. The isolated NodeReal adapter has passed live read-only finalized-height, canonical-hash batch, and official-contract log-read checks against the configured free BSC endpoint. If the provider returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
+This feature branch contains the isolated decoder, collector, and NodeReal adapter plus the still-Draft scheduler/status-route integration in PR #100. The merged `main` branch contains the read-only foundation; it does not contain the PR #100 Cron/Worker integration. PR #100 has not been merged or deployed, and the opt-in flag remains unset by default. The scheduler must report provider/quota failures as failed Cron invocations and must never fall back to `latest` or an arbitrary confirmation count.
 
 
-## Latest live finalized-event sample (2026-11-18)
+## Latest live finalized-event sample (2026-11-20)
 
-The latest bounded read-only NodeReal smoke (GitHub Actions run #374) observed BSC mainnet chain ID `0x38`, latest block `134357679`, and finalized block `134357677`. Against the official TokenManager2 contract:
+The latest bounded read-only NodeReal smoke (GitHub Actions run #416) observed BSC mainnet chain ID `0x38`, latest block `134738999`, and finalized block `134738997`. Against the official TokenManager2 contract:
 
-- TokenCreate: 35 raw finalized logs; 35 ABI decodes passed in blocks `134355678–134357677`.
-- TokenPurchase: 65 raw finalized logs; 65 ABI decodes passed in the same 2,000-block window.
-- TokenSale: 35 raw finalized logs; 35 ABI decodes passed in the same 2,000-block window.
-- TradeStop: 0 matching logs in the bounded 20,000-block window `134337678–134357677`.
-- LiquidityAdded: 0 matching logs in the same bounded 20,000-block window.
+- TokenCreate: 6 raw finalized logs; 6 ABI decodes passed in blocks `134736998–134738997`.
+- TokenPurchase: 47 raw finalized logs; 47 ABI decodes passed in the same 2,000-block window.
+- TokenSale: 56 raw finalized logs; 56 ABI decodes passed in the same 2,000-block window.
+- TradeStop: 0 matching logs in the bounded 20,000-block window `134718998–134738997`.
+- LiquidityAdded: 0 matching logs in the same 20,000-block window.
 
-The three observed event types now have real finalized-chain samples, not just fixtures. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
+The three observed event types have real finalized-chain samples. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
 
 ## NodeReal read-only RPC adapter shadow
 
@@ -77,17 +77,16 @@ A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JS
 - Batch-reads canonical block headers by explicit block number, validates returned block numbers and hashes, and caps each batch at 32.
 - Reads logs only from the official TokenManager2 contract address and caps each requested range at 2,000 blocks and each response at 500 logs.
 - Uses request timeouts, rejects non-HTTPS endpoints, and fails closed on HTTP/RPC errors or malformed responses. Endpoint values and credentials are not logged.
-- The adapter is not wired to Worker routes, KV, scheduled execution, or the production candidate pipeline. Live read-only verification against the configured GitHub Actions secret remains a separate gate; unit tests use mocked RPC responses and do not prove the live provider path.
+- The adapter is wired to the scheduler in the Draft PR #100 branch, but that integration is not present in merged `main` and has not been deployed. It is not connected to the production candidate-ranking or eligibility pipeline. The GitHub Actions smoke uses the existing configured free BSC endpoint; unit tests with mocked RPC responses do not replace that live check.
 
-## Next integration gates (not implemented here)
+## Remaining integration gates
 
-1. Verify raw RPC log decoding against independently observed official contract events.
-2. Verify a real public REST token-search response before writing a parser. Do not infer a schema from CLI flags or documentation examples. The current GitHub Actions smoke request received HTTP 403 with a location-restriction HTML page, so no REST response schema has been captured; do not attempt to bypass that restriction.
-3. Use the existing free BSC RPC only; bound block ranges and request counts. On quota/rate-limit errors, report a coverage gap and stop.
-4. Read finalized block height, persist cursor and block hashes, replay an overlap window, and deduplicate.
-5. Join TokenCreate → purchases/sales → LiquidityAdded by token contract address, never symbol.
-6. Keep Four.meme candidates in a separate observation lane until existing $5,000 liquidity and all current safety gates independently pass.
-7. Before unattended collection, measure actual KV value sizes and daily writes on a bounded test deployment; if a chunk reaches the byte cap, reduce the scan range or introduce a versioned chunk-splitting reader/writer rather than raising the cap blindly.
+1. Obtain a legitimate sample of the public Four.meme token-search response before implementing a REST parser. The latest GitHub Actions probe still receives HTTP 403 with a location-restriction page; no schema is inferred and no restriction is bypassed.
+2. Measure the scheduled path on the actual Cloudflare Workers Free runtime, including dense-log and smaller-range retry cases. GitHub Actions/Node test results are not evidence that the Cron invocation fits the Free CPU budget.
+3. Measure the existing Worker account's KV write headroom before enabling collection. With 144 ten-minute runs/day, a 250-block scan can touch up to two 250-block KV chunks; the normal-path ceiling is therefore up to four writes per run (two chunks, cursor, status), plus the one-time start anchor: up to 577 Four.meme writes/day before retries, reorg replay, or existing radar usage. This is an estimate, not observed account usage.
+4. Obtain real finalized-chain samples for `TradeStop` and `LiquidityAdded`. Both remain unit-tested only; zero matches in the sampled 20,000-block window is not live decoder validation.
+5. Add any future event-to-token lifecycle aggregation by token contract address, never symbol. The current collector stores observations; it does not yet provide a joined lifecycle feed to the dashboard.
+6. Keep Four.meme observations separate from candidate ranking and eligibility. Any later eligibility change must independently pass the existing $5,000 liquidity threshold and all current safety gates.
 
 No paid API, private key, wallet connection, signing, transaction submission, trading, or automatic deployment is used.
 
@@ -98,6 +97,6 @@ No paid API, private key, wallet connection, signing, transaction submission, tr
 - Collection is opt-in only: unless `FOURMEME_SHADOW_ENABLED=true` is explicitly configured, each cron invocation returns disabled immediately and performs no KV writes or NodeReal RPC calls.
 - The first enabled run anchors at the then-current BSC finalized block. It does not backfill the contract's historical deployment history.
 - Each invocation is bounded to at most 250 blocks and 25 logs; if the provider returns too many logs or the KV chunk approaches its byte budget, the scheduler retries progressively smaller ranges down to one block.
-- Each stored KV chunk covers at most 250 blocks. At the ten-minute cadence, the normal path uses at most three KV writes per run (chunk, cursor, status), or about 433 writes/day including the one-time start anchor. This is below the current Free-plan 1,000 writes/day quota and leaves headroom for the existing radar; actual account usage must still be monitored. The collector still writes the cursor last and verifies canonical hashes before persisting observations.
+- Each stored KV chunk covers at most 250 blocks. A 250-block scan can straddle a chunk boundary and write two chunk records, followed by the cursor and status records. At 144 ten-minute runs/day, that gives a normal-path ceiling of 577 writes/day including the one-time start anchor, before retries, reorg replay, or existing radar usage. This is below the nominal Free-plan 1,000 writes/day quota only in isolation; shared account headroom is not yet measured. The collector still writes the cursor last and verifies canonical hashes before persisting observations.
 - Status is available at `/fourmeme-shadow/status`. When disabled, this endpoint returns the disabled state without reading KV or calling RPC; when enabled, it reads the persisted observation status. Records older than 30 minutes are returned as `stale` with the last run time and prior status, rather than presenting an old success as current; malformed records/timestamps return `status_corrupt`. It reports observation/coverage state only; it does not feed the meme candidate ranking, mark tokens safe, or generate trading signals.
 - This PR adds a Cron trigger and Worker handler, so merging it will deploy the Worker. Keep it Draft until the tests, review, and a separate production deployment approval are complete.
