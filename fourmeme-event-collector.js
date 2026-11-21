@@ -94,6 +94,9 @@ export async function collectFourMemeFinalizedLogs({
     if (state.version !== 1 || !Array.isArray(state.checkpoints)) {
       throw new TypeError("Unsupported or corrupt collector state");
     }
+    if (state.startBlock == null || quantity(state.startBlock, "persisted startBlock") !== configuredStart) {
+      throw new Error("Collector start block is missing or mismatched; manual recovery required");
+    }
     cursor = quantity(state.cursorBlock, "cursorBlock");
     checkpoints = state.checkpoints.map(item => ({
       blockNumber: quantity(item.blockNumber, "checkpoint blockNumber"),
@@ -268,6 +271,7 @@ export async function collectFourMemeFinalizedLogs({
 
   const nextState = {
     version: 1,
+    startBlock: configuredStart.toString(),
     cursorBlock: toBlock.toString(),
     checkpoints: nextCheckpoints,
     updatedAt: now()
