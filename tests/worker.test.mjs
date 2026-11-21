@@ -2646,3 +2646,54 @@ test("scheduled Four.meme observer rejects a missing configuration outcome", asy
     /Four\.meme scheduled observer did not complete cleanly \(not_configured\)/
   );
 });
+
+
+test("Four.meme shadow status route does not report unhealthy observer states as ok", async () => {
+  const now = Date.now();
+  const cases = [
+    {
+      name: "collection error",
+      stored: { status: "error", enabled: true, updatedAt: new Date(now).toISOString() },
+      expected: "error"
+    },
+    {
+      name: "stale successful collection",
+      stored: { status: "ok", enabled: true, updatedAt: new Date(now - 31 * 60 * 1000).toISOString() },
+      expected: "stale"
+    },
+    {
+      name: "corrupt persisted status",
+      stored: "{invalid-json",
+      expected: "status_corrupt"
+    },
+    {
+      name: "unknown persisted status",
+      stored: { status: "unexpected", enabled: true, updatedAt: new Date(now).toISOString() },
+      expected: "unexpected"
+    }
+  ];
+
+  for (const item of cases) {
+    const kv = {
+      async get() {
+        return typeof item.stored === "string" ? item.stored : JSON.stringify(item.stored);
+      }
+    };
+    const res = await worker.fetch(request("/fourmeme-shadow/status"), {
+      FOURMEME_SHADOW_ENABLED: "true",
+      RADAR_KV: kv
+    });
+    const data = await res.json();
+    assert.equal(res.status, 503, item.name);
+    assert.equal(data.ok, false, item.name);
+    assert.equal(data.status, item.expected, item.name);
+  }
+
+  const missingBinding = await worker.fetch(request("/fourmeme-shadow/status"), {
+    FOURMEME_SHADOW_ENABLED: "true"
+  });
+  const missingData = await missingBinding.json();
+  assert.equal(missingBinding.status, 503);
+  assert.equal(missingData.ok, false);
+  assert.equal(missingData.status, "not_configured");
+});
