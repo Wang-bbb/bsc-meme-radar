@@ -57,17 +57,17 @@ Chunk records may contain a stale suffix after an interrupted reorg replay; any 
 This feature branch contains the isolated decoder, collector, and NodeReal adapter plus the still-Draft scheduler/status-route integration in PR #100. The merged `main` branch contains the read-only foundation; it does not contain the PR #100 Cron/Worker integration. PR #100 has not been merged or deployed, and the opt-in flag remains unset by default. The scheduler must report provider/quota failures as failed Cron invocations and must never fall back to `latest` or an arbitrary confirmation count.
 
 
-## Recent live finalized-event sample (run #418, 2026-11-20)
+## Latest live finalized-event sample (run #427, 2026-11-21)
 
-The bounded read-only NodeReal smoke (GitHub Actions run #418) observed BSC mainnet chain ID `0x38`, latest block `134739418`, and finalized block `134739416`. Against the official TokenManager2 contract:
+The bounded read-only NodeReal smoke (GitHub Actions run #427) verified BSC mainnet chain ID `0x38` and sampled the official TokenManager2 contract over finalized blocks `134937575–134939574`:
 
-- TokenCreate: 5 raw finalized logs; 5 ABI decodes passed in blocks `134737417–134739416`.
-- TokenPurchase: 51 raw finalized logs; 51 ABI decodes passed in the same 2,000-block window.
-- TokenSale: 63 raw finalized logs; 63 ABI decodes passed in the same 2,000-block window.
-- TradeStop: 0 matching logs in the bounded 20,000-block window `134719417–134739416`.
+- TokenCreate: 6 raw finalized logs; 6 ABI decodes passed.
+- TokenPurchase: 110 raw finalized logs; 110 ABI decodes passed.
+- TokenSale: 46 raw finalized logs; 46 ABI decodes passed.
+- TradeStop: 0 matching logs in the bounded 20,000-block window `134919575–134939574`.
 - LiquidityAdded: 0 matching logs in the same 20,000-block window.
 
-The three observed event types have real finalized-chain samples. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
+TokenCreate, TokenPurchase, and TokenSale have real finalized-chain samples. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
 
 ## NodeReal read-only RPC adapter shadow
 
