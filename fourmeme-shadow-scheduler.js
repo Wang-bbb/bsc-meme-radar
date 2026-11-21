@@ -1,11 +1,10 @@
-import { collectFourMemeFinalizedLogs } from "./fourmeme-event-collector.js";
+import { collectFourMemeFinalizedLogs, FOURMEME_COLLECTOR_STATE_KEY } from "./fourmeme-event-collector.js";
 import { createNodeRealFourMemeRpcAdapter } from "./fourmeme-nodereal-adapter.js";
 
 const STATUS_KEY = "fourmeme:v2:collector:status";
 const START_BLOCK_KEY = "fourmeme:v2:collector:start-block";
 const STATUS_TTL_SECONDS = 7 * 24 * 60 * 60;
 const STATUS_STALE_AFTER_MS = 30 * 60 * 1000;
-const START_BLOCK_TTL_SECONDS = 365 * 24 * 60 * 60;
 const BLOCK_RETRY_STEPS = [250, 125, 62, 31, 15, 7, 3, 1];
 
 function parseStored(value) {
@@ -124,10 +123,15 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
     const finalizedHeight = String(await adapter.getFinalizedBlockNumber());
     let startBlock = await kv.get(START_BLOCK_KEY);
     if (startBlock == null) {
+      // The anchor must outlive the cursor. Re-anchoring after the start key is
+      // lost would reinterpret existing chunk boundaries and could skip history.
+      const existingCollectorState = await kv.get(FOURMEME_COLLECTOR_STATE_KEY);
+      if (existingCollectorState != null) {
+        throw new Error("Missing persisted Four.meme start block while collector state exists; manual recovery required");
+      }
       startBlock = finalizedHeight;
-      await kv.put(START_BLOCK_KEY, String(startBlock), {
-        expirationTtl: START_BLOCK_TTL_SECONDS
-      });
+      // Deliberately omit expirationTtl: this anchor is part of durable cursor identity.
+      await kv.put(START_BLOCK_KEY, String(startBlock));
     }
     if (!/^(0|[1-9][0-9]*)$/.test(String(startBlock))) {
       throw new Error("Invalid persisted Four.meme start block");
