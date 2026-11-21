@@ -2376,7 +2376,10 @@ export default {
     if (url.pathname === "/fourmeme-shadow/status") {
       const enabled = String(env.FOURMEME_SHADOW_ENABLED || "").toLowerCase() === "true";
       const shadowStatus = await readFourMemeShadowStatus(env.RADAR_KV, enabled);
-      return json({ ok: true, ...shadowStatus });
+      // The route being reachable is not the same as the observer being healthy.
+      // Only an intentional disabled state or a fresh completed collection is healthy.
+      const healthy = ["disabled", "ok", "idle"].includes(shadowStatus.status);
+      return json({ ok: healthy, ...shadowStatus }, healthy ? 200 : 503);
     }
     if (!rpcUrl && ["/scan", "/history"].includes(url.pathname)) {
       return json({ ok: false, error: "Missing NODEREAL_RPC_URL secret" }, 500);
