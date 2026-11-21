@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { FOURMEME_COLLECTOR_STATE_KEY } from "../fourmeme-event-collector.js";
 import {
   readFourMemeShadowStatus,
   runFourMemeShadowSchedule,
@@ -10,9 +11,12 @@ const STATUS_KEY = "fourmeme:v2:collector:status";
 const START_BLOCK_KEY = "fourmeme:v2:collector:start-block";
 
 class MemoryKV {
-  constructor() { this.data = new Map(); this.readCount = 0; }
+  constructor() { this.data = new Map(); this.readCount = 0; this.putOptions = new Map(); }
   async get(key) { this.readCount++; return this.data.has(key) ? this.data.get(key) : null; }
-  async put(key, value) { this.data.set(key, value); }
+  async put(key, value, options) {
+    this.data.set(key, value);
+    this.putOptions.set(key, options);
+  }
 }
 
 test("scheduled observer is disabled by default and does not create an RPC adapter", async () => {
@@ -75,6 +79,7 @@ test("first enabled run anchors at finalized height and uses bounded collection 
   assert.equal(collectOptions.maxLogsPerRun, 25);
   assert.equal(collectOptions.blocksPerKvChunk, 250);
   assert.equal(await kv.get(START_BLOCK_KEY), "123456");
+  assert.equal(kv.putOptions.get(START_BLOCK_KEY), undefined, "the collector anchor must not expire");
   assert.equal(JSON.parse(await kv.get(STATUS_KEY)).status, "ok");
 });
 
@@ -211,4 +216,38 @@ test("scheduled invocation rejects error, missing configuration, and unknown out
     async () => ({ status: "disabled", enabled: false })
   );
   assert.equal(disabled.status, "disabled");
+});
+
+
+test("missing start-block key with existing collector state fails closed instead of re-anchoring", async () => {
+  const kv = new MemoryKV();
+  kv.data.set(FOURMEME_COLLECTOR_STATE_KEY, JSON.stringify({
+    version: 1,
+    startBlock: "100",
+    cursorBlock: "200",
+    checkpoints: [{ blockNumber: "200", blockHash: "0x" + "1".repeat(64) }]
+  }));
+  let collectCalled = false;
+
+  const result = await runFourMemeShadowSchedule({
+    FOURMEME_SHADOW_ENABLED: "true",
+    NODEREAL_RPC_URL: "https://example.invalid/secret",
+    RADAR_KV: kv
+  }, {
+    createAdapter() {
+      return {
+        getFinalizedBlockNumber: async () => "300",
+        getBlockHashes: async () => ({})
+      };
+    },
+    async collect() {
+      collectCalled = true;
+      return { status: "ok" };
+    }
+  });
+
+  assert.equal(result.status, "error");
+  assert.match(result.error, /Missing persisted Four\.meme start block.*manual recovery required/);
+  assert.equal(collectCalled, false);
+  assert.equal(kv.data.has(START_BLOCK_KEY), false, "must not silently create a new anchor");
 });
