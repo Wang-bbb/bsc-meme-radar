@@ -269,6 +269,7 @@ test("rejects an oversized serialized KV chunk without advancing the cursor", as
   const canonical = canonicalBlocks(1, 2);
   const state = {
     version: 1,
+    startBlock: "1",
     cursorBlock: "1",
     checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
   };
@@ -303,6 +304,7 @@ test("measures serialized KV chunk limits in UTF-8 bytes", async () => {
   const canonical = canonicalBlocks(1, 2);
   const state = {
     version: 1,
+    startBlock: "1",
     cursorBlock: "1",
     checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
   };
@@ -357,4 +359,32 @@ test("supports smaller configurable KV chunks for scheduled observation", async 
   assert.ok(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
   assert.ok(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"));
   assert.equal(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "2"), null);
+});
+
+
+test("rejects a missing or changed persisted start block before RPC reads", async () => {
+  for (const persistedStartBlock of [null, "1"]) {
+    const kv = new MemoryKV();
+    const state = {
+      version: 1,
+      ...(persistedStartBlock == null ? {} : { startBlock: persistedStartBlock }),
+      cursorBlock: "1",
+      checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
+    };
+    kv.data.set(FOURMEME_COLLECTOR_STATE_KEY, JSON.stringify(state));
+    let finalizedRead = false;
+
+    await assert.rejects(
+      collectFourMemeFinalizedLogs({
+        ...providers(kv, canonicalBlocks(), [], 2),
+        startBlock: "2",
+        getFinalizedBlockNumber: async () => {
+          finalizedRead = true;
+          return 2;
+        }
+      }),
+      /Collector start block is missing or mismatched; manual recovery required/
+    );
+    assert.equal(finalizedRead, false, "anchor mismatch must stop before provider access");
+  }
 });
