@@ -8,5 +8,8 @@
       "binding": "RADAR_KV",
       "id": "3119afe4e8a347d194d9e9dc56e6ce7c"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  }
 }

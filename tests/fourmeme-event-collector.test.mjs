@@ -269,6 +269,7 @@ test("rejects an oversized serialized KV chunk without advancing the cursor", as
   const canonical = canonicalBlocks(1, 2);
   const state = {
     version: 1,
+    startBlock: "1",
     cursorBlock: "1",
     checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
   };
@@ -298,6 +299,42 @@ test("rejects an oversized serialized KV chunk without advancing the cursor", as
   assert.equal(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"), beforeChunk);
 });
 
+test("measures serialized KV chunk limits in UTF-8 bytes", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 2);
+  const state = {
+    version: 1,
+    startBlock: "1",
+    cursorBlock: "1",
+    checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
+  };
+  const oversizedChunk = {
+    version: 1,
+    chunkStart: "1",
+    blocks: [{
+      blockNumber: "1",
+      blockHash: hash(1),
+      events: [{ eventName: "historical-placeholder", payload: "汉".repeat(600) }]
+    }]
+  };
+  kv.data.set(FOURMEME_COLLECTOR_STATE_KEY, JSON.stringify(state));
+  kv.data.set(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1", JSON.stringify(oversizedChunk));
+
+  const serializedBytes = new TextEncoder().encode(JSON.stringify(oversizedChunk)).byteLength;
+  assert.ok(serializedBytes > 1024);
+
+  await assert.rejects(
+    collectFourMemeFinalizedLogs({
+      ...providers(kv, canonical, [], 2),
+      maxBlocksPerRun: 1,
+      maxChunkBytes: 1024
+    }),
+    /KV chunk exceeds maxChunkBytes.*cursor was not advanced/
+  );
+
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_STATE_KEY), JSON.stringify(state));
+});
+
 test("rejects unsafe KV chunk byte-cap configuration", async () => {
   const kv = new MemoryKV();
   await assert.rejects(
@@ -307,4 +344,47 @@ test("rejects unsafe KV chunk byte-cap configuration", async () => {
     }),
     /Invalid collector bounds/
   );
+});
+
+
+test("supports smaller configurable KV chunks for scheduled observation", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 4);
+  const result = await collectFourMemeFinalizedLogs({
+    ...providers(kv, canonical, [], 4),
+    maxBlocksPerRun: 4,
+    blocksPerKvChunk: 2
+  });
+  assert.equal(result.status, "ok");
+  assert.ok(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"));
+  assert.ok(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"));
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "2"), null);
+});
+
+
+test("rejects a missing or changed persisted start block before RPC reads", async () => {
+  for (const persistedStartBlock of [null, "1"]) {
+    const kv = new MemoryKV();
+    const state = {
+      version: 1,
+      ...(persistedStartBlock == null ? {} : { startBlock: persistedStartBlock }),
+      cursorBlock: "1",
+      checkpoints: [{ blockNumber: "1", blockHash: hash(1) }]
+    };
+    kv.data.set(FOURMEME_COLLECTOR_STATE_KEY, JSON.stringify(state));
+    let finalizedRead = false;
+
+    await assert.rejects(
+      collectFourMemeFinalizedLogs({
+        ...providers(kv, canonicalBlocks(), [], 2),
+        startBlock: "2",
+        getFinalizedBlockNumber: async () => {
+          finalizedRead = true;
+          return 2;
+        }
+      }),
+      /Collector start block is missing or mismatched; manual recovery required/
+    );
+    assert.equal(finalizedRead, false, "anchor mismatch must stop before provider access");
+  }
 });
