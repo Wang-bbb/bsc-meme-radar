@@ -251,3 +251,46 @@ test("missing start-block key with existing collector state fails closed instead
   assert.equal(collectCalled, false);
   assert.equal(kv.data.has(START_BLOCK_KEY), false, "must not silently create a new anchor");
 });
+
+
+test("status KV write failure does not report a healthy scheduled run after cursor commit", async () => {
+  const kv = new MemoryKV();
+  const originalPut = kv.put.bind(kv);
+  kv.put = async (key, value, options) => {
+    if (key === STATUS_KEY) throw new Error("simulated status KV write failure");
+    return originalPut(key, value, options);
+  };
+
+  const env = {
+    FOURMEME_SHADOW_ENABLED: "true",
+    NODEREAL_RPC_URL: "https://example.invalid/secret",
+    RADAR_KV: kv
+  };
+  const result = await runFourMemeShadowSchedule(env, {
+    createAdapter() {
+      return {
+        getFinalizedBlockNumber: async () => "500",
+        getBlockHashes: async () => ({}),
+        getLogs: async () => []
+      };
+    },
+    async collect() {
+      await kv.put(FOURMEME_COLLECTOR_STATE_KEY, JSON.stringify({
+        version: 1,
+        startBlock: "500",
+        cursorBlock: "500",
+        checkpoints: [{ blockNumber: "500", blockHash: "0x" + "1".repeat(64) }]
+      }));
+      return { status: "ok", fromBlock: "500", toBlock: "500", processedBlocks: 1 };
+    }
+  });
+
+  assert.equal(result.status, "error");
+  assert.match(result.error, /status KV write failed/i);
+  assert.notEqual(await kv.get(FOURMEME_COLLECTOR_STATE_KEY), null, "collection cursor may already be committed");
+  assert.equal(await kv.get(STATUS_KEY), null, "failed status persistence must not be reported as healthy");
+  await assert.rejects(
+    runFourMemeShadowScheduledInvocation(env, async () => result),
+    /did not complete cleanly \\(error\\)/
+  );
+});
