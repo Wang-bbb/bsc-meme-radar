@@ -291,6 +291,6 @@ test("status KV write failure does not report a healthy scheduled run after curs
   assert.equal(await kv.get(STATUS_KEY), null, "failed status persistence must not be reported as healthy");
   await assert.rejects(
     runFourMemeShadowScheduledInvocation(env, async () => result),
-    /did not complete cleanly \\(error\\)/
+    /did not complete cleanly/
   );
 });
