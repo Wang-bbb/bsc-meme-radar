@@ -212,6 +212,43 @@ test("does not advance cursor if a block record write fails", async () => {
   assert.equal(await kv.get(FOURMEME_COLLECTOR_STATE_KEY), null);
 });
 
+test("replays a partially written multi-chunk range without advancing cursor", async () => {
+  const kv = new MemoryKV();
+  const canonical = canonicalBlocks(1, 4);
+  kv.failKey = FOURMEME_COLLECTOR_BLOCK_PREFIX + "3";
+
+  await assert.rejects(
+    collectFourMemeFinalizedLogs({
+      ...providers(kv, canonical, [makeLog(2, hash(2)), makeLog(4, hash(4), 1, 2)]),
+      maxBlocksPerRun: 4,
+      blocksPerKvChunk: 2
+    }),
+    /simulated KV write failure/
+  );
+
+  // The first chunk may be durable, but the cursor must remain uncommitted.
+  assert.notEqual(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "1"), null);
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"), null);
+  assert.equal(await kv.get(FOURMEME_COLLECTOR_STATE_KEY), null);
+
+  kv.failKey = null;
+  const replay = await collectFourMemeFinalizedLogs({
+    ...providers(kv, canonical, [makeLog(2, hash(2)), makeLog(4, hash(4), 1, 2)]),
+    maxBlocksPerRun: 4,
+    blocksPerKvChunk: 2
+  });
+
+  assert.equal(replay.status, "ok");
+  assert.equal(replay.fromBlock, "1");
+  assert.equal(replay.toBlock, "4");
+  const state = JSON.parse(await kv.get(FOURMEME_COLLECTOR_STATE_KEY));
+  assert.equal(state.startBlock, "1");
+  assert.equal(state.cursorBlock, "4");
+  const secondChunk = JSON.parse(await kv.get(FOURMEME_COLLECTOR_BLOCK_PREFIX + "3"));
+  assert.deepEqual(secondChunk.blocks.map(block => block.blockNumber), ["3", "4"]);
+  assert.equal(secondChunk.blocks[1].events.length, 1);
+});
+
 test("rejects oversized log batches and block-hash mismatches without advancing cursor", async () => {
   const kv = new MemoryKV();
   await assert.rejects(
