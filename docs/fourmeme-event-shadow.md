@@ -81,7 +81,7 @@ A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JS
 
 ## Remaining integration gates
 
-1. Obtain a legitimate sample of the public Four.meme token-search response before implementing a REST parser. The latest GitHub Actions probe still receives HTTP 403 with a location-restriction page; no schema is inferred and no restriction is bypassed.
+1. Obtain a legitimate sample of the public Four.meme token-search response before implementing a REST parser. The GitHub Actions probe receives HTTP 403 with a location-restriction page; the probe remains non-blocking but now emits a warning annotation, so a green workflow does not mean the REST schema was validated. No schema is inferred and no restriction is bypassed.
 2. Measure the scheduled path on the actual Cloudflare Workers Free runtime, including dense-log and smaller-range retry cases. GitHub Actions/Node test results are not evidence that the Cron invocation fits the Free CPU budget.
 3. Measure the existing Worker account's KV write headroom before enabling collection. With 144 ten-minute runs/day, a 250-block scan can touch up to two 250-block KV chunks; the normal-path ceiling is therefore up to four writes per run (two chunks, cursor, status), plus the one-time start anchor: up to 577 Four.meme writes/day before retries, reorg replay, or existing radar usage. This is an estimate, not observed account usage.
 4. Obtain real finalized-chain samples for `TradeStop` and `LiquidityAdded`. Both remain unit-tested only; zero matches in the sampled 20,000-block window is not live decoder validation.
