@@ -204,7 +204,7 @@ export async function collectFourMemeFinalizedLogs({
     storedEventCount++;
   }
 
-  // Store up to 100 blocks in one KV value. Preserve only the already-committed
+  // Store up to blocksPerKvChunk blocks in each KV value. Preserve only the already-committed
   // prefix of a partially filled chunk; replayed/orphaned suffix blocks are replaced.
   const chunks = new Map();
   for (let block = fromBlock; block <= toBlock; block++) {
