@@ -26,11 +26,12 @@ function parseStored(value) {
 }
 
 async function writeStatus(kv, value) {
-  if (!kv || typeof kv.put !== "function") return;
+  if (!kv || typeof kv.put !== "function") return false;
   try {
     await kv.put(STATUS_KEY, JSON.stringify(value), { expirationTtl: STATUS_TTL_SECONDS });
+    return true;
   } catch {
-    // Status persistence must never cause the finalized collector cursor to advance.
+    return false;
   }
 }
 
@@ -163,7 +164,18 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
           maxBlocksPerRun,
           collection
         };
-        await writeStatus(kv, result);
+        const statusSaved = await writeStatus(kv, result);
+        if (!statusSaved) {
+          // The collector cursor may already be committed. Do not report a healthy
+          // Cron run when its coverage/status record could not be persisted.
+          const failed = {
+            ...result,
+            status: "error",
+            error: "Four.meme collection cursor committed but status KV write failed"
+          };
+          await writeStatus(kv, failed);
+          return failed;
+        }
         return result;
       } catch (error) {
         lastError = error;
