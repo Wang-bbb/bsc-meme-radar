@@ -57,15 +57,15 @@ Chunk records may contain a stale suffix after an interrupted reorg replay; any 
 This feature branch contains the isolated decoder, collector, and NodeReal adapter plus the still-Draft scheduler/status-route integration in PR #100. The merged `main` branch contains the read-only foundation; it does not contain the PR #100 Cron/Worker integration. PR #100 has not been merged or deployed, and the opt-in flag remains unset by default. The scheduler must report provider/quota failures as failed Cron invocations and must never fall back to `latest` or an arbitrary confirmation count.
 
 
-## Latest live finalized-event sample (run #433, 2026-11-22)
+## Recorded live finalized-event sample (run #434, 2026-11-22)
 
-The bounded read-only NodeReal smoke (GitHub Actions run #433) verified BSC mainnet chain ID `0x38`, finalized-height access, canonical block-hash batch reads, and official TokenManager2 log queries. It sampled the official contract over these finalized ranges:
+The bounded read-only NodeReal smoke (GitHub Actions run #434) verified BSC mainnet chain ID `0x38`, finalized-height access, canonical block-hash batch reads, and official TokenManager2 log queries. It sampled the official contract over these finalized ranges:
 
-- TokenCreate: `135116865–135118864`; 32 raw finalized logs; 32 ABI decodes passed.
-- TokenPurchase: `135116865–135118864`; 75 raw finalized logs; 75 ABI decodes passed.
-- TokenSale: `135116865–135118864`; 23 raw finalized logs; 23 ABI decodes passed.
-- TradeStop: `135098865–135118864`; 0 matching logs across 20,000 finalized blocks.
-- LiquidityAdded: `135098865–135118864`; 0 matching logs across the same 20,000 finalized blocks.
+- TokenCreate: `135116948–135118947`; 32 raw finalized logs; 32 ABI decodes passed.
+- TokenPurchase: `135116948–135118947`; 79 raw finalized logs; 79 ABI decodes passed.
+- TokenSale: `135116948–135118947`; 24 raw finalized logs; 24 ABI decodes passed.
+- TradeStop: `135098948–135118947`; 0 matching logs across 20,000 finalized blocks.
+- LiquidityAdded: `135098948–135118947`; 0 matching logs across the same 20,000 finalized blocks.
 
 TokenCreate, TokenPurchase, and TokenSale have real finalized-chain samples. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
 
