@@ -215,6 +215,45 @@ jobs:
           const { decodeFourMemeRawLog, FOURMEME_TOKEN_MANAGER2_BSC } =
             await import("./fourmeme-event-shadow.js");
           const sampleTo = BigInt(adapterFinalized);
+          // Do not label raw logs "finalized" solely because their query range ends
+          // at a finalized height. Verify every distinct log block against a fresh
+          // canonical block-hash read before passing it to the decoder.
+          async function verifyFinalizedLogs(logs, fromBlock, toBlock, eventName) {
+            const lower = BigInt(fromBlock);
+            const upper = BigInt(toBlock);
+            const observedHashes = new Map();
+            for (const log of logs) {
+              if (typeof log?.blockNumber !== "string" || !/^0x[0-9a-fA-F]+$/.test(log.blockNumber) ||
+                  typeof log?.blockHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(log.blockHash) ||
+                  log.removed === true) {
+                throw new Error(eventName + " sample contains an incomplete or removed log");
+              }
+              const blockNumber = BigInt(log.blockNumber);
+              if (blockNumber < lower || blockNumber > upper || blockNumber > sampleTo) {
+                throw new Error(eventName + " sample contains a log outside its finalized query range");
+              }
+              const key = blockNumber.toString();
+              const hash = log.blockHash.toLowerCase();
+              const previous = observedHashes.get(key);
+              if (previous && previous !== hash) {
+                throw new Error(eventName + " sample contains conflicting hashes for one block");
+              }
+              observedHashes.set(key, hash);
+            }
+            const blockNumbers = [...observedHashes.keys()].sort((a, b) =>
+              BigInt(a) === BigInt(b) ? 0 : BigInt(a) < BigInt(b) ? -1 : 1
+            );
+            for (let offset = 0; offset < blockNumbers.length; offset += 32) {
+              const batch = blockNumbers.slice(offset, offset + 32);
+              const canonical = await adapter.getBlockHashes(batch);
+              for (const blockNumber of batch) {
+                if (canonical[blockNumber] !== observedHashes.get(blockNumber)) {
+                  throw new Error(eventName + " sample log block hash is not canonical");
+                }
+              }
+            }
+            return blockNumbers.length;
+          }
           const sampleFrom = sampleTo > 1999n ? sampleTo - 1999n : 0n;
           const createTopic = "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20";
           const createLogs = await rpc("eth_getLogs", [{
@@ -225,6 +264,9 @@ jobs:
           }], 44);
           if (!Array.isArray(createLogs)) throw new Error("TokenCreate log sample is not an array");
           if (createLogs.length > 500) throw new Error("TokenCreate sample exceeds the bounded 500-log limit");
+          const createCanonicalBlocks = await verifyFinalizedLogs(
+            createLogs, sampleFrom.toString(), sampleTo.toString(), "TokenCreate"
+          );
           const decodedCreates = createLogs.map(log =>
             decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
           );
@@ -233,6 +275,7 @@ jobs:
           }
           console.log("Finalized TokenCreate sample range:", sampleFrom.toString(), "-", sampleTo.toString());
           console.log("Finalized TokenCreate raw logs:", createLogs.length);
+          console.log("Finalized TokenCreate canonical log blocks verified:", createCanonicalBlocks);
           console.log("Finalized TokenCreate ABI decodes:", decodedCreates.length);
           if (decodedCreates.length > 0) {
             console.log("Live Four.meme TokenCreate decode: passed");
@@ -275,6 +318,9 @@ jobs:
                 throw new Error(eventName + " sample exceeds the bounded 500-log limit");
               }
             }
+            const canonicalLogBlocks = await verifyFinalizedLogs(
+              rawLogs, eventFrom.toString(), sampleTo.toString(), eventName
+            );
             const decoded = rawLogs.map(log =>
               decodeFourMemeRawLog(log, { finalityStatus: "finalized" })
             );
@@ -284,6 +330,7 @@ jobs:
             console.log("Finalized " + eventName + " sample range:", eventFrom.toString(), "-", sampleTo.toString());
             console.log("Finalized " + eventName + " bounded query chunks:", chunks);
             console.log("Finalized " + eventName + " raw logs:", rawLogs.length);
+            console.log("Finalized " + eventName + " canonical log blocks verified:", canonicalLogBlocks);
             console.log("Finalized " + eventName + " ABI decodes:", decoded.length);
             console.log("Live Four.meme " + eventName + " decode:",
               decoded.length > 0 ? "passed" : "no matching event in sample window; decoder remains unit-tested only");
