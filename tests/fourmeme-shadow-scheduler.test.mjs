@@ -47,6 +47,20 @@ test("enabled observer reports missing bindings without calling the provider", a
   assert.equal(adapterCreated, false);
 });
 
+test("enabled observer reports incomplete KV bindings as missing", async () => {
+  let adapterCreated = false;
+  const result = await runFourMemeShadowSchedule({
+    FOURMEME_SHADOW_ENABLED: "true",
+    NODEREAL_RPC_URL: "https://example.invalid/secret",
+    RADAR_KV: { get: async () => null }
+  }, {
+    createAdapter() { adapterCreated = true; throw new Error("must not run"); }
+  });
+  assert.equal(result.status, "not_configured");
+  assert.deepEqual(result.missing, ["RADAR_KV"]);
+  assert.equal(adapterCreated, false);
+});
+
 test("first enabled run anchors at finalized height and uses bounded collection settings", async () => {
   const kv = new MemoryKV();
   let adapterOptions;
