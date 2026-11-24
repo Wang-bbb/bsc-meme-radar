@@ -99,13 +99,15 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
   if (!enabled) {
     return { status: "disabled", enabled: false, updatedAt: now() };
   }
-  if (!kv || typeof kv.get !== "function" || typeof kv.put !== "function" ||
-      !env?.NODEREAL_RPC_URL) {
+  const kvConfigured = Boolean(
+    kv && typeof kv.get === "function" && typeof kv.put === "function"
+  );
+  if (!kvConfigured || !env?.NODEREAL_RPC_URL) {
     const result = {
       status: "not_configured",
       enabled: true,
       missing: [
-        ...(!kv ? ["RADAR_KV"] : []),
+        ...(!kvConfigured ? ["RADAR_KV"] : []),
         ...(!env?.NODEREAL_RPC_URL ? ["NODEREAL_RPC_URL"] : [])
       ],
       updatedAt: now()
