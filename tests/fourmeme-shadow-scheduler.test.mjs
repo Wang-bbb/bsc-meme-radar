@@ -97,6 +97,40 @@ test("first enabled run anchors at finalized height and uses bounded collection 
   assert.equal(JSON.parse(await kv.get(STATUS_KEY)).status, "ok");
 });
 
+test("observer retries smaller ranges when the RPC adapter 500-log cap is hit", async () => {
+  const kv = new MemoryKV();
+  const attempted = [];
+  const result = await runFourMemeShadowSchedule({
+    FOURMEME_SHADOW_ENABLED: "true",
+    NODEREAL_RPC_URL: "https://example.invalid/secret",
+    RADAR_KV: kv
+  }, {
+    createAdapter() {
+      return {
+        getFinalizedBlockNumber: async () => "500",
+        getBlockHashes: async () => ({}),
+        getLogs: async (fromBlock, toBlock) => {
+          const span = BigInt(toBlock) - BigInt(fromBlock) + 1n;
+          if (span > 8n) {
+            throw new Error("eth_getLogs response exceeds 500 logs; cursor must not advance");
+          }
+          return [];
+        }
+      };
+    },
+    async collect(options) {
+      attempted.push(options.maxBlocksPerRun);
+      const toBlock = (BigInt(options.startBlock) + BigInt(options.maxBlocksPerRun) - 1n).toString();
+      await options.getLogs(options.startBlock, toBlock);
+      return { status: "ok", processedBlocks: options.maxBlocksPerRun };
+    }
+  });
+
+  assert.deepEqual(attempted, [250, 125, 62, 31, 15, 7]);
+  assert.equal(result.status, "ok");
+  assert.equal(result.maxBlocksPerRun, 7);
+});
+
 test("observer retries smaller ranges when a log batch exceeds its bound", async () => {
   const kv = new MemoryKV();
   const attempted = [];
