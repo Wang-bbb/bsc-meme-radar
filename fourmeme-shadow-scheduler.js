@@ -183,7 +183,7 @@ export async function runFourMemeShadowSchedule(env, dependencies = {}) {
         lastError = error;
         const message = String(error?.message || error);
         const canRetrySmaller =
-          /exceeds maxLogsPerRun|Canonical block-hash lookup budget exceeded|maxChunkBytes/.test(message);
+          /exceeds maxLogsPerRun|eth_getLogs response exceeds 500 logs|Canonical block-hash lookup budget exceeded|maxChunkBytes/.test(message);
         if (!canRetrySmaller || maxBlocksPerRun === 1) break;
       }
     }
