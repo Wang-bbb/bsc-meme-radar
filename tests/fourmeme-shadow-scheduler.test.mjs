@@ -94,7 +94,13 @@ test("first enabled run anchors at finalized height and uses bounded collection 
   assert.equal(collectOptions.blocksPerKvChunk, 250);
   assert.equal(await kv.get(START_BLOCK_KEY), "123456");
   assert.equal(kv.putOptions.get(START_BLOCK_KEY), undefined, "the collector anchor must not expire");
-  assert.equal(JSON.parse(await kv.get(STATUS_KEY)).status, "ok");
+  const persistedStatus = JSON.parse(await kv.get(STATUS_KEY));
+  assert.equal(persistedStatus.status, "ok");
+  assert.equal(persistedStatus.finalizedBlock, "123456");
+  assert.equal(persistedStatus.startBlock, "123456");
+  assert.equal(persistedStatus.collection.fromBlock, "123456");
+  assert.equal(persistedStatus.collection.toBlock, "123456");
+  assert.equal(persistedStatus.collection.processedBlocks, 1);
 });
 
 test("observer retries smaller ranges when the RPC adapter 500-log cap is hit", async () => {
