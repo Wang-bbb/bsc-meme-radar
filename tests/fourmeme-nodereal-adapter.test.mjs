@@ -19,13 +19,32 @@ test("reads finalized height and rejects any fallback to latest for collector fi
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
       calls.push(body);
+      if (body.method === "eth_chainId") {
+        assert.deepEqual(body.params, []);
+        return response(rpcResult(body, "0x38"));
+      }
       assert.equal(body.method, "eth_getBlockByNumber");
       assert.deepEqual(body.params, ["finalized", false]);
       return response(rpcResult(body, block(123)));
     }
   });
   assert.equal(await adapter.getFinalizedBlockNumber(), "123");
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, "eth_chainId");
+});
+
+test("rejects a non-BSC RPC endpoint before reading finalized blocks", async () => {
+  const methods = [];
+  const adapter = createNodeRealFourMemeRpcAdapter({
+    endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
+    fetchImpl: async (_url, init) => {
+      const request = JSON.parse(init.body);
+      methods.push(request.method);
+      return response(rpcResult(request, "0x1"));
+    }
+  });
+  await assert.rejects(adapter.getFinalizedBlockNumber(), /BNB Smart Chain mainnet/);
+  assert.deepEqual(methods, ["eth_chainId"]);
 });
 
 test("batch-reads exact canonical block hashes and validates response identities", async () => {
@@ -33,6 +52,10 @@ test("batch-reads exact canonical block hashes and validates response identities
     endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
     fetchImpl: async (_url, init) => {
       const requests = JSON.parse(init.body);
+      if (!Array.isArray(requests)) {
+        assert.equal(requests.method, "eth_chainId");
+        return response(rpcResult(requests, "0x38"));
+      }
       assert.equal(requests.length, 2);
       return response([
         rpcResult(requests[1], block(9)),
@@ -50,7 +73,11 @@ test("queries only the official TokenManager2 address over a bounded range", asy
   const adapter = createNodeRealFourMemeRpcAdapter({
     endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
     fetchImpl: async (_url, init) => {
-      captured = JSON.parse(init.body);
+      const request = JSON.parse(init.body);
+      if (request.method === "eth_chainId") {
+        return response(rpcResult(request, "0x38"));
+      }
+      captured = request;
       return response(rpcResult(captured, []));
     }
   });
@@ -91,6 +118,9 @@ function createNodeRealMemeRpcAdapterForTest(result = block(123)) {
     endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
     fetchImpl: async (_url, init) => {
       const request = JSON.parse(init.body);
+      if (request.method === "eth_chainId") {
+        return response(rpcResult(request, "0x38"));
+      }
       return response(rpcResult(request, result));
     }
   });
@@ -105,6 +135,9 @@ test("rejects insecure endpoints and duplicate or mismatched block requests", as
     endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
     fetchImpl: async (_url, init) => {
       const request = JSON.parse(init.body);
+      if (!Array.isArray(request)) {
+        return response(rpcResult(request, "0x38"));
+      }
       return response([rpcResult(request[0], block(999))]);
     }
   });
