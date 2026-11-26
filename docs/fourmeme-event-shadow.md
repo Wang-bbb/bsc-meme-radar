@@ -81,12 +81,12 @@ A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JS
 - Uses request timeouts, rejects non-HTTPS endpoints, and fails closed on HTTP/RPC errors or malformed responses. Endpoint values and credentials are not logged.
 - The adapter is wired to the scheduler in the Draft PR #100 branch, but that integration is not present in merged `main` and has not been deployed. It is not connected to the production candidate-ranking or eligibility pipeline. The GitHub Actions smoke uses the existing configured free BSC endpoint; unit tests with mocked RPC responses do not replace that live check.
 
-## Latest validation — GitHub Actions run #443 (2026-11-26)
+## Latest code validation — GitHub Actions run #445 (2026-11-26)
 
 - All four jobs succeeded. Worker syntax/routes: **104/104 tests**. Four.meme decoder, collector, adapter, and scheduler suite: **55/55 tests**.
-- The live read-only NodeReal smoke confirmed BSC chain ID `0x38`, finalized-height access, canonical-hash batch reads, and official TokenManager2 `eth_getLogs` access. Direct smoke read: latest block `135889718`, finalized block `135889716`.
-- The adapter's finalized sample window was `135887718–135889717`: TokenCreate **28/28** decoded (26 canonical log blocks); TokenPurchase **47/47** (43 canonical log blocks); TokenSale **15/15** (13 canonical log blocks).
-- TradeStop and LiquidityAdded each returned **0 logs** across `135869718–135889717` (20,000 finalized blocks). Both remain **unit-tested only / not live-validated**.
+- The live read-only NodeReal smoke confirmed BSC chain ID `0x38`, finalized-height access, canonical-hash batch reads, and official TokenManager2 `eth_getLogs` access. Direct smoke read: latest block `135889935`, finalized block `135889933`.
+- The adapter's finalized sample window was `135887935–135889934`: TokenCreate **28/28** decoded (25 canonical log blocks); TokenPurchase **42/42** (39 canonical log blocks); TokenSale **9/9** (9 canonical log blocks).
+- TradeStop and LiquidityAdded each returned **0 logs** across `135869935–135889934` (20,000 finalized blocks). Both remain **unit-tested only / not live-validated**.
 - The public REST probe returned HTTP 403 with a location-restriction page. Its CI job is non-blocking, but the REST response schema remains unvalidated.
 
 ## Remaining integration gates
