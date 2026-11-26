@@ -69,21 +69,30 @@ function wordAddress(word, field) {
   return "0x" + word.slice(24);
 }
 
-function readDynamicString(data, offsetWord, field) {
+function dynamicStringBounds(data, offsetWord, field) {
   const offset = BigInt("0x" + offsetWord);
   if (offset < 256n || offset % 32n !== 0n || offset > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new TypeError(`Invalid ABI offset: ${field}`);
   }
+  const dataBytes = BigInt(data.length / 2);
+  if (offset + 32n > dataBytes) throw new TypeError(`Truncated ABI string length: ${field}`);
   const byteOffset = Number(offset);
   const lengthWord = data.slice(byteOffset * 2, byteOffset * 2 + 64);
   if (lengthWord.length !== 64) throw new TypeError(`Truncated ABI string length: ${field}`);
   const length = BigInt("0x" + lengthWord);
   if (length > 4096n) throw new TypeError(`ABI string too long: ${field}`);
-  const start = byteOffset * 2 + 64;
-  const end = start + Number(length) * 2;
-  const encoded = data.slice(start, end);
-  if (encoded.length !== Number(length) * 2) throw new TypeError(`Truncated ABI string: ${field}`);
-  const bytes = new Uint8Array(Number(length));
+  const paddedLength = ((length + 31n) / 32n) * 32n;
+  const endOffset = offset + 32n + paddedLength;
+  if (endOffset > dataBytes) throw new TypeError(`Truncated ABI string: ${field}`);
+  return { offset, endOffset, byteOffset, length: Number(length) };
+}
+
+function readDynamicString(data, offsetWord, field) {
+  const bounds = dynamicStringBounds(data, offsetWord, field);
+  const start = bounds.byteOffset * 2 + 64;
+  const encoded = data.slice(start, start + bounds.length * 2);
+  if (encoded.length !== bounds.length * 2) throw new TypeError(`Truncated ABI string: ${field}`);
+  const bytes = new Uint8Array(bounds.length);
   for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(encoded.slice(i * 2, i * 2 + 2), 16);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -136,12 +145,19 @@ export function decodeFourMemeRawLog(log, options = {}) {
   const addressAt = index => wordAddress(readWord(data, index), `arg${index}`);
   let args;
   if (eventName === "TokenCreate") {
+    const nameOffsetWord = readWord(data, 3);
+    const symbolOffsetWord = readWord(data, 4);
+    const nameBounds = dynamicStringBounds(data, nameOffsetWord, "name");
+    const symbolBounds = dynamicStringBounds(data, symbolOffsetWord, "symbol");
+    if (nameBounds.offset < symbolBounds.endOffset && symbolBounds.offset < nameBounds.endOffset) {
+      throw new TypeError("Overlapping dynamic ABI string offsets");
+    }
     args = {
       creator: addressAt(0),
       token: addressAt(1),
       requestId: uintAt(2),
-      name: readDynamicString(data, readWord(data, 3), "name"),
-      symbol: readDynamicString(data, readWord(data, 4), "symbol"),
+      name: readDynamicString(data, nameOffsetWord, "name"),
+      symbol: readDynamicString(data, symbolOffsetWord, "symbol"),
       totalSupply: uintAt(5),
       launchTime: uintAt(6),
       launchFee: uintAt(7)
