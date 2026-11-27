@@ -2190,9 +2190,10 @@ test("BSC wallet-flow samples use NodeReal transaction senders and decode V2 buy
   const logs=[],transactions=[];
   for(let i=0;i<12;i++){
     const buy=i<8;
+    const quoteAmount=BigInt(10+i)*10n**18n;
     const words=buy
-      ? [10n*10n**18n,0n,0n,100n*10n**18n]
-      : [0n,100n*10n**18n,10n*10n**18n,0n];
+      ? [quoteAmount,0n,0n,100n*10n**18n]
+      : [0n,100n*10n**18n,quoteAmount,0n];
     logs.push({data:"0x"+words.map(wordHex).join(""),transactionHash:"0x"+String(i+1).padStart(64,"0"),blockNumber:"0x"+(100+i).toString(16),logIndex:"0x0"});
     transactions.push({from:"0x"+String(i+1).padStart(40,"0")});
   }
