@@ -31,6 +31,11 @@ button,select{background:#1a2940;color:#edf4ff;border:1px solid #33445f;border-r
 <button id="notify">开启通知权限</button>
 </div>
 <div id="status" class="status">数据源：Solana 第三方新池索引 + BSC 链上扫描。Ethereum / Base 暂停主动扫描，后续恢复。点击刷新开始扫描。</div>
+<h2 class="section-title">Four.meme · 独立只读观察</h2>
+<div class="card" id="fourmeme-status-card">
+  <div class="row"><strong>链上观察器状态</strong><button id="fourmeme-refresh" type="button">刷新状态</button></div>
+  <div id="fourmeme-status-detail" class="muted" style="margin-top:8px">正在读取 Worker 状态…</div>
+</div>
 <h2 class="section-title">通过安全筛查 · 早期候选</h2><div id="cards" class="cards"><div class="empty">点击「刷新扫描」查看新池。</div></div><h2 class="section-title">待复核 · 不进入候选排名</h2><div id="review-cards" class="cards"><div class="empty">安全数据缺失或风险待人工复核的代币会显示在这里。</div></div><h2 class="section-title">高危拦截 · 已排除候选</h2><div id="blocked-cards" class="cards"><div class="empty">检测到明确高危信号的代币会显示在这里，不会进入候选名单。</div></div>
 <div class="note">
 <b>数据说明：</b>当前稳定模式主动扫描 Solana，并保留 BSC 链上新池扫描；Ethereum / Base 暂停主动请求以避免持续限流噪声，原有代码和 RPC 配置保留，后续可逐链恢复。Solana 优先使用 GeckoTerminal 新池索引，限流时尝试 DexScreener / DexPaprika 备用源；备用名单覆盖不完整，不代表完整新池扫描。最低流动性默认 $5,000。第三方索引存在分页、延迟和覆盖范围限制，不能保证捕获所有新池。BSC 扫描已接入 DEX 的 USDT 直连池；Solana 显示报价资产，不代表钱包兑换路径已验证。
@@ -483,6 +488,47 @@ async function scan(){
     },remaining);
   }
 }
+
+async function refreshFourMemeStatus(){
+  const detail=$("fourmeme-status-detail");
+  const button=$("fourmeme-refresh");
+  if(!detail||!button)return;
+  button.disabled=true;
+  detail.textContent="正在查询 Four.meme 观察器状态…";
+  try{
+    const base=API_BASE.replace(/\\/$/,"");
+    const response=await fetch(base+"/fourmeme-shadow/status",{cache:"no-store"});
+    let data=null;
+    try{data=await response.json();}catch(_){throw new Error("状态接口没有返回有效 JSON");}
+    if(!response.ok||data?.ok!==true){
+      const state=String(data?.status||"unknown");
+      detail.textContent="状态未通过健康检查（HTTP "+response.status+"，"+state+"）。"+(data?.error?"原因："+String(data.error):"请检查 Worker / KV 配置；不能视为采集正常。");
+      return;
+    }
+    if(data.status==="disabled"){
+      detail.textContent="框架已部署，定时触发器已配置；Four.meme 采集目前关闭。关闭状态不会请求 RPC，也不会写入 KV。";
+      return;
+    }
+    const stamp=data.updatedAt||data.lastRunAt||"";
+    const collection=data.collection||{};
+    const summary=[
+      "状态："+String(data.status||"unknown"),
+      data.finalizedBlock!=null?"最终确认区块："+String(data.finalizedBlock):"",
+      collection.processedBlocks!=null?"本轮处理区块："+String(collection.processedBlocks):"",
+      collection.receivedLogs!=null?"读取日志："+String(collection.receivedLogs):"",
+      collection.storedEvents!=null?"保存事件："+String(collection.storedEvents):"",
+      stamp?"最近更新时间："+String(stamp):"",
+      data.error?"错误："+String(data.error):""
+    ].filter(Boolean);
+    detail.textContent=summary.join(" · ")+"。只读观察数据，不构成安全或买入判断。";
+  }catch(error){
+    detail.textContent="暂时无法读取 Four.meme 状态："+String(error?.message||error)+"。接口不可达不代表采集正常。";
+  }finally{
+    button.disabled=false;
+  }
+}
+$("fourmeme-refresh").onclick=refreshFourMemeStatus;
+refreshFourMemeStatus();
 $("refresh").onclick=scan;
 $("age").onchange=scan;
 $("notify").onclick=async()=>{
