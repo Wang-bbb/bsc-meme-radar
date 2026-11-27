@@ -1019,6 +1019,7 @@ function summarizePoolWalletFlow(body, tokenAddress) {
   const rows=Array.isArray(body&&body.data)?body.data:[];
   const token=String(tokenAddress||"").toLowerCase();
   const wallets=new Map();
+  const validTradeVolumes=[],validTradeTimestamps=[];
   let parsedTrades=0,totalBuyUsd=0,totalSellUsd=0,oldestTimestamp=null,newestTimestamp=null;
   for(const row of rows){
     const a=row&&row.attributes||{};
@@ -1037,8 +1038,10 @@ function summarizePoolWalletFlow(body, tokenAddress) {
     // be counted toward the "checked" trade total or the wallet aggregates (L3).
     if(!Number.isFinite(rawVolume)||rawVolume<=0)continue;
     const volume=rawVolume;
+    validTradeVolumes.push(volume);
     const timestamp=Date.parse(a.block_timestamp||a.timestamp||"");
     if(Number.isFinite(timestamp)){
+      validTradeTimestamps.push(timestamp);
       oldestTimestamp=oldestTimestamp==null?timestamp:Math.min(oldestTimestamp,timestamp);
       newestTimestamp=newestTimestamp==null?timestamp:Math.max(newestTimestamp,timestamp);
     }
@@ -1055,17 +1058,11 @@ function summarizePoolWalletFlow(body, tokenAddress) {
   const overlapWallets=entries.filter(x=>x.buys>0&&x.sells>0).length;
   const repeatBuyerSharePct=buyers.length?Math.round(repeatBuyers.length/buyers.length*10000)/100:null;
   const sizeBuckets=new Map();
-  const timestamps=[];
-  for(const row of rows){
-    const a=row&&row.attributes||{};
-    const raw=Number(a.volume_in_usd);
-    if(Number.isFinite(raw)&&raw>0){
-      const bucket=(Math.round(raw*2)/2).toFixed(2);
-      sizeBuckets.set(bucket,(sizeBuckets.get(bucket)||0)+1);
-    }
-    const ts=Date.parse(a.block_timestamp||a.timestamp||"");
-    if(Number.isFinite(ts))timestamps.push(ts);
+  for(const raw of validTradeVolumes){
+    const bucket=(Math.round(raw*2)/2).toFixed(2);
+    sizeBuckets.set(bucket,(sizeBuckets.get(bucket)||0)+1);
   }
+  const timestamps=validTradeTimestamps.slice();
   const largestSameSizeTradeCount=Math.max(0,...sizeBuckets.values());
   const largestSameSizeTradeSharePct=parsedTrades?Math.round(largestSameSizeTradeCount/parsedTrades*10000)/100:null;
   timestamps.sort((a,b)=>a-b);
@@ -4248,6 +4245,13 @@ export default {
         historyTrackingPolicyVersion: "pool-history-v1",
         historyTracking: historyTracking,
         count: pools.length,
+        walletFlowInspection: {
+          maxPoolsPerScan: 5,
+          inspected: pools.filter(pool => pool.walletFlow && pool.walletFlow.status !== "unavailable" && pool.walletFlow.status !== "insufficient").length,
+          unavailableOrUninspected: pools.filter(pool => !pool.walletFlow || pool.walletFlow.status !== "checked").length,
+          pass: pools.filter(pool => pool.walletFlowQualityStatus === "pass").length,
+          review: pools.filter(pool => pool.walletFlowQualityStatus !== "pass").length
+        },
         priorityWatchlistCount: priorityWatchlist.length,
         priorityWatchlist: priorityWatchlist,
         pairs: pairs,
