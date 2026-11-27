@@ -2440,7 +2440,8 @@ export default {
       if(!poolAddress||!tokenAddress||poolAddress.length>160||tokenAddress.length>160)
         return json({ok:false,status:"unavailable",error:"pool and token are required"},400);
       const walletFlow=await getPoolWalletFlow(network,poolAddress,tokenAddress);
-      return json({ok:true,chain:network,poolAddress,tokenAddress,walletFlow});
+      const walletFlowQuality=classifyWalletFlowQuality(walletFlow);
+      return json({ok:true,chain:network,poolAddress,tokenAddress,walletFlow,walletFlowQuality});
     }
     if (url.pathname === "/pool-risk") {
       const network = url.searchParams.get("chain") || "";
