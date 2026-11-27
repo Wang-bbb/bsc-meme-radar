@@ -4251,7 +4251,19 @@ export default {
           inspected: pools.filter(pool => pool.walletFlow && pool.walletFlow.status !== "unavailable" && pool.walletFlow.status !== "insufficient").length,
           unavailableOrUninspected: pools.filter(pool => !pool.walletFlow || pool.walletFlow.status !== "checked").length,
           pass: pools.filter(pool => pool.walletFlowQualityStatus === "pass").length,
-          review: pools.filter(pool => pool.walletFlowQualityStatus !== "pass").length
+          review: pools.filter(pool => pool.walletFlowQualityStatus !== "pass").length,
+          statusCounts: pools.reduce((counts,pool) => {
+            const status=pool.walletFlow?.status||"missing";
+            counts[status]=(counts[status]||0)+1;
+            return counts;
+          }, {}),
+          sampleDiagnostics: pools.map(pool => ({
+            pairAddress: pool.pairAddress,
+            status: pool.walletFlow?.status||"missing",
+            sampleTrades: pool.walletFlow?.sampleTrades||0,
+            error: pool.walletFlow?.error||null,
+            warnings: Array.isArray(pool.walletFlow?.warnings)?pool.walletFlow.warnings:[]
+          }))
         },
         priorityWatchlistCount: priorityWatchlist.length,
         priorityWatchlist: priorityWatchlist,
