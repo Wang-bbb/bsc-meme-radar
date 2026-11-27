@@ -26,3 +26,39 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 18f21bcc2697986228ed890445cc7d0a
           command: deploy --config wrangler.jsonc
+
+      - name: Verify deployed Worker health and wash-trading gate
+        run: |
+          node --input-type=module <<'NODE'
+          const base = "https://younbsc-meme-radar.zimicui9.workers.dev";
+          async function readJson(path) {
+            const response = await fetch(base + path, { signal: AbortSignal.timeout(45000) });
+            const body = await response.json();
+            if (!response.ok || body?.ok !== true) {
+              throw new Error(path + " returned HTTP " + response.status + " or ok=false");
+            }
+            return body;
+          }
+          const health = await readJson("/health");
+          if (health.worker !== "running" || health.chain !== "BSC") {
+            throw new Error("Deployed Worker health payload is unexpected");
+          }
+          const scan = await readJson("/scan?minutes=15&minLiquidity=5000");
+          if (!Array.isArray(scan.pools) || !Array.isArray(scan.priorityWatchlist)) {
+            throw new Error("BSC scan response is missing pool/watchlist arrays");
+          }
+          for (const pool of scan.priorityWatchlist) {
+            if (pool.walletFlowQualityStatus !== "pass") {
+              throw new Error("Priority watchlist contains a pool without wallet-quality pass");
+            }
+          }
+          const inspection = scan.walletFlowInspection || {};
+          if (Number(inspection.maxPoolsPerScan) !== 5) {
+            throw new Error("Wallet-flow inspection cap is missing or unexpected");
+          }
+          console.log("Worker health: passed");
+          console.log("BSC scan runtime: passed");
+          console.log("Pools:", scan.pools.length, "priority watchlist:", scan.priorityWatchlist.length);
+          console.log("Wallet sample inspection:", JSON.stringify(inspection));
+          console.log("Policy:", scan.watchlistPolicyVersion);
+          NODE
