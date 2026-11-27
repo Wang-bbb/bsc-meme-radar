@@ -92,6 +92,21 @@ test("decodes TokenCreate dynamic UTF-8 strings and all static fields", () => {
   assert.equal(decoded.launchFee, "7");
 });
 
+test("rejects overlapping TokenCreate dynamic string tails", () => {
+  const topic = "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20";
+  const sharedTail = abiString("same");
+  const data = [
+    abiAddress(creator), abiAddress(token), abiWord(9),
+    abiWord(256), abiWord(256), abiWord(1000),
+    abiWord(1700000000), abiWord(7),
+    sharedTail
+  ].join("");
+  assert.throws(
+    () => decodeFourMemeRawLog(rawLog(topic, data), { finalityStatus: "finalized" }),
+    /Overlapping dynamic ABI string offsets/
+  );
+});
+
 test("decodes TokenSale, TradeStop and LiquidityAdded raw logs", () => {
   const saleTopic = "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19";
   const saleData = [

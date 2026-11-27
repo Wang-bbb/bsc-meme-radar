@@ -63,6 +63,7 @@ export async function collectFourMemeFinalizedLogs({
   checkpointWindow = 8,
   maxHashLookupsPerRun = 32,
   maxChunkBytes = MAX_KV_CHUNK_BYTES,
+  blocksPerKvChunk = BLOCKS_PER_KV_CHUNK,
   eventTtlSeconds = 30 * 24 * 60 * 60,
   now = () => new Date().toISOString()
 }) {
@@ -78,7 +79,8 @@ export async function collectFourMemeFinalizedLogs({
       !Number.isSafeInteger(checkpointWindow) || checkpointWindow < 2 ||
       !Number.isSafeInteger(maxHashLookupsPerRun) || maxHashLookupsPerRun < 1 ||
       checkpointWindow > maxHashLookupsPerRun ||
-      !Number.isSafeInteger(maxChunkBytes) || maxChunkBytes < 1024 || maxChunkBytes > MAX_KV_CHUNK_BYTES) {
+      !Number.isSafeInteger(maxChunkBytes) || maxChunkBytes < 1024 || maxChunkBytes > MAX_KV_CHUNK_BYTES ||
+      !Number.isSafeInteger(blocksPerKvChunk) || blocksPerKvChunk < 1 || blocksPerKvChunk > BLOCKS_PER_KV_CHUNK) {
     throw new TypeError("Invalid collector bounds");
   }
 
@@ -91,6 +93,9 @@ export async function collectFourMemeFinalizedLogs({
   if (state) {
     if (state.version !== 1 || !Array.isArray(state.checkpoints)) {
       throw new TypeError("Unsupported or corrupt collector state");
+    }
+    if (state.startBlock == null || quantity(state.startBlock, "persisted startBlock") !== configuredStart) {
+      throw new Error("Collector start block is missing or mismatched; manual recovery required");
     }
     cursor = quantity(state.cursorBlock, "cursorBlock");
     checkpoints = state.checkpoints.map(item => ({
@@ -199,12 +204,12 @@ export async function collectFourMemeFinalizedLogs({
     storedEventCount++;
   }
 
-  // Store up to 100 blocks in one KV value. Preserve only the already-committed
+  // Store up to blocksPerKvChunk blocks in each KV value. Preserve only the already-committed
   // prefix of a partially filled chunk; replayed/orphaned suffix blocks are replaced.
   const chunks = new Map();
   for (let block = fromBlock; block <= toBlock; block++) {
     const chunkStart = configuredStart +
-      ((block - configuredStart) / BigInt(BLOCKS_PER_KV_CHUNK)) * BigInt(BLOCKS_PER_KV_CHUNK);
+      ((block - configuredStart) / BigInt(blocksPerKvChunk)) * BigInt(blocksPerKvChunk);
     const chunkKey = chunkStart.toString();
     if (!chunks.has(chunkKey)) {
       const blocks = [];
@@ -266,6 +271,7 @@ export async function collectFourMemeFinalizedLogs({
 
   const nextState = {
     version: 1,
+    startBlock: configuredStart.toString(),
     cursorBlock: toBlock.toString(),
     checkpoints: nextCheckpoints,
     updatedAt: now()

@@ -2609,3 +2609,91 @@ test("multichain candidate disposition excludes severe dumps and deprioritizes r
   assert.equal(balanced.candidateDisposition, "unclassified_review");
   assert.equal(balanced.walletRouteStatus, "not_verified");
 });
+
+
+test("Four.meme shadow status route is visible but disabled by default", async () => {
+  const res = await worker.fetch(request("/fourmeme-shadow/status"), {});
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.equal(data.enabled, false);
+  assert.equal(data.status, "disabled");
+});
+
+test("scheduled Four.meme observer is a no-op unless explicitly enabled", async () => {
+  const values = new Map();
+  const kv = {
+    async get(key) { return values.has(key) ? values.get(key) : null; },
+    async put(key, value) { values.set(key, value); }
+  };
+  let task;
+  worker.scheduled({}, { RADAR_KV: kv }, { waitUntil(promise) { task = promise; } });
+  assert.ok(task, "scheduled handler should register its bounded task");
+  const result = await task;
+  assert.equal(result.status, "disabled");
+  assert.equal(result.enabled, false);
+  assert.equal(values.has("fourmeme:v2:collector:status"), false, "disabled cron must not write KV");
+});
+
+test("scheduled Four.meme observer rejects a missing configuration outcome", async () => {
+  let task;
+  worker.scheduled({}, { FOURMEME_SHADOW_ENABLED: "true" }, {
+    waitUntil(promise) { task = promise; }
+  });
+  assert.ok(task, "scheduled handler should register its task");
+  await assert.rejects(
+    task,
+    /Four\.meme scheduled observer did not complete cleanly \(not_configured\)/
+  );
+});
+
+
+test("Four.meme shadow status route does not report unhealthy observer states as ok", async () => {
+  const now = Date.now();
+  const cases = [
+    {
+      name: "collection error",
+      stored: { status: "error", enabled: true, updatedAt: new Date(now).toISOString() },
+      expected: "error"
+    },
+    {
+      name: "stale successful collection",
+      stored: { status: "ok", enabled: true, updatedAt: new Date(now - 31 * 60 * 1000).toISOString() },
+      expected: "stale"
+    },
+    {
+      name: "corrupt persisted status",
+      stored: "{invalid-json",
+      expected: "status_corrupt"
+    },
+    {
+      name: "unknown persisted status",
+      stored: { status: "unexpected", enabled: true, updatedAt: new Date(now).toISOString() },
+      expected: "unexpected"
+    }
+  ];
+
+  for (const item of cases) {
+    const kv = {
+      async get() {
+        return typeof item.stored === "string" ? item.stored : JSON.stringify(item.stored);
+      }
+    };
+    const res = await worker.fetch(request("/fourmeme-shadow/status"), {
+      FOURMEME_SHADOW_ENABLED: "true",
+      RADAR_KV: kv
+    });
+    const data = await res.json();
+    assert.equal(res.status, 503, item.name);
+    assert.equal(data.ok, false, item.name);
+    assert.equal(data.status, item.expected, item.name);
+  }
+
+  const missingBinding = await worker.fetch(request("/fourmeme-shadow/status"), {
+    FOURMEME_SHADOW_ENABLED: "true"
+  });
+  const missingData = await missingBinding.json();
+  assert.equal(missingBinding.status, 503);
+  assert.equal(missingData.ok, false);
+  assert.equal(missingData.status, "not_configured");
+});

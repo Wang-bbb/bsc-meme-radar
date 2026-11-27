@@ -1,8 +1,8 @@
-# Four.meme TokenManager2 event shadow
+# Four.meme TokenManager2 event shadow — GPT-Radar-FourMeme v0.1.0
 
 ## Purpose
 
-This is a read-only, isolated foundation for observing Four.meme BSC V2 launches and their subsequent on-chain activity. The decoder does not fetch RPC data; the collector accepts injected RPC/KV adapters but does not configure providers, run on a schedule, expose a Worker route, notify, rank, or change candidate eligibility.
+This is the read-only GPT-Radar-FourMeme v0.1.0 implementation. The decoder does not fetch RPC data; the collector accepts injected RPC/KV adapters. The separate opt-in scheduler described below is still a Draft integration in PR #100: it wires the existing NodeReal/KV adapters to a bounded Cron and read-only status route, but remains disabled unless `FOURMEME_SHADOW_ENABLED=true` and has not been merged or deployed. Four.meme observations do not notify, rank candidates, change eligibility, or declare tokens safe.
 
 Official reference:
 - TokenManager2 BSC: `0x5c952063c7fc8610FFDB798152D69F0B9550762b`
@@ -19,6 +19,7 @@ It decodes the five non-indexed V2 events from raw `eth_getLogs` entries after c
 - Exactly one topic is present (topic0); the official V2 event declarations have no indexed arguments.
 - Topic0 matches one of the five canonical event signatures.
 - ABI head lengths, address word padding, dynamic string offsets/lengths, and UTF-8 validity.
+- TokenCreate dynamic string tails are bounded to 4,096 bytes, must fit inside the log data, and may not overlap.
 - The log is not marked `removed`; block/transaction identity and explicit finality are then validated by the normalizer.
 
 Topic0 values are kept next to the decoder and exercised by raw-log fixtures. The TokenPurchase topic is also cross-checked against an independent published Four.meme event reference. The Keccak implementation used to derive the signature constants was checked against the canonical empty-input and ERC-20 Transfer vectors; no runtime hashing dependency is added.
@@ -45,7 +46,7 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 - Requires an explicit finalized-height provider; it never reads the unstable latest tip itself.
 - Bounds each invocation by block count and log count.
 - Requests canonical hashes only for sparse 250-block checkpoints, the scan-range boundaries, and blocks that actually contain matching logs; every returned log is checked against its own canonical block hash.
-- Stores replaceable 1,000-block KV chunks, including empty-block entries, instead of one key per block. Each serialized chunk is measured in UTF-8 bytes and capped at 1 MiB (configurable lower, never higher); an oversized chunk fails closed before the cursor write. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
+- Stores replaceable KV chunks, including empty-block entries, instead of one key per block. The scheduled observer configures 250 blocks per chunk; the collector default remains 1,000. Each serialized chunk is measured in UTF-8 bytes and capped at 1 MiB (configurable lower, never higher); an oversized chunk fails closed before the cursor write. A normal run contained within one chunk uses two KV writes total: one chunk record plus cursor/checkpoint state.
 - Keeps a rolling checkpoint window (default 8 checkpoints), adding every 250th block plus every block containing a matching event. A detected reorg rewinds to the last matching checkpoint and replays; a reorg reaching beyond the retained window halts for manual recovery rather than guessing.
 - Writes chunk observations before cursor state. If a KV write fails or a serialized chunk exceeds its byte cap, the cursor is not advanced and the same range can be replayed. The byte cap does not automatically split an oversized chunk.
 - Uses a 30-day TTL for chunk event records; cursor/checkpoint state has no TTL.
@@ -54,8 +55,20 @@ A separate `fourmeme-event-collector.js` module now provides a dependency-inject
 
 Chunk records may contain a stale suffix after an interrupted reorg replay; any future reader must treat the cursor/checkpoint state as the committed boundary and must never consume block entries above `cursorBlock`.
 
-This remains a shadow library, not an active Worker collector: no scheduled polling, Worker route, or dashboard integration has been added. The isolated NodeReal adapter has passed live read-only finalized-height, canonical-hash batch, and official-contract log-read checks against the configured free BSC endpoint. If the provider returns an error or quota response, collection must remain disabled and report the coverage gap rather than falling back to `latest` or an arbitrary confirmation count.
+This feature branch contains the isolated decoder, collector, and NodeReal adapter plus the still-Draft scheduler/status-route integration in PR #100. The merged `main` branch contains the read-only foundation; it does not contain the PR #100 Cron/Worker integration. PR #100 has not been merged or deployed, and the opt-in flag remains unset by default. The scheduler must report provider/quota failures as failed Cron invocations and must never fall back to `latest` or an arbitrary confirmation count.
 
+
+## Recorded live finalized-event sample (run #437, 2026-11-22)
+
+The bounded read-only NodeReal smoke (GitHub Actions run #437) verified BSC mainnet chain ID `0x38`, finalized-height access, canonical block-hash batch reads, and official TokenManager2 log queries. It sampled the official contract over these finalized ranges:
+
+- TokenCreate: `135117239–135119238`; 32 raw finalized logs; 32 ABI decodes passed.
+- TokenPurchase: `135117239–135119238`; 78 raw finalized logs; 78 ABI decodes passed.
+- TokenSale: `135117239–135119238`; 21 raw finalized logs; 21 ABI decodes passed.
+- TradeStop: `135099239–135119238`; 0 matching logs across 20,000 finalized blocks.
+- LiquidityAdded: `135099239–135119238`; 0 matching logs across the same 20,000 finalized blocks.
+
+TokenCreate, TokenPurchase, and TokenSale have real finalized-chain samples. TradeStop and LiquidityAdded still have no live samples; their decoders remain unit-tested only. An empty sample window is not proof that an event never occurs and must not be reported as successful live validation.
 
 ## NodeReal read-only RPC adapter shadow
 
@@ -64,17 +77,36 @@ A separate `fourmeme-nodereal-adapter.js` module now provides a bounded HTTPS JS
 - Reads the `finalized` block tag for the collector cursor; it does not substitute `latest` or an arbitrary confirmation count.
 - Batch-reads canonical block headers by explicit block number, validates returned block numbers and hashes, and caps each batch at 32.
 - Reads logs only from the official TokenManager2 contract address and caps each requested range at 2,000 blocks and each response at 500 logs.
+- Checks `eth_chainId == 0x38` before any finalized-height, block-hash, or log request; a wrong-chain or malformed chain-ID response fails closed.
 - Uses request timeouts, rejects non-HTTPS endpoints, and fails closed on HTTP/RPC errors or malformed responses. Endpoint values and credentials are not logged.
-- The adapter is not wired to Worker routes, KV, scheduled execution, or the production candidate pipeline. Live read-only verification against the configured GitHub Actions secret remains a separate gate; unit tests use mocked RPC responses and do not prove the live provider path.
+- The adapter is wired to the scheduler in the Draft PR #100 branch, but that integration is not present in merged `main` and has not been deployed. It is not connected to the production candidate-ranking or eligibility pipeline. The GitHub Actions smoke uses the existing configured free BSC endpoint; unit tests with mocked RPC responses do not replace that live check.
 
-## Next integration gates (not implemented here)
+## Latest code validation — GitHub Actions run #445 (2026-11-26)
 
-1. Verify raw RPC log decoding against independently observed official contract events.
-2. Verify a real public REST token-search response before writing a parser. Do not infer a schema from CLI flags or documentation examples. The current GitHub Actions smoke request received HTTP 403 with a location-restriction HTML page, so no REST response schema has been captured; do not attempt to bypass that restriction.
-3. Use the existing free BSC RPC only; bound block ranges and request counts. On quota/rate-limit errors, report a coverage gap and stop.
-4. Read finalized block height, persist cursor and block hashes, replay an overlap window, and deduplicate.
-5. Join TokenCreate → purchases/sales → LiquidityAdded by token contract address, never symbol.
-6. Keep Four.meme candidates in a separate observation lane until existing $5,000 liquidity and all current safety gates independently pass.
-7. Before unattended collection, measure actual KV value sizes and daily writes on a bounded test deployment; if a chunk reaches the byte cap, reduce the scan range or introduce a versioned chunk-splitting reader/writer rather than raising the cap blindly.
+- All four jobs succeeded. Worker syntax/routes: **104/104 tests**. Four.meme decoder, collector, adapter, and scheduler suite: **55/55 tests**.
+- The live read-only NodeReal smoke confirmed BSC chain ID `0x38`, finalized-height access, canonical-hash batch reads, and official TokenManager2 `eth_getLogs` access. Direct smoke read: latest block `135889935`, finalized block `135889933`.
+- The adapter's finalized sample window was `135887935–135889934`: TokenCreate **28/28** decoded (25 canonical log blocks); TokenPurchase **42/42** (39 canonical log blocks); TokenSale **9/9** (9 canonical log blocks).
+- TradeStop and LiquidityAdded each returned **0 logs** across `135869935–135889934` (20,000 finalized blocks). Both remain **unit-tested only / not live-validated**.
+- The public REST probe returned HTTP 403 with a location-restriction page. Its CI job is non-blocking, but the REST response schema remains unvalidated.
+
+## Remaining integration gates
+
+1. Obtain a legitimate sample of the public Four.meme token-search response before implementing a REST parser. The GitHub Actions probe receives HTTP 403 with a location-restriction page; the probe remains non-blocking but emits a warning annotation, so a green workflow does not mean the REST schema was validated. No schema is inferred and no restriction is bypassed.
+2. **Free-plan Cron CPU is a hard deployment gate.** Cloudflare's current limits documentation lists **10 ms CPU per Cron invocation on Workers Free**; network wait does not count, but ABI decoding, canonical-hash validation, and serialization do. The actual scheduled path has not been measured in the Cloudflare runtime. GitHub Actions/Node tests do not prove it fits 10 ms. Keep the flag unset/false and PR #100 Draft until the account plan and representative dense-log/retry CPU use are verified. Source: https://developers.cloudflare.com/workers/platform/limits/
+3. Measure the existing Worker account's KV write headroom before enabling collection. Cloudflare's Free-plan pricing page lists 1,000 KV writes/day; the observer's conservative normal-path estimate is up to 577 writes/day before retries, reorg replay, and existing radar usage, so this is not proof of account-wide headroom. Source: https://developers.cloudflare.com/workers/platform/pricing/
+4. Obtain real finalized-chain samples for `TradeStop` and `LiquidityAdded`. Both remain unit-tested only; zero matches in the sampled 20,000-block window is not live decoder validation.
+5. Add any future event-to-token lifecycle aggregation by token contract address, never symbol. The current collector stores observations; it does not yet provide a joined lifecycle feed to the dashboard.
+6. Keep Four.meme observations separate from candidate ranking and eligibility. Any later eligibility change must independently pass the existing $5,000 liquidity threshold and all current safety gates.
 
 No paid API, private key, wallet connection, signing, transaction submission, trading, or automatic deployment is used.
+
+
+## Scheduled shadow integration (draft)
+
+- A ten-minute Cloudflare Cron invokes the Worker `scheduled()` handler.
+- Collection is opt-in only: unless `FOURMEME_SHADOW_ENABLED=true` is explicitly configured, each cron invocation returns disabled immediately and performs no KV writes or NodeReal RPC calls.
+- The first enabled run anchors at the then-current BSC finalized block. It does not backfill the contract's historical deployment history. The start-block anchor is stored without a TTL because it defines collector chunk boundaries and must outlive the cursor; if that key is missing while collector state exists, the scheduler stops for manual recovery instead of silently re-anchoring. The collector also persists the anchor in its cursor state and rejects a missing or mismatched anchor.
+- Each invocation is bounded to at most 250 blocks and 25 logs; if the provider returns too many logs or the KV chunk approaches its byte budget, the scheduler retries progressively smaller ranges down to one block.
+- Each stored KV chunk covers at most 250 blocks. A 250-block scan can straddle a chunk boundary and write two chunk records, followed by the cursor and status records. At 144 ten-minute runs/day, that gives a normal-path ceiling of 577 writes/day including the one-time start anchor, before retries, reorg replay, or existing radar usage. This is below the nominal Free-plan 1,000 writes/day quota only in isolation; shared account headroom is not yet measured. The collector still writes the cursor last and verifies canonical hashes before persisting observations.
+- Status is available at `/fourmeme-shadow/status`. When disabled, this endpoint returns the disabled state without reading KV or calling RPC; when enabled, it reads the persisted observation status. The route returns HTTP 200 with `ok: true` only for the intentional `disabled` state or a fresh `ok`/`idle` collection; stale, corrupt, missing-configuration, provider-error, and unknown states return HTTP 503 with `ok: false` so a reachable status endpoint cannot mask an unhealthy observer. Records older than 30 minutes are returned as `stale` with the last run time and prior status, rather than presenting an old success as current; malformed records/timestamps return `status_corrupt`. Successful status records expose the committed range and counters through `collection.fromBlock`, `toBlock`, `processedBlocks`, `receivedLogs`, `storedEvents`, and `reorgDetected`, alongside the start and finalized heights. `ok` describes only that committed bounded range; `idle` means the cursor was already at finalized height. Because the first run anchors at the current finalized height, this is not full historical coverage. It reports observation/coverage state only; it does not feed the meme candidate ranking, mark tokens safe, or generate trading signals.
+- This PR adds a Cron trigger and Worker handler, so merging it will deploy the Worker. Keep it Draft until the tests, review, and a separate production deployment approval are complete.

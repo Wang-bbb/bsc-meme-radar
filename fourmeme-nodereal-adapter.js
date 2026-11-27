@@ -56,6 +56,7 @@ export function createNodeRealFourMemeRpcAdapter({
   }
 
   let nextId = 1;
+  let chainIdVerified = false;
   async function post(payload) {
     let response;
     try {
@@ -106,8 +107,18 @@ export function createNodeRealFourMemeRpcAdapter({
     });
   }
 
+  async function ensureBscChain() {
+    if (chainIdVerified) return;
+    const chainId = await call("eth_chainId", []);
+    if (typeof chainId !== "string" || !/^0x[0-9a-fA-F]+$/.test(chainId) || BigInt(chainId) !== 56n) {
+      throw new Error("NodeReal RPC endpoint is not BNB Smart Chain mainnet");
+    }
+    chainIdVerified = true;
+  }
+
   return Object.freeze({
     async getFinalizedBlockNumber() {
+      await ensureBscChain();
       const block = validateBlock(
         await call("eth_getBlockByNumber", ["finalized", false]),
         "finalized"
@@ -124,6 +135,7 @@ export function createNodeRealFourMemeRpcAdapter({
       if (new Set(normalized.map(String)).size !== normalized.length) {
         throw new TypeError("Duplicate block number in hash request");
       }
+      await ensureBscChain();
       const blocks = await batch(normalized.map(number => ({
         method: "eth_getBlockByNumber",
         params: [rpcHex(number), false]
@@ -145,6 +157,7 @@ export function createNodeRealFourMemeRpcAdapter({
       if (to < from || to - from + 1n > BigInt(maxBlockSpan)) {
         throw new TypeError("eth_getLogs range exceeds configured block bound");
       }
+      await ensureBscChain();
       const logs = await call("eth_getLogs", [{
         address: FOURMEME_TOKEN_MANAGER2_BSC,
         fromBlock: rpcHex(from),
