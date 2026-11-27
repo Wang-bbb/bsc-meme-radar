@@ -120,3 +120,14 @@ Worker 和网页均可能公开访问；不得把私钥、助记词或交易密�
 - 新候选的成交量、买卖笔数、K线、钱包流向、LP 赎回风险和钱包可交易/卖出能力仍未验证，必须待复核；稳定币侧储备×2只是粗略估算，不是可成交深度或真实总 TVL。
 - Pump.fun bonding curve、Raydium AMM v4、Meteora DLMM、Orca Whirlpool 仍只输出活动线索，不生成候选。
 - 官方参考：[PumpSwap 文档](https://github.com/pump-fun/pump-public-docs/blob/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22/docs/PUMP_SWAP_README.md)、[PumpSwap IDL](https://github.com/pump-fun/pump-public-docs/blob/639b87fb45c3adeffa6f7c4a1bf0cb85e392bf22/idl/pump_amm.json)。本项目仅按公开 IDL 解码链上数据，不复制其实现代码。
+
+
+## Four.meme finalized shadow observer — GPT-Radar-FourMeme v0.1.0
+
+- 独立只读观察 Four.meme BSC TokenManager2 的 TokenCreate、TokenPurchase、TokenSale、TradeStop、LiquidityAdded 事件；不参与现有候选排序、安全评分、买入推荐或交易。
+- 采集器仅读取 BSC finalized 区块、官方 TokenManager2 合约日志和 canonical block hashes；校验 BSC chain ID、日志区块哈希、重组回滚边界，并对每轮区块数、日志数、KV chunk 字节数和哈希查询次数设上限。
+- Worker 提供只读状态接口 `/fourmeme-shadow/status`。关闭状态应返回 `disabled`；过期、缺失、损坏或失败状态不能伪装成健康。
+- **分阶段部署保护：** `wrangler.jsonc` 将 `FOURMEME_SHADOW_ENABLED` 明确固定为 `false`。部署后只发布代码、状态接口和十分钟 Cron 壳；Cron 每次应无 RPC、无 KV 访问、无采集。未完成免费版 CPU 实测与共享 KV 余量核验前，不得将开关改为 `true`。
+- 开启后的预算估算不是实测：正常运行预计最多约 4 次 KV 写入/轮，144 轮/日约 577 次写入/日，尚未计入重试、重组重放和现有雷达消耗。Cloudflare Free Cron 的 CPU 限制尚未通过真实启用运行验证。
+- 已有真实 finalized 样本支持 TokenCreate、TokenPurchase、TokenSale 解码；TradeStop 与 LiquidityAdded 在已抽查窗口没有匹配日志，仍只通过单元测试，不能声称已完成实时样本验证。Four.meme 公共 REST 样本受到 HTTP 403 地域限制，接口 schema 仍未验证。
+- 最新代码验证：GitHub Actions run #446，Worker 路由/语法、Four.meme 单元测试、公共 API 探测和 NodeReal finalized smoke 四个 job 均为 success。公共 API 的 403 是非阻塞覆盖缺口，不代表 REST API 验证通过。
