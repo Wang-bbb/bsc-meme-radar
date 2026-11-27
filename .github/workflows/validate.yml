@@ -292,31 +292,51 @@ jobs:
             ["LiquidityAdded", "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0"]
           ];
           for (const [eventName, topic] of liveEventTopics) {
-            // Lifecycle events are sparse. Probe up to 20,000 finalized blocks
-            // in bounded 2,000-block requests; keep busy trade events on 2,000.
+            // Lifecycle events are sparse; trade events can be extremely dense.
+            // Probe a bounded recent window and shrink it until the response is
+            // <=500 logs. A dense event must not make the smoke test fail merely
+            // because the original range was too broad.
             const sparseLifecycle = eventName === "TradeStop" || eventName === "LiquidityAdded";
-            const eventFrom = sparseLifecycle
-              ? (sampleTo > 19999n ? sampleTo - 19999n : 0n)
-              : sampleFrom;
-            const chunkSize = 2000n;
-            const rawLogs = [];
+            const desiredSpan = sparseLifecycle ? 20000n : 2000n;
+            const spans = [];
+            for (let span = desiredSpan; span >= 1n; span /= 2n) {
+              spans.push(span);
+              if (span === 1n) break;
+            }
+            let eventFrom = sampleTo;
+            let rawLogs = null;
             let chunks = 0;
-            for (let from = eventFrom; from <= sampleTo; from += chunkSize) {
-              const to = from + chunkSize - 1n < sampleTo
-                ? from + chunkSize - 1n
-                : sampleTo;
-              const chunkLogs = await rpc("eth_getLogs", [{
-                address: FOURMEME_TOKEN_MANAGER2_BSC,
-                fromBlock: "0x" + from.toString(16),
-                toBlock: "0x" + to.toString(16),
-                topics: [topic]
-              }], 60 + liveEventTopics.findIndex(item => item[0] === eventName) * 10 + chunks);
-              if (!Array.isArray(chunkLogs)) throw new Error(eventName + " log sample is not an array");
-              rawLogs.push(...chunkLogs);
-              chunks += 1;
-              if (rawLogs.length > 500) {
-                throw new Error(eventName + " sample exceeds the bounded 500-log limit");
+            for (const span of spans) {
+              const from = sampleTo + 1n > span ? sampleTo - span + 1n : 0n;
+              const to = sampleTo;
+              let chunkLogs;
+              try {
+                chunkLogs = await rpc("eth_getLogs", [{
+                  address: FOURMEME_TOKEN_MANAGER2_BSC,
+                  fromBlock: "0x" + from.toString(16),
+                  toBlock: "0x" + to.toString(16),
+                  topics: [topic]
+                }], 60 + liveEventTopics.findIndex(item => item[0] === eventName) * 10 + chunks);
+              } catch (error) {
+                const message = String(error?.message || error);
+                const retryable = /limit|too many|response size|timeout|exceed|range|more than/i.test(message);
+                if (!retryable || span === 1n) throw error;
+                console.log(eventName + " range " + span + " hit provider bound; retrying a narrower finalized window");
+                chunks += 1;
+                continue;
               }
+              chunks += 1;
+              if (!Array.isArray(chunkLogs)) throw new Error(eventName + " log sample is not an array");
+              if (chunkLogs.length > 500) {
+                console.log(eventName + " range " + span + " returned " + chunkLogs.length + " logs; retrying narrower");
+                continue;
+              }
+              eventFrom = from;
+              rawLogs = chunkLogs;
+              break;
+            }
+            if (rawLogs === null) {
+              throw new Error(eventName + " could not obtain a sample within the bounded 500-log limit");
             }
             const canonicalLogBlocks = await verifyFinalizedLogs(
               rawLogs, eventFrom.toString(), sampleTo.toString(), eventName
@@ -328,7 +348,7 @@ jobs:
               throw new Error(eventName + " topic returned a mismatched decoded event");
             }
             console.log("Finalized " + eventName + " sample range:", eventFrom.toString(), "-", sampleTo.toString());
-            console.log("Finalized " + eventName + " bounded query chunks:", chunks);
+            console.log("Finalized " + eventName + " bounded range attempts:", chunks);
             console.log("Finalized " + eventName + " raw logs:", rawLogs.length);
             console.log("Finalized " + eventName + " canonical log blocks verified:", canonicalLogBlocks);
             console.log("Finalized " + eventName + " ABI decodes:", decoded.length);
