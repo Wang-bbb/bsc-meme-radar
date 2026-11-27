@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyWalletFlowQuality, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyWalletFlowQuality, buildBscWalletFlowSample, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -2182,6 +2182,35 @@ test("microstructure metrics do not flag normal turnover or insufficient sell sa
   assert.equal(metrics.volumeToLiquidityRatioSincePoolCreation, 0.5);
   assert.equal(metrics.sellToBuyAverageTradeSizeRatio, 1.6);
   assert.deepEqual(metrics.microstructureRiskFlags, []);
+});
+
+test("BSC wallet-flow samples use NodeReal transaction senders and decode V2 buy/sell directions", () => {
+  const pool={tokenAddress:"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",usdtIs0:true};
+  const wordHex=value=>BigInt(value).toString(16).padStart(64,"0");
+  const logs=[],transactions=[];
+  for(let i=0;i<12;i++){
+    const buy=i<8;
+    const words=buy
+      ? [10n*10n**18n,0n,0n,100n*10n**18n]
+      : [0n,100n*10n**18n,10n*10n**18n,0n];
+    logs.push({data:"0x"+words.map(wordHex).join(""),transactionHash:"0x"+String(i+1).padStart(64,"0"),blockNumber:"0x"+(100+i).toString(16),logIndex:"0x0"});
+    transactions.push({from:"0x"+String(i+1).padStart(40,"0")});
+  }
+  const flow=buildBscWalletFlowSample(pool,"v2",logs,transactions);
+  assert.equal(flow.source,"NodeReal BSC RPC transaction sender sample");
+  assert.equal(flow.status,"checked");
+  assert.equal(flow.sampleTrades,12);
+  assert.equal(flow.uniqueBuyers,8);
+  assert.equal(flow.uniqueSellers,4);
+  assert.equal(flow.top3BuySharePct,37.5);
+  assert.equal(classifyWalletFlowQuality(flow).status,"pass");
+});
+
+test("BSC wallet-flow samples reject missing transaction senders instead of inventing wallets", () => {
+  const pool={tokenAddress:"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",usdtIs0:true};
+  const flow=buildBscWalletFlowSample(pool,"v2",[],[]);
+  assert.equal(flow.status,"insufficient");
+  assert.equal(flow.sampleTrades,0);
 });
 
 test("wallet-flow quality gate requires independent buyers, sellers and balanced participation", () => {
