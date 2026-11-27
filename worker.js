@@ -1015,7 +1015,7 @@ async function enrichTokenMetadata(pool, rpcUrl) {
 }
 
 
-function summarizePoolWalletFlow(body, tokenAddress) {
+function summarizePoolWalletFlow(body, tokenAddress, source = "GeckoTerminal pool trades (bounded index sample)") {
   const rows=Array.isArray(body&&body.data)?body.data:[];
   const token=String(tokenAddress||"").toLowerCase();
   const wallets=new Map();
@@ -1078,7 +1078,7 @@ function summarizePoolWalletFlow(body, tokenAddress) {
   if(status==="checked"&&intervals.length>=8&&rapidTradeSharePct>=70)warnings.push("样本交易时间高度密集，超过70%的相邻交易间隔不超过2秒");
   if(status==="checked"&&buyers.length>=5&&overlapWallets/buyers.length>=0.6)warnings.push("大量钱包在样本中同时买入和卖出，需复核短周期往返交易");
   return {
-    status,source:"GeckoTerminal pool trades (bounded index sample)",sampleTrades:parsedTrades,
+    status,source,sampleTrades:parsedTrades,
     uniqueBuyers:buyers.length,uniqueSellers:sellers.length,repeatBuyerWallets:repeatBuyers.length,
     repeatBuyerSharePct,walletsBuyingAndSelling:overlapWallets,totalBuyVolumeUSD:Math.round(totalBuyUsd*100)/100,
     totalSellVolumeUSD:Math.round(totalSellUsd*100)/100,top3BuySharePct,largestSameSizeTradeCount,
@@ -1090,6 +1090,56 @@ function summarizePoolWalletFlow(body, tokenAddress) {
     ]
   };
 }
+
+export function buildBscWalletFlowSample(pool, version, logs, transactions) {
+  const rows=[];
+  for(let i=0;i<logs.length;i++){
+    const log=logs[i],tx=transactions[i];
+    const sender=String(tx&&tx.from||"").toLowerCase();
+    if(!/^0x[a-f0-9]{40}$/.test(sender))continue;
+    try{
+      let side=null,quoteRaw=0n;
+      if(version==="v2"){
+        const a0i=BigInt("0x"+word(log.data,0)),a1i=BigInt("0x"+word(log.data,1));
+        const a0o=BigInt("0x"+word(log.data,2)),a1o=BigInt("0x"+word(log.data,3));
+        const usdtIn=pool.usdtIs0?a0i:a1i,usdtOut=pool.usdtIs0?a0o:a1o;
+        const tokenIn=pool.usdtIs0?a1i:a0i,tokenOut=pool.usdtIs0?a1o:a0o;
+        if(usdtIn>0n&&tokenOut>0n){side="buy";quoteRaw=usdtIn;}
+        else if(usdtOut>0n&&tokenIn>0n){side="sell";quoteRaw=usdtOut;}
+      }else if(version==="v3"){
+        const amount0=signedInt256(word(log.data,0)),amount1=signedInt256(word(log.data,1));
+        const usdtRaw=pool.usdtIs0?amount0:amount1,tokenRaw=pool.usdtIs0?amount1:amount0;
+        if(usdtRaw>0n&&tokenRaw<0n){side="buy";quoteRaw=usdtRaw;}
+        else if(usdtRaw<0n&&tokenRaw>0n){side="sell";quoteRaw=-usdtRaw;}
+      }
+      const volume=toFloat(quoteRaw,18);
+      if(!side||!Number.isFinite(volume)||volume<=0)continue;
+      rows.push({attributes:{tx_from_address:sender,kind:side,volume_in_usd:String(volume)}});
+    }catch(_){/* malformed Swap log is excluded from the wallet sample */}
+  }
+  return summarizePoolWalletFlow({data:rows},pool.tokenAddress,"NodeReal BSC RPC transaction sender sample");
+}
+
+async function getBscPoolWalletFlow(pool, version, logs, rpcUrl) {
+  const seen=new Set();
+  const sampleLogs=[...logs].sort((a,b)=>{
+    const blockDiff=asNumber(b.blockNumber)-asNumber(a.blockNumber);
+    return blockDiff||asNumber(b.logIndex)-asNumber(a.logIndex);
+  }).filter(log=>{
+    const hash=String(log&&log.transactionHash||"").toLowerCase();
+    if(!/^0x[0-9a-f]{64}$/.test(hash)||seen.has(hash))return false;
+    seen.add(hash);return true;
+  }).slice(0,12);
+  if(sampleLogs.length<12){
+    return {status:"insufficient",source:"NodeReal BSC RPC transaction sender sample",
+      sampleTrades:sampleLogs.length,uniqueBuyers:0,uniqueSellers:0,repeatBuyerSharePct:null,
+      top3BuySharePct:null,warnings:["链上 Swap 交易样本不足12笔，不能验证真实参与度"]};
+  }
+  const calls=sampleLogs.map(log=>({method:"eth_getTransactionByHash",params:[log.transactionHash]}));
+  const results=await rpcBatch(calls,rpcUrl,"BSC");
+  return buildBscWalletFlowSample(pool,version,sampleLogs,results.map(item=>item&&item.result||null));
+}
+
 async function getPoolWalletFlow(network,poolAddress,tokenAddress){
   const endpoint="https://api.geckoterminal.com/api/v2/networks/"+encodeURIComponent(network)+
     "/pools/"+encodeURIComponent(poolAddress)+"/trades";
@@ -4153,18 +4203,26 @@ export default {
       // inspect only a bounded top-five sample to protect public-index quotas.
       // Uninspected or unavailable wallet samples are never treated as healthy.
       const walletFlowInspection = [...pools]
-        .sort((a,b) => Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0))
+        .sort((a,b) => Number(a.ageMinutes||0)-Number(b.ageMinutes||0))
         .slice(0,5);
       const inspectedWalletPools = new Set(walletFlowInspection.map(pool => String(pool.pairAddress||"").toLowerCase()));
+      await Promise.all(walletFlowInspection.map(async pool => {
+        const pairKey=String(pool.pairAddress||"").toLowerCase();
+        const isV3=String(pool.dexId||"").includes("v3")||String(pool.dex||"").includes("V3");
+        const version=isV3?"v3":"v2";
+        const swapMap=isV3?v3SwapLogsByPair:swapsByPair;
+        const logs=swapMap.get(pairKey)||[];
+        try {
+          pool.walletFlow=await getBscPoolWalletFlow(pool,version,logs,rpcUrl);
+        } catch (error) {
+          pool.walletFlow={status:"unavailable",source:"NodeReal BSC RPC transaction sender sample",
+            sampleTrades:0,error:"BSC 交易发送地址批量读取失败",warnings:["链上钱包样本查询失败；不据此判断交易健康"]};
+        }
+      }));
       for (const pool of pools) {
         if (!inspectedWalletPools.has(String(pool.pairAddress||"").toLowerCase())) {
-          pool.walletFlow = { status: "unavailable", sampleTrades: 0, warnings: ["超出每轮最多5个池的钱包样本检查预算"] };
-          continue;
-        }
-        try {
-          pool.walletFlow = await getPoolWalletFlow("bsc", pool.pairAddress, pool.tokenAddress);
-        } catch (error) {
-          pool.walletFlow = { status: "unavailable", sampleTrades: 0, warnings: ["钱包样本查询失败；不据此判断交易健康"] };
+          pool.walletFlow = { status: "unavailable", source:"NodeReal BSC RPC transaction sender sample",
+            sampleTrades: 0, warnings: ["超出每轮最多5个池的钱包样本检查预算"] };
         }
       }
       for (const pool of pools) Object.assign(pool, classifyPriorityWatchlist(pool));
