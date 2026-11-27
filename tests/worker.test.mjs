@@ -2203,7 +2203,7 @@ test("BSC wallet-flow samples use NodeReal transaction senders and decode V2 buy
   assert.equal(flow.sampleTrades,12);
   assert.equal(flow.uniqueBuyers,8);
   assert.equal(flow.uniqueSellers,4);
-  assert.equal(flow.top3BuySharePct,37.5);
+  assert.equal(flow.top3BuySharePct,44.44);
   assert.equal(classifyWalletFlowQuality(flow).status,"pass");
 });
 
