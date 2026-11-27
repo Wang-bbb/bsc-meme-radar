@@ -43,7 +43,19 @@ jobs:
           if (health.worker !== "running" || health.chain !== "BSC") {
             throw new Error("Deployed Worker health payload is unexpected");
           }
-          const scan = await readJson("/scan?minutes=15&minLiquidity=5000");
+          // Cloudflare edge propagation can lag behind the successful upload.
+          // Retry until the exact policy version is visible before asserting runtime behavior.
+          let scan = null;
+          let lastKeys = [];
+          for (let attempt = 1; attempt <= 6; attempt += 1) {
+            scan = await readJson("/scan?minutes=15&minLiquidity=5000");
+            lastKeys = Object.keys(scan || {});
+            if (scan.watchlistPolicyVersion === "priority-watchlist-v3-wallet-quality-gate") break;
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          }
+          if (scan.watchlistPolicyVersion !== "priority-watchlist-v3-wallet-quality-gate") {
+            throw new Error("Expected wallet-quality policy not visible after deployment propagation; response keys: " + lastKeys.join(","));
+          }
           if (!Array.isArray(scan.pools) || !Array.isArray(scan.priorityWatchlist)) {
             throw new Error("BSC scan response is missing pool/watchlist arrays");
           }
@@ -52,9 +64,9 @@ jobs:
               throw new Error("Priority watchlist contains a pool without wallet-quality pass");
             }
           }
-          const inspection = scan.walletFlowInspection || {};
-          if (Number(inspection.maxPoolsPerScan) !== 5) {
-            throw new Error("Wallet-flow inspection cap is missing or unexpected");
+          const inspection = scan.walletFlowInspection;
+          if (!inspection || Number(inspection.maxPoolsPerScan) !== 5) {
+            throw new Error("Wallet-flow inspection cap is missing or unexpected; response keys: " + lastKeys.join(","));
           }
           console.log("Worker health: passed");
           console.log("BSC scan runtime: passed");
