@@ -65,6 +65,26 @@ export function calculateTradeMicrostructureMetrics(input) {
   };
 }
 
+export function classifyWalletFlowQuality(walletFlow) {
+  const reasons = [];
+  if (!walletFlow || walletFlow.status !== "checked") {
+    return { status: "review", reasons: ["独立钱包交易样本不可用或不足，不能验证真实参与度"] };
+  }
+  const n = (value) => value == null ? null : Number(value);
+  const trades=n(walletFlow.sampleTrades),buyers=n(walletFlow.uniqueBuyers),sellers=n(walletFlow.uniqueSellers);
+  const top3=n(walletFlow.top3BuySharePct),repeat=n(walletFlow.repeatBuyerSharePct);
+  if (!Number.isFinite(trades) || trades < 12) reasons.push("独立钱包样本少于12笔");
+  if (!Number.isFinite(buyers) || buyers < 5) reasons.push("独立买家少于5个");
+  if (!Number.isFinite(sellers) || sellers < 3) reasons.push("独立卖家少于3个");
+  if (top3 == null || !Number.isFinite(top3) || top3 >= 60) reasons.push("前三大买家成交额占比达到或超过60%");
+  if (repeat == null || !Number.isFinite(repeat) || repeat >= 75) reasons.push("重复买入钱包占比达到或超过75%");
+  const warnings=Array.isArray(walletFlow.warnings)?walletFlow.warnings:[];
+  for (const warning of warnings) {
+    if (/金额高度重复|交易时间高度密集|短周期往返交易|前三大买入钱包|重复买入钱包|未观察到卖出钱包/.test(warning)) reasons.push(warning);
+  }
+  return { status: reasons.length ? "review" : "pass", reasons };
+}
+
 export function classifyPriorityWatchlist(pool) {
   const reasons = [];
   const tokenAddress = String(pool.tokenAddress || "").toLowerCase();
@@ -100,6 +120,8 @@ export function classifyPriorityWatchlist(pool) {
   if (ratio != null && ratio >= 4 && sellCount > 0) reasons.push("买卖成交额严重失衡");
   const microstructure = Array.isArray(pool.microstructureRiskFlags) ? pool.microstructureRiskFlags : [];
   reasons.push(...microstructure);
+  const walletQuality = classifyWalletFlowQuality(pool.walletFlow);
+  if (walletQuality.status !== "pass") reasons.push(...walletQuality.reasons);
 
   if (priceChange == null || !Number.isFinite(Number(priceChange))) {
     reasons.push("首末观测成交价变化未知");
@@ -114,15 +136,18 @@ export function classifyPriorityWatchlist(pool) {
   const eligible = reasons.length === 0 &&
     pool.earlySignalScore != null && pool.earlySignalScore >= 65 &&
     pool.tradeFlowStatus === "mixed_flow" &&
+    walletQuality.status === "pass" &&
     Number(pool.liquidityUSDApprox) >= 5000;
   const highRisk = (priceChange != null && (priceChange >= 40 || priceChange <= -15)) ||
     pool.tradeFlowStatus === "sell_volume_dominant" ||
     pool.historicalRiskStatus === "high_risk" ||
     Boolean(userReportedRiskReason) ||
     (ratio != null && ratio >= 4 && sellCount > 0) ||
-    microstructure.length > 0;
+    microstructure.length > 0 || walletQuality.reasons.some(reason => /刷量|对敲|交易时间高度密集|短周期往返/.test(reason));
   return {
     priorityWatchlistEligible: eligible,
+    walletFlowQualityStatus: walletQuality.status,
+    walletFlowQualityReasons: walletQuality.reasons,
     userReportedRiskStatus: userReportedRiskReason ? "user_reported_scam" : "none",
     userReportedRiskReasons: userReportedRiskReason ? [userReportedRiskReason] : [],
     watchlistTier: eligible ? "priority_watchlist" : highRisk ? "high_risk_review" : "review_only",
@@ -1028,17 +1053,39 @@ function summarizePoolWalletFlow(body, tokenAddress) {
   const topBuyers=buyers.slice().sort((a,b)=>b.buyUsd-a.buyUsd).slice(0,3);
   const top3BuySharePct=totalBuyUsd>0?Math.round(topBuyers.reduce((sum,x)=>sum+x.buyUsd,0)/totalBuyUsd*10000)/100:null;
   const overlapWallets=entries.filter(x=>x.buys>0&&x.sells>0).length;
+  const repeatBuyerSharePct=buyers.length?Math.round(repeatBuyers.length/buyers.length*10000)/100:null;
+  const sizeBuckets=new Map();
+  const timestamps=[];
+  for(const row of rows){
+    const a=row&&row.attributes||{};
+    const raw=Number(a.volume_in_usd);
+    if(Number.isFinite(raw)&&raw>0){
+      const bucket=(Math.round(raw*2)/2).toFixed(2);
+      sizeBuckets.set(bucket,(sizeBuckets.get(bucket)||0)+1);
+    }
+    const ts=Date.parse(a.block_timestamp||a.timestamp||"");
+    if(Number.isFinite(ts))timestamps.push(ts);
+  }
+  const largestSameSizeTradeCount=Math.max(0,...sizeBuckets.values());
+  const largestSameSizeTradeSharePct=parsedTrades?Math.round(largestSameSizeTradeCount/parsedTrades*10000)/100:null;
+  timestamps.sort((a,b)=>a-b);
+  const intervals=timestamps.slice(1).map((value,index)=>value-timestamps[index]);
+  const rapidTradeSharePct=intervals.length?Math.round(intervals.filter(ms=>ms>=0&&ms<=2000).length/intervals.length*10000)/100:null;
   const coverageMinutes=oldestTimestamp!=null&&newestTimestamp!=null?Math.max(0,Math.round((newestTimestamp-oldestTimestamp)/60000)):null;
   const status=parsedTrades>=8?"checked":"insufficient";
   const warnings=[];
   if(status==="checked"&&top3BuySharePct!=null&&top3BuySharePct>=60)warnings.push("前三大买入钱包贡献了至少60%的样本买入额，买盘集中度偏高");
   if(status==="checked"&&buyers.length>=5&&sellers.length===0)warnings.push("样本中未观察到卖出钱包，退出流动性尚未得到验证");
-  if(status==="checked"&&buyers.length>=4&&repeatBuyers.length/buyers.length>=0.6)warnings.push("买入活动集中在少数重复交易钱包，需排查重复刷量或关联行为");
+  if(status==="checked"&&buyers.length>=4&&repeatBuyerSharePct>=60)warnings.push("重复买入钱包占比较高，需排查重复刷量或关联行为");
+  if(status==="checked"&&parsedTrades>=12&&largestSameSizeTradeCount>=4&&largestSameSizeTradeSharePct>=40)warnings.push("多笔交易金额高度重复，存在程序化对敲或批量刷量嫌疑");
+  if(status==="checked"&&intervals.length>=8&&rapidTradeSharePct>=70)warnings.push("样本交易时间高度密集，超过70%的相邻交易间隔不超过2秒");
+  if(status==="checked"&&buyers.length>=5&&overlapWallets/buyers.length>=0.6)warnings.push("大量钱包在样本中同时买入和卖出，需复核短周期往返交易");
   return {
-    status,source:"GeckoTerminal pool trades",sampleTrades:parsedTrades,
+    status,source:"GeckoTerminal pool trades (bounded index sample)",sampleTrades:parsedTrades,
     uniqueBuyers:buyers.length,uniqueSellers:sellers.length,repeatBuyerWallets:repeatBuyers.length,
-    walletsBuyingAndSelling:overlapWallets,totalBuyVolumeUSD:Math.round(totalBuyUsd*100)/100,
-    totalSellVolumeUSD:Math.round(totalSellUsd*100)/100,top3BuySharePct,coverageMinutes,warnings,
+    repeatBuyerSharePct,walletsBuyingAndSelling:overlapWallets,totalBuyVolumeUSD:Math.round(totalBuyUsd*100)/100,
+    totalSellVolumeUSD:Math.round(totalSellUsd*100)/100,top3BuySharePct,largestSameSizeTradeCount,
+    largestSameSizeTradeSharePct,rapidTradeSharePct,coverageMinutes,warnings,
     limitations:[
       "仅统计索引源返回的有限交易样本，不代表完整链上钱包全集。",
       "钱包地址相同不等于同一控制人；本结果不推断钱包关联、开发者身份或内幕身份。",
@@ -3798,7 +3845,7 @@ export default {
           earlySignalGrade,
           earlySignalReasons,
           earlyRiskFlags,
-          earlySignalScoreVersion: "heuristic-v2",
+          earlySignalScoreVersion: "heuristic-v3-wallet-quality",
           buys1h: swapError ? null : buys1h,
           sells1h: swapError ? null : sells1h,
           // Deprecated compatibility alias; value is first-to-last trade price change since pool creation.
@@ -4104,6 +4151,24 @@ export default {
           }
         }
       }
+      // GPT-Radar-FourMeme v0.1.2 / wash-trading gate:
+      // inspect only a bounded top-five sample to protect public-index quotas.
+      // Uninspected or unavailable wallet samples are never treated as healthy.
+      const walletFlowInspection = [...pools]
+        .sort((a,b) => Number(b.liquidityUSDApprox||0)-Number(a.liquidityUSDApprox||0))
+        .slice(0,5);
+      const inspectedWalletPools = new Set(walletFlowInspection.map(pool => String(pool.pairAddress||"").toLowerCase()));
+      for (const pool of pools) {
+        if (!inspectedWalletPools.has(String(pool.pairAddress||"").toLowerCase())) {
+          pool.walletFlow = { status: "unavailable", sampleTrades: 0, warnings: ["超出每轮最多5个池的钱包样本检查预算"] };
+          continue;
+        }
+        try {
+          pool.walletFlow = await getPoolWalletFlow("bsc", pool.pairAddress, pool.tokenAddress);
+        } catch (error) {
+          pool.walletFlow = { status: "unavailable", sampleTrades: 0, warnings: ["钱包样本查询失败；不据此判断交易健康"] };
+        }
+      }
       for (const pool of pools) Object.assign(pool, classifyPriorityWatchlist(pool));
       const priorityWatchlist = pools.filter((pool) => pool.priorityWatchlistEligible);
 
@@ -4179,7 +4244,7 @@ export default {
         freshPairsFound: fresh.length + v3Fresh.length,
         candidateFilterDiagnostics: candidateFilterDiagnostics,
         earlySignalScoreVersion: "heuristic-v2",
-        watchlistPolicyVersion: "priority-watchlist-v2-history-gate",
+        watchlistPolicyVersion: "priority-watchlist-v3-wallet-quality-gate",
         historyTrackingPolicyVersion: "pool-history-v1",
         historyTracking: historyTracking,
         count: pools.length,
