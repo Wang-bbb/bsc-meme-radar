@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import worker from "../worker.js";
-import { classifyPriorityWatchlist, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
+import { classifyPriorityWatchlist, classifyWalletFlowQuality, classifyLiquidityDiagnostic, classifyPoolHistory, parsePythSolUsdPrice, calculateSolanaQuoteLiquidityUSD, calculateTradeMicrostructureMetrics, classifyMultichainPoolRisk, parseSolanaRpcErrorDiagnostics } from "../worker.js";
 
 const env = { NODEREAL_RPC_URL: "https://rpc.invalid.test" };
 const originalFetch = globalThis.fetch;
@@ -2071,7 +2071,9 @@ test("BSC swap metrics avoid per-block RPC fanout and stay unknown on query fail
   assert.ok(source.includes("尚无卖出成交验证"));
   assert.ok(source.includes("priorityWatchlistCount: priorityWatchlist.length"));
   assert.ok(source.includes("priorityWatchlist: priorityWatchlist"));
-  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v2-history-gate"'));
+  assert.ok(source.includes('watchlistPolicyVersion: "priority-watchlist-v3-wallet-quality-gate"'));
+  assert.ok(source.includes("classifyWalletFlowQuality"));
+  assert.ok(source.includes("walletFlowInspection"));
 });
 
 
@@ -2139,6 +2141,7 @@ function watchlistPool(overrides = {}) {
     tradeFlowStatus: "mixed_flow",
     historicalRiskStatus: "stable",
     historicalRiskReasons: [],
+    walletFlow: { status: "checked", sampleTrades: 20, uniqueBuyers: 8, uniqueSellers: 5, repeatBuyerSharePct: 25, top3BuySharePct: 45, warnings: [] },
     earlySignalScore: 70,
     liquidityUSDApprox: 25000,
     ...overrides
@@ -2177,6 +2180,34 @@ test("microstructure metrics do not flag normal turnover or insufficient sell sa
   assert.equal(metrics.volumeToLiquidityRatioSincePoolCreation, 0.5);
   assert.equal(metrics.sellToBuyAverageTradeSizeRatio, 1.6);
   assert.deepEqual(metrics.microstructureRiskFlags, []);
+});
+
+test("wallet-flow quality gate requires independent buyers, sellers and balanced participation", () => {
+  assert.equal(classifyWalletFlowQuality({
+    status: "checked", sampleTrades: 20, uniqueBuyers: 8, uniqueSellers: 5,
+    repeatBuyerSharePct: 25, top3BuySharePct: 45, warnings: []
+  }).status, "pass");
+  const wash = classifyWalletFlowQuality({
+    status: "checked", sampleTrades: 20, uniqueBuyers: 4, uniqueSellers: 1,
+    repeatBuyerSharePct: 80, top3BuySharePct: 78,
+    warnings: ["多笔交易金额高度重复，存在程序化对敲或批量刷量嫌疑"]
+  });
+  assert.equal(wash.status, "review");
+  assert.ok(wash.reasons.some(reason => reason.includes("独立买家少于5个")));
+  assert.ok(wash.reasons.some(reason => reason.includes("程序化对敲")));
+  assert.equal(classifyWalletFlowQuality({ status: "unavailable" }).status, "review");
+});
+
+test("priority watchlist rejects missing wallet-flow evidence and suspected wash trading", () => {
+  const missing = classifyPriorityWatchlist(watchlistPool({ walletFlow: { status: "unavailable" } }));
+  assert.equal(missing.priorityWatchlistEligible, false);
+  assert.equal(missing.walletFlowQualityStatus, "review");
+  const suspected = classifyPriorityWatchlist(watchlistPool({
+    walletFlow: { status: "checked", sampleTrades: 20, uniqueBuyers: 6, uniqueSellers: 3,
+      repeatBuyerSharePct: 20, top3BuySharePct: 40, warnings: ["多笔交易金额高度重复，存在程序化对敲或批量刷量嫌疑"] }
+  }));
+  assert.equal(suspected.priorityWatchlistEligible, false);
+  assert.equal(suspected.watchlistTier, "high_risk_review");
 });
 
 test("priority watchlist accepts only balanced, sufficiently active, non-chasing pools", () => {
