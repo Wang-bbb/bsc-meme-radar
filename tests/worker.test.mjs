@@ -957,6 +957,8 @@ test("wallet-flow counts distinct buyers and flags concentrated early buy volume
   assert.equal(data.walletFlow.walletsBuyingAndSelling,1);
   assert.ok(data.walletFlow.top3BuySharePct>=60);
   assert.ok(data.walletFlow.warnings.some(x=>x.includes("前三大买入钱包")));
+  assert.equal(data.walletFlowQuality.status,"review");
+  assert.ok(data.walletFlowQuality.reasons.some(x=>x.includes("独立卖家少于3个")));
 });
 
 test("wallet-flow keeps small trade samples insufficient and never calls them healthy", async () => {
@@ -2727,4 +2729,12 @@ test("Four.meme shadow status route does not report unhealthy observer states as
   assert.equal(missingBinding.status, 503);
   assert.equal(missingData.ok, false);
   assert.equal(missingData.status, "not_configured");
+});
+
+
+test("dashboard never marks BSC tokens as passed without the wallet-quality gate", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  assert.ok(html.includes('walletFlowQuality:{status:p.walletFlowQualityStatus||"review"'));
+  assert.ok(html.includes('p.chain==="BSC"&&(!p.walletFlowQuality||p.walletFlowQuality.status!=="pass")'));
+  assert.ok(html.includes("独立钱包质量门槛未通过"));
 });

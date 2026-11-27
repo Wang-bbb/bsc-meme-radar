@@ -243,7 +243,8 @@ async function scan(){
       if(!(multi.chainErrors||[]).length)failures.push("Solana/Ethereum/Base：返回了不完整数据");
     }
     const all=[];
-    if(bsc)(bsc.pools||[]).forEach(p=>all.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl}));
+    if(bsc)(bsc.pools||[]).forEach(p=>all.push({...p,chain:"BSC",quoteSymbol:"USDT",usdtDirect:true,dexScreenerUrl:p.poolUrl,
+      walletFlowQuality:{status:p.walletFlowQualityStatus||"review",reasons:p.walletFlowQualityReasons||["独立钱包样本不可用或未抽查"]}}));
     if(multi)(multi.pools||[]).forEach(p=>all.push(p));
     const discoveredCount=all.length;
     const denylisted=all.filter(isBlockedToken);
@@ -281,14 +282,18 @@ async function scan(){
         p.marketHistoryStatus=data.status||"unavailable";
         p.marketHistoryReason=data.error||"K线数据不足";
         p.trendScore=data.trendScore||null;
-        try{
-          const walletResponse=await fetch(base+"/wallet-flow?"+new URLSearchParams({
-            chain,pool:p.pairAddress,token:p.tokenAddress
-          }).toString());
-          const walletData=await walletResponse.json();
-          p.walletFlow=walletData.walletFlow||{status:"unavailable",error:walletData.error||"钱包样本不可用"};
-        }catch(walletError){
-          p.walletFlow={status:"unavailable",error:"钱包样本查询失败："+String(walletError)};
+        if(chain!=="BSC"){
+          try{
+            const walletResponse=await fetch(base+"/wallet-flow?"+new URLSearchParams({
+              chain,pool:p.pairAddress,token:p.tokenAddress
+            }).toString());
+            const walletData=await walletResponse.json();
+            p.walletFlow=walletData.walletFlow||{status:"unavailable",error:walletData.error||"钱包样本不可用"};
+            p.walletFlowQuality=walletData.walletFlowQuality||{status:"review",reasons:["钱包样本质量未验证"]};
+          }catch(walletError){
+            p.walletFlow={status:"unavailable",error:"钱包样本查询失败："+String(walletError)};
+            p.walletFlowQuality={status:"review",reasons:["钱包样本查询失败，不能验证真实参与度"]};
+          }
         }
         const snapshot=data.liquiditySnapshot||{};
         p.liquiditySnapshotStatus=snapshot.status||"unavailable";
@@ -342,6 +347,10 @@ async function scan(){
           const report=await response.json();
           p.security=report;
           const tradeQualityReasons=[];
+          if(p.chain==="BSC"&&(!p.walletFlowQuality||p.walletFlowQuality.status!=="pass")){
+            const walletReasons=Array.isArray(p.walletFlowQuality?.reasons)?p.walletFlowQuality.reasons:[];
+            tradeQualityReasons.push("独立钱包质量门槛未通过："+(walletReasons.join("；")||"样本不可用、未抽查或数据不足"));
+          }
           const ageMinutes=Number(p.ageMinutes||0);
           const buys=Number(p.buys1h||0), sells=Number(p.sells1h||0);
           const volume=Number(p.volume1hUSD||0);
