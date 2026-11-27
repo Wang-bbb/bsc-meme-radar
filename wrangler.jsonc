@@ -3,6 +3,9 @@
   "name": "younbsc-meme-radar",
   "main": "worker.js",
   "compatibility_date": "2026-10-31",
+  "vars": {
+    "FOURMEME_SHADOW_ENABLED": "false"
+  },
   "kv_namespaces": [
     {
       "binding": "RADAR_KV",
