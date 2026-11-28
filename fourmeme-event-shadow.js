@@ -34,7 +34,7 @@ function requireText(value, field, maxLength = 128) {
   return value.trim();
 }
 
-const EVENT_TOPICS = Object.freeze({
+export const FOURMEME_EVENT_TOPICS = Object.freeze({
   TokenCreate: "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20",
   TokenPurchase: "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942",
   TokenSale: "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19",
@@ -43,7 +43,7 @@ const EVENT_TOPICS = Object.freeze({
 });
 
 const TOPIC_TO_EVENT = new Map(
-  Object.entries(EVENT_TOPICS).map(([name, topic]) => [topic, name])
+  Object.entries(FOURMEME_EVENT_TOPICS).map(([name, topic]) => [topic, name])
 );
 
 function normalizeHexData(value, field) {
