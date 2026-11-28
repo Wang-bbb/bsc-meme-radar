@@ -1,17 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createNodeRealFourMemeRpcAdapter } from "../fourmeme-nodereal-adapter.js";
-import { FOURMEME_TOKEN_MANAGER2_BSC } from "../fourmeme-event-shadow.js";
+import { FOURMEME_EVENT_TOPICS, FOURMEME_TOKEN_MANAGER2_BSC } from "../fourmeme-event-shadow.js";
 
 const hash = n => "0x" + BigInt(n).toString(16).padStart(64, "0");
 const block = n => ({ number: "0x" + BigInt(n).toString(16), hash: hash(n) });
-const SUPPORTED_TOPICS = [
-  "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20",
-  "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942",
-  "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19",
-  "0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132",
-  "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0"
-];
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
@@ -93,7 +86,7 @@ test("queries only the official TokenManager2 address and the five supported eve
   assert.equal(captured.params[0].address, FOURMEME_TOKEN_MANAGER2_BSC);
   assert.equal(captured.params[0].fromBlock, "0x64");
   assert.equal(captured.params[0].toBlock, "0x78");
-  assert.deepEqual(captured.params[0].topics, [SUPPORTED_TOPICS]);
+  assert.deepEqual(captured.params[0].topics, [Object.values(FOURMEME_EVENT_TOPICS)]);
   await assert.rejects(adapter.getLogs("1", "2001"), /range exceeds/);
 });
 
