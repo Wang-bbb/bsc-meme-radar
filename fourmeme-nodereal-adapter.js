@@ -4,6 +4,16 @@ const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_HASHES = 32;
 const DEFAULT_MAX_BLOCK_SPAN = 2000;
+// Keep this OR-filter aligned with the five event signatures decoded by
+// fourmeme-event-shadow.js. Without topic0 filtering, unrelated contract logs
+// can make the collector fail on an otherwise valid observation range.
+const FOURMEME_EVENT_TOPICS = Object.freeze([
+  "0x396d5e902b675b032348d3d2e9517ee8f0c4a926603fbc075d3d282ff00cad20", // TokenCreate
+  "0x7db52723a3b2cdd6164364b3b766e65e540d7be48ffa89582956d8eaebe62942", // TokenPurchase
+  "0x0a5575b3648bae2210cee56bf33254cc1ddfbc7bf637c0af2ac18b14fb1bae19", // TokenSale
+  "0x8f9ab4bd7eff0d085f91575d50cd83f97aa5258e24ded7630d4fd6739e857132", // TradeStop
+  "0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0"  // LiquidityAdded
+]);
 
 function toQuantity(value, field) {
   if (typeof value === "bigint") {
@@ -161,7 +171,8 @@ export function createNodeRealFourMemeRpcAdapter({
       const logs = await call("eth_getLogs", [{
         address: FOURMEME_TOKEN_MANAGER2_BSC,
         fromBlock: rpcHex(from),
-        toBlock: rpcHex(to)
+        toBlock: rpcHex(to),
+        topics: [FOURMEME_EVENT_TOPICS]
       }]);
       if (!Array.isArray(logs)) throw new TypeError("eth_getLogs did not return an array");
       if (logs.length > 500) {
