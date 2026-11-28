@@ -1,10 +1,9 @@
-import { FOURMEME_TOKEN_MANAGER2_BSC } from "./fourmeme-event-shadow.js";
+import { FOURMEME_EVENT_TOPICS, FOURMEME_TOKEN_MANAGER2_BSC } from "./fourmeme-event-shadow.js";
 
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_HASHES = 32;
 const DEFAULT_MAX_BLOCK_SPAN = 2000;
-
 function toQuantity(value, field) {
   if (typeof value === "bigint") {
     if (value < 0n) throw new TypeError(`Invalid ${field}`);
@@ -161,7 +160,8 @@ export function createNodeRealFourMemeRpcAdapter({
       const logs = await call("eth_getLogs", [{
         address: FOURMEME_TOKEN_MANAGER2_BSC,
         fromBlock: rpcHex(from),
-        toBlock: rpcHex(to)
+        toBlock: rpcHex(to),
+        topics: [FOURMEME_EVENT_TOPICS]
       }]);
       if (!Array.isArray(logs)) throw new TypeError("eth_getLogs did not return an array");
       if (logs.length > 500) {

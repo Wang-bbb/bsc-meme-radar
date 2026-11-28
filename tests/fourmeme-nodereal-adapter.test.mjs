@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createNodeRealFourMemeRpcAdapter } from "../fourmeme-nodereal-adapter.js";
-import { FOURMEME_TOKEN_MANAGER2_BSC } from "../fourmeme-event-shadow.js";
+import { FOURMEME_EVENT_TOPICS, FOURMEME_TOKEN_MANAGER2_BSC } from "../fourmeme-event-shadow.js";
 
 const hash = n => "0x" + BigInt(n).toString(16).padStart(64, "0");
 const block = n => ({ number: "0x" + BigInt(n).toString(16), hash: hash(n) });
@@ -68,7 +68,7 @@ test("batch-reads exact canonical block hashes and validates response identities
   });
 });
 
-test("queries only the official TokenManager2 address over a bounded range", async () => {
+test("queries only the official TokenManager2 address and the five supported event topics", async () => {
   let captured;
   const adapter = createNodeRealFourMemeRpcAdapter({
     endpoint: "https://bsc-mainnet.nodereal.io/v1/test-key",
@@ -86,6 +86,7 @@ test("queries only the official TokenManager2 address over a bounded range", asy
   assert.equal(captured.params[0].address, FOURMEME_TOKEN_MANAGER2_BSC);
   assert.equal(captured.params[0].fromBlock, "0x64");
   assert.equal(captured.params[0].toBlock, "0x78");
+  assert.deepEqual(captured.params[0].topics, [Object.values(FOURMEME_EVENT_TOPICS)]);
   await assert.rejects(adapter.getLogs("1", "2001"), /range exceeds/);
 });
 
